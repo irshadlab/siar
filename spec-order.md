@@ -71,7 +71,7 @@ SIAR cannot be written in strictly numerical order (`01 → 33` followed by `ui-
 |:---:|:---|:---:|:---:|:---|:---|
 | **1.1** | [`01-protocol-extension-system-architecture.md`](sys-arch/01-protocol-extension-system-architecture.md) | **108** | **108/108 (100%)** | [`siar-protocol-ext`](crates/siar-protocol-ext), [`siar-protocol`](crates/siar-protocol) | Envelope framing, version negotiation, capability headers |
 | **1.2** | [`02-multi-device-identity-architecture.md`](sys-arch/02-multi-device-identity-architecture.md) | **204** | **204/204 (100%)** | [`siar-identity-multidevice`](crates/siar-identity-multidevice), [`siar-crypto`](crates/siar-crypto) | Ed25519 root key, device certs, revocation, algorithm agility (§190–§204 complete) |
-| **1.3** | [`03-transport-routing-policy-engine-architecture.md`](sys-arch/03-transport-routing-policy-engine-architecture.md) | **200** | **178/200 (89%)** | [`siar-routing-policy`](crates/siar-routing-policy), [`siar-connectivity`](crates/siar-connectivity) | **ACTIVE FOCUS**: Route probability, diagnostics, & telemetry. Next: §160+ |
+| **1.3** | [`03-transport-routing-policy-engine-architecture.md`](sys-arch/03-transport-routing-policy-engine-architecture.md) | **200** | **189/200 (95%)** | [`siar-routing-policy`](crates/siar-routing-policy), [`siar-connectivity`](crates/siar-connectivity) | **ACTIVE FOCUS**: Worked API Examples & Path Switch Mechanics. Next: §171+ |
 | **1.4** | [`04-offline-event-log-architecture.md`](sys-arch/04-offline-event-log-architecture.md) | **95** | 10/95 (11%) | [`siar-event-log`](crates/siar-event-log), [`siar-storage`](crates/siar-storage) | Crash-resilient transactional outbox, append-only log |
 | **1.5** | [`05-robust-file-blob-subsystem-architecture.md`](sys-arch/05-robust-file-blob-subsystem-architecture.md) | **210** | 23/210 (11%) | [`siar-blob-manifest`](crates/siar-blob-manifest), [`siar-storage`](crates/siar-storage) | BLAKE3 chunking, deduplication, resumable blob transfers |
 | **1.6** | [`06-dtn-store-carry-forward-architecture.md`](sys-arch/06-dtn-store-carry-forward-architecture.md) | **192** | 50/192 (26%) | [`siar-dtn-bundle`](crates/siar-dtn-bundle), [`siar-dtn`](crates/siar-dtn) | Delay-tolerant bundle store, epidemic forwarding, anti-entropy |
@@ -183,7 +183,7 @@ SIAR cannot be written in strictly numerical order (`01 → 33` followed by `ui-
 |:---:|:---|:---:|:---:|:---:|
 | 01 | [Protocol Extension System](sys-arch/01-protocol-extension-system-architecture.md) | 108 | 108/108 (100%) | Milestone 1 |
 | 02 | [Multi-Device Identity](sys-arch/02-multi-device-identity-architecture.md) | 204 | 204/204 (100%) | Milestone 1 |
-| 03 | [Transport & Routing Policy](sys-arch/03-transport-routing-policy-engine-architecture.md) | 200 | 178/200 (89%) | Milestone 1 (Active) |
+| 03 | [Transport & Routing Policy](sys-arch/03-transport-routing-policy-engine-architecture.md) | 200 | 189/200 (95%) | Milestone 1 (Active) |
 | 04 | [Offline Event Log](sys-arch/04-offline-event-log-architecture.md) | 95 | 10/95 (11%) | Milestone 1 |
 | 05 | [Robust File Blob Subsystem](sys-arch/05-robust-file-blob-subsystem-architecture.md) | 210 | 23/210 (11%) | Milestone 1 |
 | 06 | [DTN Store-Carry-Forward](sys-arch/06-dtn-store-carry-forward-architecture.md) | 192 | 50/192 (26%) | Milestone 1 |
@@ -257,7 +257,7 @@ SIAR cannot be written in strictly numerical order (`01 → 33` followed by `ui-
 Current Milestone: MILESTONE 1 (Tier 0: Headless Core Engine)
 Current Document : Spec 03 (03-transport-routing-policy-engine-architecture.md)
 Target Crate     : crates/siar-routing-policy
-Current Status   : 178 / 200 Sections (89% Reconciled, 216/216 Tests Passing)
+Current Status   : 189 / 200 Sections (95% Reconciled, 230/230 Tests Passing)
 ```
 
 1. **Completed Batches**:
@@ -279,5 +279,6 @@ Current Status   : 178 / 200 Sections (89% Reconciled, 216/216 Tests Passing)
    * Spec 03 Round 14: §128–§139 (78%)
    * Spec 03 Round 15: §140–§150 (84%)
    * Spec 03 Round 16: §151–§159 (89%)
-2. **Next Batch (Round 17)**: Implement sections **§160 onward** of Spec 03:
-   * Worked API Examples & Path Switch Mechanics (§160–§170)
+   * Spec 03 Round 17: §160–§170 (95%)
+2. **Next Batch (Round 18)**: Implement sections **§171 onward** of Spec 03:
+   * Next batch of Spec 03 (§171–...)

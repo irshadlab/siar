@@ -8,7 +8,7 @@ Generated 2026-09-01 from ROADMAP.md + project notes. Files marked ⚪ below are
 |---|---|---|
 | [01-protocol-extension-system-architecture.md](01-protocol-extension-system-architecture.md) | 108/108 | 108/108 (100%) |
 | [02-multi-device-identity-architecture.md](02-multi-device-identity-architecture.md) | 204/204 | 204/204 (100%) |
-| [03-transport-routing-policy-engine-architecture.md](03-transport-routing-policy-engine-architecture.md) | ~198/200 | ~198/200 (99%) |
+| [03-transport-routing-policy-engine-architecture.md](03-transport-routing-policy-engine-architecture.md) | 200/200 | 200/200 (100%) |
 | [04-offline-event-log-architecture.md](04-offline-event-log-architecture.md) | 10/95 | 10/95 (11%) |
 | [05-robust-file-blob-subsystem-architecture.md](05-robust-file-blob-subsystem-architecture.md) | 23/210 | 23/210 (11%) |
 | [06-dtn-store-carry-forward-architecture.md](06-dtn-store-carry-forward-architecture.md) | 50/192 | 50/192 (26%) |

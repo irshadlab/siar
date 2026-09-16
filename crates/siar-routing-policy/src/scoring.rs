@@ -1,6 +1,8 @@
 //! §24 "Route Scoring", §25 "Hard Constraints vs Soft Preferences", §26
 //! "Path Scoring Interface".
 
+use serde::{Deserialize, Serialize};
+
 use crate::candidate::PathCandidate;
 use crate::metrics::{CongestionState, EnergyCost, NetworkCost, StabilityScore};
 use crate::platform::DeviceState;
@@ -48,8 +50,12 @@ impl RouteScore {
     }
 }
 
-/// §35's `switch_threshold` field type.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+/// §35's `switch_threshold` field type. `Serialize`/`Deserialize`
+/// added for §179 "Route Policy Persistence," since this is a field
+/// of [`crate::policy::HysteresisPolicy`], itself a persistable
+/// setting — see [`crate::privacy::PrivacyPolicy`]'s own doc comment
+/// for the fuller reasoning.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RouteScoreDelta(pub f64);
 
 /// §26's third parameter. Just enough state for stickiness/hysteresis

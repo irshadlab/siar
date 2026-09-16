@@ -23,7 +23,16 @@ use crate::types::{DeliveryClass, Priority};
 /// (see `permits_roaming_bulk` in `scoring.rs`), not roaming in
 /// general — `allow_metered` already covers the general cellular-data
 /// case, and conflating the two would lose §83's own "represent
-/// separately" instruction.
+/// separately" instruction. `allow_redundancy` is §162's own API
+/// example field (`.allow_redundancy(true)`) — before this round,
+/// [`crate::plan::plan_route`]'s `RouteStrategy::Redundant` trigger
+/// (`Priority::Critical` + `DeliveryClass::DelayTolerant`) had no off
+/// switch at all, in tension with §21's own "use redundancy
+/// sparingly": a caller in a bandwidth-constrained emergency might
+/// want Critical+DelayTolerant's other behavior without paying for a
+/// second replica. Defaults `true` everywhere below, matching the
+/// unconditional behavior every constructor had before this field
+/// existed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeliveryRequirements {
     pub class: DeliveryClass,
@@ -41,6 +50,7 @@ pub struct DeliveryRequirements {
     pub nearby_session_explicit: bool,
     pub dtn_replication_budget: Option<u8>,
     pub allow_roaming_bulk: bool,
+    pub allow_redundancy: bool,
 }
 
 impl DeliveryRequirements {
@@ -69,6 +79,7 @@ impl DeliveryRequirements {
             nearby_session_explicit: false,
             dtn_replication_budget: None,
             allow_roaming_bulk: true,
+            allow_redundancy: true,
         }
     }
 
@@ -92,6 +103,7 @@ impl DeliveryRequirements {
             nearby_session_explicit: false,
             dtn_replication_budget: None,
             allow_roaming_bulk: true,
+            allow_redundancy: true,
         }
     }
 
@@ -120,6 +132,12 @@ impl DeliveryRequirements {
             // see [`crate::retry`]'s own bounded-backoff reasoning).
             dtn_replication_budget: Some(8),
             allow_roaming_bulk: true, // §33: emergency ignores this restriction — it's DelayTolerant, not Bulk, so §83's gate never even applies
+            // §162's own SOS example calls this out explicitly
+            // (`.allow_redundancy(true)`) even though it's already
+            // this constructor's default — the one constructor that
+            // actually reaches `plan_route`'s Critical+DelayTolerant
+            // trigger is exactly the one place worth being explicit.
+            allow_redundancy: true,
         }
     }
 
@@ -148,6 +166,7 @@ impl DeliveryRequirements {
             nearby_session_explicit: false,
             dtn_replication_budget: None,
             allow_roaming_bulk: true,
+            allow_redundancy: true,
         }
     }
 
@@ -185,6 +204,7 @@ impl DeliveryRequirements {
             nearby_session_explicit: false,
             dtn_replication_budget: None,
             allow_roaming_bulk: false,
+            allow_redundancy: true,
         }
     }
 

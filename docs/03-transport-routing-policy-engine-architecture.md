@@ -4,9 +4,14 @@ Source spec: `sys-arch/03-transport-routing-policy-engine-architecture.md` — 2
 
 ## Implementation status
 
-**178/200 (89%) sections.**
+**189/200 (95%) sections.**
 
-Partial — Round 1 (§1–§42), Round 2 (§43–§56), Round 3 (§57–§62), Round 4 (§63–§68), Round 5 (§69–§74), Round 6 (§75–§84), Round 7 (§85–§90), Round 8 (§91–§96), Round 9 (§97–§104), Round 10 (§105–§107), Round 11 (§108–§115), Round 12 (§116–§120), Round 13 (§121–§127), Round 14 (§128–§139), Round 15 (§140–§150), and Round 16 (§151–§159) complete (216/216 unit tests).
+Partial — Round 1 (§1–§42), Round 2 (§43–§56), Round 3 (§57–§62), Round 4 (§63–§68), Round 5 (§69–§74), Round 6 (§75–§84), Round 7 (§85–§90), Round 8 (§91–§96), Round 9 (§97–§104), Round 10 (§105–§107), Round 11 (§108–§115), Round 12 (§116–§120), Round 13 (§121–§127), Round 14 (§128–§139), Round 15 (§140–§150), Round 16 (§151–§159), and Round 17 (§160–§170) complete (230/230 unit tests).
+
+### Round 17 (§160–§170) Summary (2026-09-13)
+- **§160–§163 (Route Request API & Builder Pattern)**: Implemented fluent builder methods on `RouteRequest` (`for_device`, `for_account`, `class`, `priority`, `estimated_size`, `allow_dtn`, `allow_metered`, `allow_multipath`, `allow_redundancy`, `expiry`, `min_bandwidth`, `max_latency`, `with_candidates`). Added `allow_redundancy: bool` to `DeliveryRequirements` and gated `RouteStrategy::Redundant` in `plan_route` on this explicit flag.
+- **§164–§167 (Execution Outcomes & Feedback Reconciliation)**: Reconciled `RouteOutcome` to the flat 8-variant enumeration (`Success`, `Timeout`, `ConnectionFailed`, `AuthenticationFailed`, `RemoteRejected`, `PolicyBlocked`, `Partial`, `Cancelled`). Added `observed_metrics: ObservedMetrics` (`ObservedMetrics = PathMetrics`) to `RouteResultReport`. Updated `health_after_outcome` to handle `Partial` (degraded recovery) and `Cancelled` (identity mapping, unchanged health).
+- **§168–§170 (Path Switch Mechanics & Strategies)**: Implemented `path_switch.rs` with `PathSwitchStrategy` (`MakeBeforeBreak`, `BreakBeforeMake`), `path_switch_strategy_for`, and `PathSwitchCandidateInfo`. Prioritizes resource constraints (e.g. single Bluetooth radio, severe memory pressure, critical thermal state) and security sensitivity to force `BreakBeforeMake`, while streaming audio/video with adequate radio capabilities safely uses `MakeBeforeBreak`.
 
 ### Round 16 (§151–§159) Summary (2026-09-12)
 - **§151 (Route Probability)**: Added `delivery_likelihood` and `expected_delay_class` (`ExpectedDelayClass`) to `PathMetrics` in `metrics.rs` as the typed reception fields for DTN/mesh adapters, avoiding fabricated RTTs. Added `route_probability_signal` in `probability.rs`.
@@ -131,4 +136,4 @@ Partial — Round 1 (§1–§42), Round 2 (§43–§56), Round 3 (§57–§62), 
 
 
 ## Note
-Detail above reflects implementation through Round 5 (§69–§74) completed on 2026-09-08. Next target: §75 onward.
+Detail above reflects implementation through Round 17 (§160–§170) completed on 2026-09-13. Next target: §171 onward.

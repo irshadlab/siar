@@ -1,5 +1,7 @@
 //! §27 "Policy Profiles" through §35 "Path Hysteresis".
 
+use serde::{Deserialize, Serialize};
+
 use crate::scoring::RouteScoreDelta;
 
 /// The tunable inputs to [`crate::scoring::DefaultScorer`] — §24's
@@ -67,7 +69,7 @@ impl PolicyWeights {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct HysteresisPolicy {
     pub switch_threshold: RouteScoreDelta,
     pub minimum_hold_millis: u64,
@@ -86,8 +88,14 @@ pub struct RoutingPolicy {
 /// §7's own `file transfer → Bulk/Reliable` example and §31's
 /// "Low-Cost Policy" (large-file guidance), not transcribed from spec
 /// text the way the other six are, and is flagged here as such rather
-/// than presented with the same confidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// than presented with the same confidence. `Serialize`/`Deserialize`
+/// added for §179 "Route Policy Persistence" — the named profile a
+/// user picked is exactly the kind of setting that section means to
+/// persist, as distinct from `PolicyWeights`'s own raw floats, which
+/// §154's own "do not expose floating-point tuning directly to
+/// ordinary users" is why this enum exists as the persisted form in
+/// the first place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoutingPolicyProfile {
     Balanced,
     LowLatency,

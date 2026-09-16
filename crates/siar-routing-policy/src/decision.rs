@@ -1126,6 +1126,93 @@ mod tests {
         }
     }
 
+    /// §185 "Property Tests": "forbidden transport never selected" —
+    /// broader than round 13's own metered-specific version of this
+    /// property (`spec_125_a_forbidden_metered_path_is_never_selected...`):
+    /// this checks `allow_relay`/`allow_bluetooth` specifically, the
+    /// two other named transport gates `eliminate_hard_constraint_violations`
+    /// enforces, each proven with the forbidden transport scoring far
+    /// better than the permitted one.
+    #[test]
+    fn spec_185_forbidden_relay_and_bluetooth_are_never_selected_even_when_they_score_better() {
+        let (store, account, device) = trusted_store_with_one_device();
+        let layers = PolicyLayers {
+            system: &no_size_limit(),
+            application: &ApplicationPolicy::default(),
+            user: &PrivacyPolicy::default(),
+        };
+        let balanced = RoutingPolicyProfile::Balanced.policy();
+        let scorer = DefaultScorer {
+            weights: balanced.weights,
+        };
+
+        // Relay forbidden.
+        let mut req = DeliveryRequirements::interactive_message();
+        req.allow_relay = false;
+        let descriptor = descriptor_for(Destination::Account(account), req, 10);
+        let mut forbidden_relay = candidate(
+            TransportKind::IrohRelay,
+            DeviceId::new(),
+            MeteredState::Unmetered,
+        );
+        forbidden_relay.metrics.rtt_millis = Some(1);
+        let permitted_direct =
+            candidate(TransportKind::IrohDirect, device, MeteredState::Unmetered);
+        let candidates = vec![forbidden_relay, permitted_direct];
+        let result = decide_route(
+            &candidates,
+            &descriptor,
+            &layers,
+            account,
+            &store,
+            &balanced,
+            &scorer,
+            None,
+            None,
+            None,
+            0,
+        );
+        match result {
+            RouteDecisionResult::Routed(plan) => {
+                assert_eq!(plan.primary.transport, TransportKind::IrohDirect)
+            }
+            other => panic!("expected direct to win over forbidden relay, got {other:?}"),
+        }
+
+        // Bluetooth forbidden.
+        let mut req = DeliveryRequirements::interactive_message();
+        req.allow_bluetooth = false;
+        let descriptor = descriptor_for(Destination::Account(account), req, 10);
+        let mut forbidden_bluetooth = candidate(
+            TransportKind::BluetoothLe,
+            DeviceId::new(),
+            MeteredState::Unmetered,
+        );
+        forbidden_bluetooth.metrics.rtt_millis = Some(1);
+        let permitted_direct =
+            candidate(TransportKind::IrohDirect, device, MeteredState::Unmetered);
+        let candidates = vec![forbidden_bluetooth, permitted_direct];
+        let result = decide_route(
+            &candidates,
+            &descriptor,
+            &layers,
+            account,
+            &store,
+            &balanced,
+            &scorer,
+            None,
+            None,
+            None,
+            0,
+        );
+        match result {
+            RouteDecisionResult::Routed(plan) => {
+                assert_eq!(plan.primary.transport, TransportKind::IrohDirect)
+            }
+            other => panic!("expected direct to win over forbidden bluetooth, got {other:?}"),
+        }
+    }
+
     #[test]
     fn spec_125_an_expired_operation_is_never_routed_regardless_of_how_good_the_candidates_are() {
         let (store, account, device) = trusted_store_with_one_device();

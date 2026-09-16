@@ -170,7 +170,10 @@ pub fn plan_route(
 
     // §21 "Redundant Route": "Use redundancy sparingly" — reserved for
     // the spec's own named case, Critical + DelayTolerant (its SOS
-    // example). §93 "Hedged Requests" comes next in priority once
+    // example), and (§162, this round) gated on `allow_redundancy` so
+    // a caller can opt out of the "sparingly" case entirely rather
+    // than this crate deciding "SOS" always means "spend the extra
+    // replica." §93 "Hedged Requests" comes next in priority once
     // Redundant doesn't apply — a caller-configured hedge preference
     // for a fallback-having plan; everything else with at least one
     // fallback is Failover (§20); a lone eligible candidate is Single
@@ -182,6 +185,7 @@ pub fn plan_route(
     let hedge = crate::resilience::hedge_policy_for(req);
     let strategy = if req.priority == Priority::Critical
         && req.class == DeliveryClass::DelayTolerant
+        && req.allow_redundancy
         && !fallbacks.is_empty()
     {
         RouteStrategy::Redundant
@@ -428,6 +432,27 @@ mod tests {
         let plan = plan_route(&candidates, &req, &policy, &scorer, None, None, 0).unwrap();
         assert_eq!(plan.strategy, RouteStrategy::Redundant);
         assert_eq!(plan.replicas.len(), 1);
+    }
+
+    /// §162's own `.allow_redundancy(true)` implies a caller can also
+    /// say `false` — before this round there was no way to reach
+    /// Critical+DelayTolerant without automatically paying for a
+    /// second replica.
+    #[test]
+    fn spec_162_allow_redundancy_false_falls_back_to_failover_instead() {
+        let a = candidate(TransportKind::Dtn, RouteHealth::Healthy);
+        let b = candidate(TransportKind::MeshRelay, RouteHealth::Healthy);
+        let candidates = vec![a, b];
+        let mut req = DeliveryRequirements::emergency();
+        req.allow_redundancy = false;
+        let policy = RoutingPolicyProfile::Emergency.policy();
+        let scorer = DefaultScorer {
+            weights: policy.weights,
+        };
+
+        let plan = plan_route(&candidates, &req, &policy, &scorer, None, None, 0).unwrap();
+        assert_eq!(plan.strategy, RouteStrategy::Failover);
+        assert!(plan.replicas.is_empty());
     }
 
     #[test]

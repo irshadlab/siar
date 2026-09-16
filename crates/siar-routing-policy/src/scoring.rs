@@ -400,6 +400,20 @@ mod tests {
         assert!(passes_hard_constraints(&unknown_bw, &req)); // metrics.estimated_bandwidth is None from ::unknown()
     }
 
+    /// §185 "Property Tests": "hard minimum bandwidth respected." The
+    /// test just above this one proves the opposite direction
+    /// (*unknown* bandwidth isn't penalized); this proves a *known*,
+    /// insufficient bandwidth genuinely is a hard elimination, not
+    /// merely a lower score.
+    #[test]
+    fn spec_185_a_known_bandwidth_below_the_required_minimum_is_hard_eliminated() {
+        let mut req = DeliveryRequirements::interactive_message();
+        req.min_bandwidth = Some(crate::metrics::Bitrate(5_000_000));
+        let mut too_slow = candidate(TransportKind::IrohDirect, RouteHealth::Healthy, false);
+        too_slow.metrics.estimated_bandwidth = Some(crate::metrics::Bitrate(1_000_000));
+        assert!(!passes_hard_constraints(&too_slow, &req));
+    }
+
     #[test]
     fn an_explicitly_metered_candidate_is_eliminated_when_the_operation_disallows_it() {
         let mut req = DeliveryRequirements::interactive_message();

@@ -460,9 +460,43 @@
 //!   with no identity field anywhere in it to redact in the first
 //!   place — the same "can't leak what it has no field for" shape
 //!   §99's `RouteMetricEvent` already established).
-//! - **Everything from roughly §160 onward that isn't listed above** —
-//!   §160-170's worked-API-example/route-outcome/path-switch
-//!   sections, multi-device route
+//! - [`engine::RouteRequest`]'s builder methods — §160-163 "API
+//!   Example: Text Message/Large File/SOS/Video Call," matching each
+//!   example's own exact method names and call shape
+//!   (`RouteRequest::for_device(...).class(...)...`, no separate
+//!   builder type). §162's own `.allow_redundancy(true)` needed a
+//!   real new field —
+//!   [`requirements::DeliveryRequirements::allow_redundancy`] — since
+//!   `plan_route`'s `RouteStrategy::Redundant` trigger had no way to
+//!   be turned off before this round, in tension with §21's "use
+//!   redundancy sparingly." `with_candidates` bridges the one real
+//!   gap between the spec's own illustrative snippets and this
+//!   crate's actual requirements — none of the four examples ever
+//!   mention candidates, which have to come from somewhere.
+//! - [`engine::RouteOutcome`] — §165, a **correction**, not
+//!   originally this shape: round 13's first version reused
+//!   [`failure::RouteFailureClass`] rather than inventing a second
+//!   taxonomy, but §165 specifies a genuinely different, flatter
+//!   8-variant enum with two cases (`Partial`, `Cancelled`) that
+//!   `RouteFailureClass` has no equivalent for at all — see that
+//!   type's own doc comment for the full reconciliation.
+//!   [`engine::ObservedMetrics`] (§164, a type alias for
+//!   [`metrics::PathMetrics`]) is `RouteResultReport`'s new field.
+//!   [`engine::health_after_outcome`]'s own match arms were rewritten
+//!   to match, adding real handling for §166 "Partial Outcome"
+//!   (treated as gradual evidence the path still basically works, not
+//!   written off) and §167 "Cancellation" (leaves the health estimate
+//!   unchanged — a user decision carries no signal about path
+//!   quality).
+//! - [`path_switch`] — §168 "Graceful Path Switch" is pure
+//!   session-layer mechanics this crate has no session to perform
+//!   (same boundary as §120); §169/§170 "Make-Before-Break"/
+//!   "Break-Before-Make" is the one real decision in this cluster —
+//!   `path_switch_strategy_for`, with §170's own resource/security
+//!   triggers treated as overriding §169's softer "reduces
+//!   interruption" preference.
+//! - **Everything from roughly §171 onward that isn't listed above** —
+//!   multi-device route
 //!   aggregation and group/broadcast routing (§171-175), storage-cost
 //!   awareness (§176-178), and the remainder of this 200-section
 //!   document not named above. §55 "Mesh
@@ -505,6 +539,7 @@ pub mod explain;
 pub mod failure;
 pub mod fairness;
 pub mod metrics;
+pub mod path_switch;
 pub mod plan;
 pub mod platform;
 pub mod policy;

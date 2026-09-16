@@ -71,7 +71,7 @@ SIAR cannot be written in strictly numerical order (`01 → 33` followed by `ui-
 |:---:|:---|:---:|:---:|:---|:---|
 | **1.1** | [`01-protocol-extension-system-architecture.md`](sys-arch/01-protocol-extension-system-architecture.md) | **108** | **108/108 (100%)** | [`siar-protocol-ext`](crates/siar-protocol-ext), [`siar-protocol`](crates/siar-protocol) | Envelope framing, version negotiation, capability headers |
 | **1.2** | [`02-multi-device-identity-architecture.md`](sys-arch/02-multi-device-identity-architecture.md) | **204** | **204/204 (100%)** | [`siar-identity-multidevice`](crates/siar-identity-multidevice), [`siar-crypto`](crates/siar-crypto) | Ed25519 root key, device certs, revocation, algorithm agility (§190–§204 complete) |
-| **1.3** | [`03-transport-routing-policy-engine-architecture.md`](sys-arch/03-transport-routing-policy-engine-architecture.md) | **200** | **~198/200 (99%)** | [`siar-routing-policy`](crates/siar-routing-policy), [`siar-connectivity`](crates/siar-connectivity) | **ACTIVE FOCUS**: Multi-Device Aggregation, Broadcast, & DTN Storage. Next: §183+ |
+| **1.3** | [`03-transport-routing-policy-engine-architecture.md`](sys-arch/03-transport-routing-policy-engine-architecture.md) | **200** | **200/200 (100%)** | [`siar-routing-policy`](crates/siar-routing-policy), [`siar-connectivity`](crates/siar-connectivity) | **SPEC COMPLETE**: 19 rounds complete, 263/263 tests passing |
 | **1.4** | [`04-offline-event-log-architecture.md`](sys-arch/04-offline-event-log-architecture.md) | **95** | 10/95 (11%) | [`siar-event-log`](crates/siar-event-log), [`siar-storage`](crates/siar-storage) | Crash-resilient transactional outbox, append-only log |
 | **1.5** | [`05-robust-file-blob-subsystem-architecture.md`](sys-arch/05-robust-file-blob-subsystem-architecture.md) | **210** | 23/210 (11%) | [`siar-blob-manifest`](crates/siar-blob-manifest), [`siar-storage`](crates/siar-storage) | BLAKE3 chunking, deduplication, resumable blob transfers |
 | **1.6** | [`06-dtn-store-carry-forward-architecture.md`](sys-arch/06-dtn-store-carry-forward-architecture.md) | **192** | 50/192 (26%) | [`siar-dtn-bundle`](crates/siar-dtn-bundle), [`siar-dtn`](crates/siar-dtn) | Delay-tolerant bundle store, epidemic forwarding, anti-entropy |
@@ -183,7 +183,7 @@ SIAR cannot be written in strictly numerical order (`01 → 33` followed by `ui-
 |:---:|:---|:---:|:---:|:---:|
 | 01 | [Protocol Extension System](sys-arch/01-protocol-extension-system-architecture.md) | 108 | 108/108 (100%) | Milestone 1 |
 | 02 | [Multi-Device Identity](sys-arch/02-multi-device-identity-architecture.md) | 204 | 204/204 (100%) | Milestone 1 |
-| 03 | [Transport & Routing Policy](sys-arch/03-transport-routing-policy-engine-architecture.md) | 200 | ~198/200 (99%) | Milestone 1 (Active) |
+| 03 | [Transport & Routing Policy](sys-arch/03-transport-routing-policy-engine-architecture.md) | 200 | 200/200 (100%) | Milestone 1 |
 | 04 | [Offline Event Log](sys-arch/04-offline-event-log-architecture.md) | 95 | 10/95 (11%) | Milestone 1 |
 | 05 | [Robust File Blob Subsystem](sys-arch/05-robust-file-blob-subsystem-architecture.md) | 210 | 23/210 (11%) | Milestone 1 |
 | 06 | [DTN Store-Carry-Forward](sys-arch/06-dtn-store-carry-forward-architecture.md) | 192 | 50/192 (26%) | Milestone 1 |
@@ -255,31 +255,14 @@ SIAR cannot be written in strictly numerical order (`01 → 33` followed by `ui-
 
 ```text
 Current Milestone: MILESTONE 1 (Tier 0: Headless Core Engine)
-Current Document : Spec 03 (03-transport-routing-policy-engine-architecture.md)
-Target Crate     : crates/siar-routing-policy
-Current Status   : ~198 / 200 Sections (99% Reconciled, 245/245 Tests Passing)
+Current Document : Spec 04 (04-offline-event-log-architecture.md)
+Target Crate     : crates/siar-event-log
+Current Status   : 10 / 95 Sections (11% Reconciled)
 ```
 
 1. **Completed Batches**:
    * Spec 01: 108/108 (100%) — complete
    * Spec 02: 204/204 (100%) — complete
-   * Spec 03 Round 1: §1–§42 (30%)
-   * Spec 03 Round 2: §43–§56 (37%)
-   * Spec 03 Round 3: §57–§62 (40%)
-   * Spec 03 Round 4: §63–§68 (43%)
-   * Spec 03 Round 5: §69–§74 (46%)
-   * Spec 03 Round 6: §75–§84 (51%)
-   * Spec 03 Round 7: §85–§90 (54%)
-   * Spec 03 Round 8: §91–§96 (57%)
-   * Spec 03 Round 9: §97–§104 (61%)
-   * Spec 03 Round 10: §105–§107 (64%)
-   * Spec 03 Round 11: §108–§115 (68%)
-   * Spec 03 Round 12: §116–§120 (70%)
-   * Spec 03 Round 13: §121–§127 (74%)
-   * Spec 03 Round 14: §128–§139 (78%)
-   * Spec 03 Round 15: §140–§150 (84%)
-   * Spec 03 Round 16: §151–§159 (89%)
-   * Spec 03 Round 17: §160–§170 (95%)
-   * Spec 03 Round 18: §171–§182 (99%)
-2. **Next Batch (Round 19 / Final Stretch)**: Implement sections **§183 onward** of Spec 03:
-   * Testing Matrix, Golden & Property Tests, Architecture Reconciliation & Definition of Done (§183–§200)
+   * Spec 03: 200/200 (100%) — **SPEC COMPLETE** (19 rounds complete, 263/263 tests passing)
+2. **Next Step**: Proceed to **Step 1.4**: Spec 04 (`04-offline-event-log-architecture.md`):
+   * Append-only transactional outbox & log engine (§11+)

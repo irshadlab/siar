@@ -123,6 +123,9 @@ mod tests {
             // Same reasoning as the two fields just above: irrelevant
             // to this bridge's forwarding-class/TTL derivation.
             allow_roaming_bulk: true,
+            // Added to `DeliveryRequirements` by `siar-routing-policy`
+            // for its own §162 work — likewise irrelevant here.
+            allow_redundancy: true,
         }
     }
 

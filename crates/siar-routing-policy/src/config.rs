@@ -32,13 +32,19 @@
 //! that's inherently wrong the way an inverted backoff range is, so
 //! this function doesn't invent a check for one.
 
+use serde::{Deserialize, Serialize};
+
 use crate::policy::HysteresisPolicy;
 use crate::retry::RetryPolicy;
 
 /// §117, transcribed field-for-field (see this module's own doc
 /// comment for which five of the seven reuse an existing type
-/// outright).
-#[derive(Debug, Clone)]
+/// outright). `Serialize`/`Deserialize` added for §179 "Route Policy
+/// Persistence" — see [`crate::privacy::PrivacyPolicy`]'s own doc
+/// comment for the fuller reasoning; every field type here
+/// (`RetryPolicy`, `HysteresisPolicy`, plain `bool`) already supports
+/// it as of this round.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingConfig {
     pub direct_preference: bool,
     pub relay_policy: bool,
@@ -123,5 +129,26 @@ mod tests {
         let mut config = valid_config();
         config.retry_policy = RetryPolicy::no_retry();
         assert!(config.validate().is_ok());
+    }
+
+    /// §179 "Route Policy Persistence": "persist user/application
+    /// settings." This crate has no persistence layer of its own to
+    /// exercise (see this module's own doc comment), so the strongest
+    /// honest proof available here is a compile-time one: a generic
+    /// function that only accepts `Serialize + for<'de> Deserialize<'de>`
+    /// types, called with every setting type §179 names. If a future
+    /// edit ever dropped one of these derives, this test would stop
+    /// compiling, not silently pass.
+    #[test]
+    fn spec_179_every_persistable_setting_type_actually_implements_serde() {
+        fn assert_persistable<T: serde::Serialize + for<'de> serde::Deserialize<'de>>(_: &T) {}
+
+        assert_persistable(&valid_config());
+        assert_persistable(&crate::privacy::PrivacyPolicy::default());
+        assert_persistable(&crate::decision::SystemPolicy {
+            max_operation_bytes: crate::descriptor::ByteCount(0),
+        });
+        assert_persistable(&crate::decision::ApplicationPolicy::default());
+        assert_persistable(&crate::policy::RoutingPolicyProfile::Balanced);
     }
 }

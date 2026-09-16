@@ -495,11 +495,62 @@
 //!   `path_switch_strategy_for`, with §170's own resource/security
 //!   triggers treated as overriding §169's softer "reduces
 //!   interruption" preference.
-//! - **Everything from roughly §171 onward that isn't listed above** —
-//!   multi-device route
-//!   aggregation and group/broadcast routing (§171-175), storage-cost
-//!   awareness (§176-178), and the remainder of this 200-section
-//!   document not named above. §55 "Mesh
+//! - [`multidevice`] — §171 "Multi-Device Route Aggregation"
+//!   (`plan_per_device`, the actual fix for "do not flatten all
+//!   devices into one route score": every account/group device this
+//!   crate has resolved since round 1 was, until this round, still
+//!   getting pooled into one shared scoring pass by every decision
+//!   function built on top of that resolution), §172 "Device
+//!   Preference" (`DeviceRole`/`devices_matching_role_for_class`, a
+//!   preference with fallback, never a filter that could zero out
+//!   every device), §173 "Group Routing" (`plan_per_device` again,
+//!   applied to a group's member list — no new function needed, but
+//!   [`resolve::resolve_destination_devices`] itself still doesn't
+//!   resolve [`types::Destination::Group`] at all, a real,
+//!   still-open gap named plainly rather than glossed over), §175
+//!   "Route Constraints by Content Sensitivity" (zero new code —
+//!   `forwarding_allowed`/`relay_allowed` are already
+//!   `DeliveryRequirements::allow_dtn`/`allow_relay`).
+//! - [`broadcast`] — §174 "Broadcast Routing"
+//!   (`BroadcastDeliveryTracker`, the one genuinely new piece —
+//!   "separate duplication controls" — layered on top of
+//!   [`scope::RouteScope::LocalOnly`], already exactly the transport
+//!   restriction §174 itself asks for).
+//! - [`dtn_storage`] — §176 "Storage Cost" (`DtnStoragePressure`, a
+//!   parallel type to [`resource_pressure::MemoryPressure`] for a
+//!   different resource — a DTN relay's storage, not this device's
+//!   RAM), §177 "Route Planning Under Storage Pressure"
+//!   (`eliminate_dtn_under_storage_pressure`/
+//!   `storage_pressure_allows_bulk_acquisition`, its own "or" read as
+//!   two separate real checks), §178 "Emergency Storage Override"
+//!   (zero new mechanism — the actual eviction logic is explicitly
+//!   Part 06/17's job, not this crate's; "general routing marks
+//!   priority" was already true since round 1 via
+//!   `DeliveryRequirements::priority`).
+//! - §179 "Route Policy Persistence" — every settings-shaped type
+//!   this crate has ([`privacy::PrivacyPolicy`], [`decision::SystemPolicy`]/
+//!   [`decision::ApplicationPolicy`], [`config::RoutingConfig`],
+//!   [`retry::RetryPolicy`], [`policy::HysteresisPolicy`],
+//!   [`policy::RoutingPolicyProfile`]) gained `Serialize`/
+//!   `Deserialize` this round — this crate has no persistence layer
+//!   of its own to exercise them with, so the actual save/load stays
+//!   a caller's job; the derives just make that job possible.
+//! - [`policy_triggers`] — §180 "Dynamic Policy Update" needed no
+//!   code (`decide_route`/`plan_route` were already pure functions
+//!   with no hidden state — calling either again with different
+//!   inputs already *is* "re-evaluate"), §181 "Call-Induced Policy
+//!   Change" (`hysteresis_for_call_state` — the one of its three
+//!   named effects with no existing lever; the other two were already
+//!   `resource_pressure::TrafficShapingPolicy` and an ordinary
+//!   `DeliveryRequirements::priority`), §182 "Emergency-Induced
+//!   Policy Change" (`emergency_effective_requirements`, gated on
+//!   explicit user opt-in the same way §138's override already is —
+//!   two of its three named effects, queue weight and enabling
+//!   proximity hardware, are named as out-of-scope rather than faked).
+//! - **Everything from roughly §183 onward that isn't listed above** —
+//!   §183-197's testing-strategy/scalability/architecture-reconciliation
+//!   sections, and §198-200's closing Definition of Done/Related
+//!   Parts/Final Principle. §55 "Mesh
 //!   Forwarding"'s richer candidate representation (next hop, route
 //!   utility, hop budget, relay trust policy) also remains
 //!   unimplemented — see [`privacy`]'s own doc comment. This is a
@@ -523,6 +574,7 @@
 pub mod acquisition;
 pub mod adapters;
 pub mod authorization;
+pub mod broadcast;
 pub mod cache;
 pub mod candidate;
 pub mod config;
@@ -532,6 +584,7 @@ pub mod diagnostics;
 pub mod discovery;
 pub mod dispatch;
 pub mod diversity;
+pub mod dtn_storage;
 pub mod engine;
 pub mod error;
 pub mod estimate;
@@ -539,10 +592,12 @@ pub mod explain;
 pub mod failure;
 pub mod fairness;
 pub mod metrics;
+pub mod multidevice;
 pub mod path_switch;
 pub mod plan;
 pub mod platform;
 pub mod policy;
+pub mod policy_triggers;
 pub mod privacy;
 pub mod probability;
 pub mod quality;

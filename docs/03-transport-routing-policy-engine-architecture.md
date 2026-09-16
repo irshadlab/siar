@@ -4,9 +4,18 @@ Source spec: `sys-arch/03-transport-routing-policy-engine-architecture.md` — 2
 
 ## Implementation status
 
-**189/200 (95%) sections.**
+**~198/200 (99%) sections.**
 
-Partial — Round 1 (§1–§42), Round 2 (§43–§56), Round 3 (§57–§62), Round 4 (§63–§68), Round 5 (§69–§74), Round 6 (§75–§84), Round 7 (§85–§90), Round 8 (§91–§96), Round 9 (§97–§104), Round 10 (§105–§107), Round 11 (§108–§115), Round 12 (§116–§120), Round 13 (§121–§127), Round 14 (§128–§139), Round 15 (§140–§150), Round 16 (§151–§159), and Round 17 (§160–§170) complete (230/230 unit tests).
+Partial — Round 1 (§1–§42), Round 2 (§43–§56), Round 3 (§57–§62), Round 4 (§63–§68), Round 5 (§69–§74), Round 6 (§75–§84), Round 7 (§85–§90), Round 8 (§91–§96), Round 9 (§97–§104), Round 10 (§105–§107), Round 11 (§108–§115), Round 12 (§116–§120), Round 13 (§121–§127), Round 14 (§128–§139), Round 15 (§140–§150), Round 16 (§151–§159), Round 17 (§160–§170), and Round 18 (§171–§182) complete (245/245 unit tests).
+
+### Round 18 (§171–§182) Summary (2026-09-14)
+- **§171 (Multi-Device Route Aggregation)**: Implemented `plan_per_device` in `multidevice.rs` to compute independent route plans per recipient device, preventing flattening of multiple target devices into a single winning score. Hard constraint failures or low scores on one device (e.g. phone on metered path) never suppress plans for other devices (e.g. unmetered laptop).
+- **§172 (Device Preference)**: Implemented `DeviceRole` (`Primary`, `PreferredFile`, `CallCapable`) and `devices_matching_role_for_class` in `multidevice.rs` as a soft preference with fallback to all devices, preventing misconfigurations from filtering out all candidates.
+- **§173 & §175 (Group Routing & Content Sensitivity)**: Documented `plan_per_device` application to group member device fan-out (noting open gap for `Destination::Group` in `resolve.rs`). Reconciled content sensitivity to existing `allow_dtn` and `allow_relay` fields in `DeliveryRequirements`.
+- **§174 (Broadcast Routing)**: Implemented `BroadcastId` and `BroadcastDeliveryTracker` in `broadcast.rs` for tracking per-device delivery to avoid duplicate emissions across fan-out/mesh retries. Mapped broadcast transports to `RouteScope::LocalOnly`.
+- **§176–§178 (Storage Cost Cluster)**: Implemented `DtnStoragePressure` in `dtn_storage.rs`. Added `eliminate_dtn_under_storage_pressure` to eliminate DTN candidates under tight storage quotas (<= 5%) and `storage_pressure_allows_bulk_acquisition` to reject low-priority bulk transfers while permitting critical traffic. Documented `marked_priority_for_emergency_storage`.
+- **§179 (Route Policy Persistence)**: Added `Serialize` and `Deserialize` derives to all settings-shaped types (`PrivacyPolicy`, `SystemPolicy`, `ApplicationPolicy`, `RoutingConfig`, `RetryPolicy`, `HysteresisPolicy`, `RouteScoreDelta`, `RoutingPolicyProfile`) and verified via compile-time trait bound test in `config.rs`.
+- **§180–§182 (Policy Triggers Cluster)**: Documented pure-function dynamic re-evaluation. Implemented `hysteresis_for_call_state` in `policy_triggers.rs` (doubling switch threshold and hold time during calls) and `emergency_effective_requirements` (relaxing `allow_dtn` only with explicit user opt-in).
 
 ### Round 17 (§160–§170) Summary (2026-09-13)
 - **§160–§163 (Route Request API & Builder Pattern)**: Implemented fluent builder methods on `RouteRequest` (`for_device`, `for_account`, `class`, `priority`, `estimated_size`, `allow_dtn`, `allow_metered`, `allow_multipath`, `allow_redundancy`, `expiry`, `min_bandwidth`, `max_latency`, `with_candidates`). Added `allow_redundancy: bool` to `DeliveryRequirements` and gated `RouteStrategy::Redundant` in `plan_route` on this explicit flag.
@@ -136,4 +145,4 @@ Partial — Round 1 (§1–§42), Round 2 (§43–§56), Round 3 (§57–§62), 
 
 
 ## Note
-Detail above reflects implementation through Round 17 (§160–§170) completed on 2026-09-13. Next target: §171 onward.
+Detail above reflects implementation through Round 18 (§171–§182) completed on 2026-09-14. Next target: §183 onward.

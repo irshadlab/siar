@@ -55,7 +55,6 @@
 use crate::candidate::PathCandidate;
 use crate::descriptor::{OperationDescriptor, OperationId};
 use crate::error::RoutingError;
-use crate::failure::RouteFailureClass;
 use crate::platform::DeviceState;
 use crate::privacy::PrivacyPolicy;
 use crate::types::PathId;
@@ -80,18 +79,150 @@ pub struct RouteRequest {
     pub now_millis: u64,
 }
 
-/// §121 "Feedback Loop"'s own first step, "transport result" — the
-/// two outcomes a real transport attempt actually has. Reuses
-/// [`RouteFailureClass`] (§36, already real since round 2) rather
-/// than inventing a second failure taxonomy; a caller's transport
-/// layer classifying its own error into that enum is exactly the
-/// "natural integration point" that type's own doc comment already
-/// says it's waiting for.
+/// §160-163 "API Example: Text Message/Large File/SOS/Video Call" —
+/// a fluent builder matching each example's own method names and
+/// call shape exactly (`RouteRequest::for_device(...).class(...)...`,
+/// no separate builder type or final `.build()` the spec's own
+/// snippets never call). None of the four examples ever mention
+/// candidates at all, which is the one real gap between the spec's
+/// own illustrative code and this crate's actual requirements:
+/// [`RouteRequest::candidates`] has to come from *somewhere* (this
+/// crate has never done its own device/path discovery — see this
+/// crate's own top doc comment on scope), so [`RouteRequest::with_candidates`]
+/// exists to supply them even though no §160-163 example shows that
+/// step. `for_device`/`for_account` both start from
+/// [`crate::requirements::DeliveryRequirements::interactive_message`]'s
+/// "everything allowed, ordinary priority" baseline — the most
+/// neutral of this crate's five named presets — since every example
+/// immediately overrides the specific fields it cares about rather
+/// than building on top of a more specialized preset.
+impl RouteRequest {
+    fn with_destination(destination: crate::types::Destination) -> Self {
+        Self {
+            candidates: Vec::new(),
+            descriptor: OperationDescriptor {
+                operation_id: OperationId::new(),
+                destination,
+                requirements: crate::requirements::DeliveryRequirements::interactive_message(),
+                estimated_size: crate::descriptor::ByteCount(0),
+                content_class: crate::descriptor::ContentClass::Text,
+                required_extension: None,
+                created_at_millis: 0,
+            },
+            user: PrivacyPolicy::default(),
+            current: None,
+            device: None,
+            now_millis: 0,
+        }
+    }
+
+    pub fn for_device(device: siar_domain::DeviceId) -> Self {
+        Self::with_destination(crate::types::Destination::Device(device))
+    }
+
+    pub fn for_account(account: siar_domain::AccountId) -> Self {
+        Self::with_destination(crate::types::Destination::Account(account))
+    }
+
+    pub fn class(mut self, class: crate::types::DeliveryClass) -> Self {
+        self.descriptor.requirements.class = class;
+        self
+    }
+
+    pub fn priority(mut self, priority: crate::types::Priority) -> Self {
+        self.descriptor.requirements.priority = priority;
+        self
+    }
+
+    pub fn estimated_size(mut self, bytes: u64) -> Self {
+        self.descriptor.estimated_size = crate::descriptor::ByteCount(bytes);
+        self
+    }
+
+    pub fn allow_dtn(mut self, allowed: bool) -> Self {
+        self.descriptor.requirements.allow_dtn = allowed;
+        self
+    }
+
+    pub fn allow_metered(mut self, allowed: bool) -> Self {
+        self.descriptor.requirements.allow_metered = allowed;
+        self
+    }
+
+    pub fn allow_multipath(mut self, allowed: bool) -> Self {
+        self.descriptor.requirements.allow_multipath = allowed;
+        self
+    }
+
+    /// §162's own new field — see [`crate::requirements::DeliveryRequirements`]'s
+    /// own doc comment for why it exists.
+    pub fn allow_redundancy(mut self, allowed: bool) -> Self {
+        self.descriptor.requirements.allow_redundancy = allowed;
+        self
+    }
+
+    /// §162's `.expiry(sos_expiry)`. Takes [`std::time::Duration`],
+    /// matching §163's `.max_latency` — the spec's own examples use
+    /// `Duration` for one and leave the other's type to be inferred
+    /// from context; using it for both keeps the two consistent
+    /// rather than making one a bare integer.
+    pub fn expiry(mut self, duration: std::time::Duration) -> Self {
+        self.descriptor.requirements.expiry_millis = Some(duration.as_millis() as u64);
+        self
+    }
+
+    pub fn min_bandwidth(mut self, bitrate: crate::metrics::Bitrate) -> Self {
+        self.descriptor.requirements.min_bandwidth = Some(bitrate);
+        self
+    }
+
+    /// §163's `.max_latency(Duration::from_millis(200))`, transcribed
+    /// with the exact same `Duration` type the spec's own snippet
+    /// uses.
+    pub fn max_latency(mut self, duration: std::time::Duration) -> Self {
+        self.descriptor.requirements.max_latency_millis = Some(duration.as_millis() as u32);
+        self
+    }
+
+    /// Not shown in any of §160-163's own examples — see this impl
+    /// block's own doc comment for why it has to exist anyway.
+    pub fn with_candidates(mut self, candidates: Vec<PathCandidate>) -> Self {
+        self.candidates = candidates;
+        self
+    }
+}
+
+/// §165 "Route Outcome," transcribed exactly, in the order listed.
+/// This is a correction, not the original design: round 13's own
+/// first version of this type reused [`crate::failure::RouteFailureClass`] (`Success`/
+/// `Failed(RouteFailureClass)`) rather than inventing a second failure
+/// taxonomy — a reasonable guess at the time, but §165 turned out to
+/// specify a genuinely different, flatter shape (eight variants, two
+/// of which — `Partial`, `Cancelled` — have no [`crate::failure::RouteFailureClass`]
+/// equivalent at all). [`crate::failure::RouteFailureClass`] itself is unchanged and
+/// still real — [`crate::risk::handle_security_event`] uses it
+/// directly for its own, narrower purpose (classifying *why* a
+/// candidate should be treated as a security event), which never
+/// depended on this type's shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteOutcome {
     Success,
-    Failed(RouteFailureClass),
+    Timeout,
+    ConnectionFailed,
+    AuthenticationFailed,
+    RemoteRejected,
+    PolicyBlocked,
+    Partial,
+    Cancelled,
 }
+
+/// §164 "Route Result Report"'s own new field. A type alias, not a
+/// new struct — an attempt's *observed* metrics and a candidate's
+/// *estimated* [`crate::metrics::PathMetrics`] are the same shape of
+/// data (RTT, bandwidth, loss, and so on), just measured at a
+/// different moment; giving them different field sets would be
+/// duplicating [`crate::metrics::PathMetrics`] for no real reason.
+pub type ObservedMetrics = crate::metrics::PathMetrics;
 
 /// §121 "Feedback Loop"'s own "health update" step, made real as a
 /// pure, stateless single-sample transition rather than left as a
@@ -128,32 +259,41 @@ pub fn health_after_outcome(
                 RouteHealth::Degraded
             }
         },
-        RouteOutcome::Failed(class) => match class {
-            RouteFailureClass::Temporary => match current {
-                RouteHealth::Healthy => RouteHealth::Degraded,
-                _ => RouteHealth::Suspect,
-            },
-            RouteFailureClass::Unknown => RouteHealth::Suspect,
-            RouteFailureClass::TransportUnavailable
-            | RouteFailureClass::AuthenticationFailure
-            | RouteFailureClass::PolicyDenied
-            | RouteFailureClass::RemoteRejected
-            | RouteFailureClass::Permanent => RouteHealth::Unreachable,
+        // §166 "Partial Outcome": some data got through before
+        // failure — evidence the path still basically works, so it's
+        // treated the same gradual-recovery-eligible way `Timeout`
+        // is, not written off as `Unreachable`.
+        RouteOutcome::Timeout | RouteOutcome::Partial => match current {
+            RouteHealth::Healthy => RouteHealth::Degraded,
+            _ => RouteHealth::Suspect,
         },
+        RouteOutcome::ConnectionFailed
+        | RouteOutcome::AuthenticationFailed
+        | RouteOutcome::RemoteRejected
+        | RouteOutcome::PolicyBlocked => RouteHealth::Unreachable,
+        // §167 "Cancellation": a user/caller decision, not a network
+        // signal — it says nothing about whether the path itself is
+        // good or bad, so the health estimate is left exactly as it
+        // was rather than guessed at.
+        RouteOutcome::Cancelled => current,
     }
 }
 
-/// §119's `RouteResultReport`. `operation_id`/`path_id` identify
-/// *which* plan this is feedback about — the same two ids
+/// §119's `RouteResultReport`, since extended by §164's own field
+/// list. `operation_id`/`path_id` identify *which* plan this is
+/// feedback about — the same two ids
 /// [`crate::descriptor::OperationDescriptor`]'s own doc comment
 /// already names as what a receiver needs to deduplicate a
 /// hedged/redundant send; feedback about a specific attempt needs the
-/// same pair to say which attempt it's about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// same pair to say which attempt it's about. `observed_metrics`
+/// (§164, this round) is [`ObservedMetrics`] — see that alias's own
+/// doc comment.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RouteResultReport {
     pub operation_id: OperationId,
     pub path_id: PathId,
     pub outcome: RouteOutcome,
+    pub observed_metrics: ObservedMetrics,
 }
 
 /// §130 "Call Path Change Integration": "Routing reports: new path,
@@ -413,11 +553,12 @@ mod tests {
         let report = RouteResultReport {
             operation_id: OperationId::new(),
             path_id,
-            outcome: RouteOutcome::Failed(RouteFailureClass::Temporary),
+            outcome: RouteOutcome::Timeout,
+            observed_metrics: ObservedMetrics::unknown(),
         };
         block_on(engine.report_result(report));
-        // Unknown (no prior record) + Temporary failure → Suspect,
-        // per `health_after_outcome`'s own match arms.
+        // Unknown (no prior record) + Timeout → Suspect, per
+        // `health_after_outcome`'s own match arms.
         assert_eq!(
             engine.health_by_path.lock().unwrap().get(&path_id).copied(),
             Some(crate::types::RouteHealth::Suspect)
@@ -445,19 +586,54 @@ mod tests {
     }
 
     #[test]
-    fn health_after_outcome_maps_permanent_style_failures_straight_to_unreachable() {
+    fn health_after_outcome_maps_permanent_style_outcomes_straight_to_unreachable() {
         use crate::types::RouteHealth;
-        for class in [
-            RouteFailureClass::TransportUnavailable,
-            RouteFailureClass::AuthenticationFailure,
-            RouteFailureClass::PolicyDenied,
-            RouteFailureClass::RemoteRejected,
-            RouteFailureClass::Permanent,
+        for outcome in [
+            RouteOutcome::ConnectionFailed,
+            RouteOutcome::AuthenticationFailed,
+            RouteOutcome::RemoteRejected,
+            RouteOutcome::PolicyBlocked,
         ] {
             assert_eq!(
-                health_after_outcome(RouteHealth::Healthy, RouteOutcome::Failed(class)),
+                health_after_outcome(RouteHealth::Healthy, outcome),
                 RouteHealth::Unreachable,
-                "failure class {class:?} should map straight to Unreachable"
+                "outcome {outcome:?} should map straight to Unreachable"
+            );
+        }
+    }
+
+    /// §166 "Partial Outcome": some bytes got through — this is
+    /// evidence the path basically works, so it must not be treated
+    /// as harshly as an outright connection failure.
+    #[test]
+    fn spec_166_a_partial_outcome_is_treated_as_gradual_not_permanent() {
+        use crate::types::RouteHealth;
+        assert_eq!(
+            health_after_outcome(RouteHealth::Healthy, RouteOutcome::Partial),
+            RouteHealth::Degraded
+        );
+        assert_ne!(
+            health_after_outcome(RouteHealth::Healthy, RouteOutcome::Partial),
+            RouteHealth::Unreachable
+        );
+    }
+
+    /// §167 "Cancellation": a user decision carries no information
+    /// about path health at all — the estimate must not move in
+    /// either direction.
+    #[test]
+    fn spec_167_cancellation_never_changes_the_health_estimate() {
+        use crate::types::RouteHealth;
+        for health in [
+            RouteHealth::Healthy,
+            RouteHealth::Degraded,
+            RouteHealth::Suspect,
+            RouteHealth::Unreachable,
+            RouteHealth::Unknown,
+        ] {
+            assert_eq!(
+                health_after_outcome(health, RouteOutcome::Cancelled),
+                health
             );
         }
     }
@@ -486,5 +662,126 @@ mod tests {
             metrics: crate::metrics::PathMetrics::unknown(),
         };
         assert!(matches!(event, RouteChangeEvent::QualityUpdate { .. }));
+    }
+
+    /// §160-163, each transcribed as close to the spec's own literal
+    /// snippet as this crate's actual types allow — checking the
+    /// resulting `DeliveryRequirements`/`OperationDescriptor` fields
+    /// rather than merely that the builder compiles, so a future
+    /// change to a builder method's behavior would actually be
+    /// caught here.
+    #[test]
+    fn spec_160_text_message_example_produces_the_expected_requirements() {
+        let bob_phone = DeviceId::new();
+        let req = RouteRequest::for_device(bob_phone)
+            .class(crate::types::DeliveryClass::Interactive)
+            .priority(crate::types::Priority::Normal)
+            .estimated_size(512)
+            .allow_dtn(true);
+
+        assert_eq!(
+            req.descriptor.destination,
+            crate::types::Destination::Device(bob_phone)
+        );
+        assert_eq!(
+            req.descriptor.requirements.class,
+            crate::types::DeliveryClass::Interactive
+        );
+        assert_eq!(
+            req.descriptor.requirements.priority,
+            crate::types::Priority::Normal
+        );
+        assert_eq!(req.descriptor.estimated_size.0, 512);
+        assert!(req.descriptor.requirements.allow_dtn);
+    }
+
+    #[test]
+    fn spec_161_large_file_example_produces_the_expected_requirements() {
+        let bob_laptop = DeviceId::new();
+        let file_size = 250_000_000u64;
+        let req = RouteRequest::for_device(bob_laptop)
+            .class(crate::types::DeliveryClass::Bulk)
+            .priority(crate::types::Priority::Low)
+            .estimated_size(file_size)
+            .allow_metered(false)
+            .allow_multipath(true);
+
+        assert_eq!(
+            req.descriptor.requirements.class,
+            crate::types::DeliveryClass::Bulk
+        );
+        assert_eq!(
+            req.descriptor.requirements.priority,
+            crate::types::Priority::Low
+        );
+        assert_eq!(req.descriptor.estimated_size.0, file_size);
+        assert!(!req.descriptor.requirements.allow_metered);
+        assert!(req.descriptor.requirements.allow_multipath);
+    }
+
+    #[test]
+    fn spec_162_sos_example_produces_the_expected_requirements() {
+        let target = AccountId::new();
+        let sos_expiry = std::time::Duration::from_secs(300);
+        let req = RouteRequest::for_account(target)
+            .class(crate::types::DeliveryClass::DelayTolerant)
+            .priority(crate::types::Priority::Critical)
+            .allow_dtn(true)
+            .allow_redundancy(true)
+            .expiry(sos_expiry);
+
+        assert_eq!(
+            req.descriptor.destination,
+            crate::types::Destination::Account(target)
+        );
+        assert_eq!(
+            req.descriptor.requirements.class,
+            crate::types::DeliveryClass::DelayTolerant
+        );
+        assert_eq!(
+            req.descriptor.requirements.priority,
+            crate::types::Priority::Critical
+        );
+        assert!(req.descriptor.requirements.allow_dtn);
+        assert!(req.descriptor.requirements.allow_redundancy);
+        assert_eq!(req.descriptor.requirements.expiry_millis, Some(300_000));
+    }
+
+    #[test]
+    fn spec_163_video_call_example_produces_the_expected_requirements() {
+        let peer = DeviceId::new();
+        let required_video_rate = crate::metrics::Bitrate(2_000_000);
+        let req = RouteRequest::for_device(peer)
+            .class(crate::types::DeliveryClass::Realtime)
+            .priority(crate::types::Priority::High)
+            .min_bandwidth(required_video_rate)
+            .max_latency(std::time::Duration::from_millis(200))
+            .allow_dtn(false);
+
+        assert_eq!(
+            req.descriptor.requirements.class,
+            crate::types::DeliveryClass::Realtime
+        );
+        assert_eq!(
+            req.descriptor.requirements.priority,
+            crate::types::Priority::High
+        );
+        assert_eq!(
+            req.descriptor.requirements.min_bandwidth,
+            Some(required_video_rate)
+        );
+        assert_eq!(req.descriptor.requirements.max_latency_millis, Some(200));
+        assert!(!req.descriptor.requirements.allow_dtn);
+    }
+
+    /// The one thing none of §160-163's own examples show — see
+    /// [`RouteRequest`]'s own doc comment for why `with_candidates`
+    /// exists anyway, and that a full `RouteRequest` needs it before
+    /// `RoutingEngine::plan` can do anything useful with it.
+    #[test]
+    fn with_candidates_is_the_bridge_the_spec_examples_dont_show() {
+        let device = DeviceId::new();
+        let req = RouteRequest::for_device(device).with_candidates(vec![candidate(device)]);
+        assert_eq!(req.candidates.len(), 1);
     }
 }

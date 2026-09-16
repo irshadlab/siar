@@ -1,10 +1,14 @@
 //! §38 "Retry Policy", §39 "Retry on Connectivity Change".
 
+use serde::{Deserialize, Serialize};
+
 use crate::metrics::Ratio;
 use crate::requirements::DeliveryRequirements;
 
-/// §38.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// §38. `Serialize`/`Deserialize` added for §179 "Route Policy
+/// Persistence" — see [`crate::privacy::PrivacyPolicy`]'s own doc
+/// comment for the fuller reasoning.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
     pub max_attempts: Option<u32>,
     pub initial_backoff_millis: u64,

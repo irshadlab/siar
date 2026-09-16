@@ -28,6 +28,8 @@
 //! `TransportKind::MeshRelay`. That richer representation doesn't
 //! exist yet — named here rather than forced into a shallow stand-in.
 
+use serde::{Deserialize, Serialize};
+
 use crate::candidate::PathCandidate;
 use crate::requirements::DeliveryRequirements;
 use crate::types::{DeliveryClass, MeteredState, Priority, TransportKind};
@@ -38,8 +40,13 @@ use crate::types::{DeliveryClass, MeteredState, Priority, TransportKind};
 /// `false` — an all-`false` policy imposes no restriction at all,
 /// matching how every other optional policy knob in this crate
 /// (`DeliveryRequirements`'s own `allow_*` fields) defaults to
-/// permissive rather than restrictive.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// permissive rather than restrictive. `Serialize`/`Deserialize`
+/// added this round for §179 "Route Policy Persistence"'s own
+/// "persist user/application settings" — this crate has no
+/// persistence layer of its own (it never reads or writes a file),
+/// so the actual save/load is a caller's job; the derive just makes
+/// that job possible.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrivacyPolicy {
     pub prefer_direct: bool,
     pub avoid_relay: bool,

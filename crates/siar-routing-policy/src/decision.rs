@@ -95,6 +95,8 @@
 use siar_domain::AccountId;
 use siar_identity_multidevice::TrustedAccountStore;
 
+use serde::{Deserialize, Serialize};
+
 use crate::acquisition::eliminate_background_restricted;
 use crate::candidate::PathCandidate;
 use crate::descriptor::{ByteCount, OperationDescriptor};
@@ -109,8 +111,10 @@ use crate::types::{Priority, TransportKind};
 
 /// §109, transcribed as far as this crate can check it — see this
 /// module's own doc comment for why "never send unencrypted private
-/// message" has no field here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// message" has no field here. `Serialize`/`Deserialize` added for
+/// §179 "Route Policy Persistence" (see [`PrivacyPolicy`]'s own doc
+/// comment for the fuller reasoning).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemPolicy {
     pub max_operation_bytes: ByteCount,
 }
@@ -121,8 +125,9 @@ pub struct SystemPolicy {
 /// no additional restriction beyond whatever `DeliveryRequirements`
 /// and `PrivacyPolicy` already express, the same permissive-default
 /// convention every other policy struct in this crate already
-/// follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// follows. `Serialize`/`Deserialize` added for §179, same reasoning
+/// as [`SystemPolicy`] above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplicationPolicy {
     pub allow_relay: bool,
 }

@@ -39,6 +39,11 @@
 //!   without it, `Eligible` is unreachable and `list_candidates` can
 //!   never return anything, a gap this crate's own test suite
 //!   surfaced while exercising the trait for real, not a guess.
+//! - [`dedup`] — bounded seen-bundle deduplication (next.md §31's
+//!   original "mesh forwarding creates storms" reasoning, ported from
+//!   the retired `siar-dtn::dedup::SeenBundles` per `MIGRATION.md`
+//!   step 1 — this crate had no equivalent of its own before this
+//!   pass).
 //! - [`spray`] — §23 Spray-and-Wait, a real (binary-spray) allocation
 //!   function — the spec names the strategy but not a concrete
 //!   algorithm, so this is this crate's own reasonable choice, flagged
@@ -99,6 +104,7 @@
 //!   document.
 
 pub mod bundle;
+pub mod dedup;
 pub mod forwarding;
 pub mod payload;
 pub mod routing_bridge;
@@ -108,6 +114,7 @@ pub mod store;
 pub mod types;
 
 pub use bundle::{BundleIntegrity, DtnBundle};
+pub use dedup::SeenBundles;
 pub use forwarding::{decide_forwarding, EncounteredPeer, ForwardingDecision};
 pub use payload::{InlinePayloadTooLarge, PayloadReference, MAX_INLINE_PAYLOAD_BYTES};
 pub use routing_bridge::{select_dtn_bundle_policy, DtnBundlePolicy, DEFAULT_BUNDLE_TTL_MILLIS};

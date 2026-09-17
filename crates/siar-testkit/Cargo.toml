@@ -7,11 +7,12 @@ rust-version.workspace = true
 
 [dependencies]
 siar-domain.workspace = true
-siar-dtn.workspace = true
-# Deliberately nothing else, same as siar-routing: this is a pure
-# in-memory simulation over siar-dtn's own types, not a real network —
-# next.md §113-116's topology/partition/mobility/chaos tests are
-# specified in terms of "what does the store-carry-forward protocol
+siar-dtn-bundle.workspace = true
+futures-executor.workspace = true
+# Deliberately nothing else, same as the original: this is a pure
+# in-memory simulation over siar-dtn-bundle's own types, not a real
+# network — next.md §113-116's topology/partition/mobility/chaos tests
+# are specified in terms of "what does the store-carry-forward protocol
 # guarantee," which is decidable without any I/O at all. Real hardware
 # chaos (radio interference, actual battery drain, real clock skew
 # across physical devices) is a different half of Phase 8 this crate

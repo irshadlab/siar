@@ -32,11 +32,14 @@
 //!   "is BLE up" isn't a single yes/no the way the other links are.
 //!
 //! [`transport_manager`] is this crate's other half: wiring
-//! `SiarEndpoint::local_peers()` into a live `siar_routing::PathTable`,
-//! not just a `ConnectivityState` boolean.
+//! `SiarEndpoint::local_peers()` into a live
+//! `siar_routing_policy::PathCandidate` table, not just a
+//! `ConnectivityState` boolean.
 
+pub mod candidate_source;
+pub mod device_routes;
 pub mod transport_manager;
-pub use transport_manager::TransportManager;
+pub use transport_manager::{CandidateTable, TransportManager};
 
 use std::sync::Arc;
 

@@ -1,7 +1,7 @@
 # SIAR: System Architecture Master Rationale & Engineering Synthesis
 
 > **Authoritative Companion to [`sys-arch/`](sys-arch/)**  
-> **Complements:** [`spec-order.md`](spec-order.md), [`ROADMAP.md`](ROADMAP.md), [`README.md`](README.md), and [`SYSTEM_COMPARISON_AND_EVALUATION.md`](SYSTEM_COMPARISON_AND_EVALUATION.md).  
+> **Complements:** [`spec-order.md`](spec-order.md), [`ROADMAP.md`](ROADMAP.md), [`README.md`](README.md), and [`SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md`](SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md).  
 > **Corpus Scope:** All 176 Architecture Specifications (Parts 01–33, UI-UX 01–27, and Parts 34–150; 514,448 lines, 875,254 words).
 
 ---

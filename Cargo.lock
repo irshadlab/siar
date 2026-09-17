@@ -7058,11 +7058,12 @@ dependencies = [
  "jni 0.21.1",
  "postcard",
  "siar-android-connectivity",
+ "siar-connectivity",
  "siar-crypto",
  "siar-domain",
  "siar-messaging",
  "siar-protocol",
- "siar-routing",
+ "siar-routing-policy",
  "siar-storage",
  "siar-transport",
  "tokio",
@@ -7135,7 +7136,7 @@ version = "0.1.0"
 dependencies = [
  "iroh",
  "siar-domain",
- "siar-routing",
+ "siar-routing-policy",
  "siar-transport",
  "siar-transport-wifi-direct",
 ]
@@ -7222,13 +7223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "siar-dtn"
-version = "0.1.0"
-dependencies = [
- "siar-domain",
-]
-
-[[package]]
 name = "siar-dtn-bundle"
 version = "0.1.0"
 dependencies = [
@@ -7260,10 +7254,10 @@ dependencies = [
  "siar-connectivity",
  "siar-crypto",
  "siar-domain",
- "siar-dtn",
+ "siar-dtn-bundle",
  "siar-messaging",
  "siar-protocol",
- "siar-routing",
+ "siar-routing-policy",
  "siar-storage",
  "siar-transport",
  "tokio",
@@ -7394,15 +7388,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "siar-routing"
-version = "0.1.0"
-dependencies = [
- "iroh",
- "siar-domain",
- "siar-dtn",
-]
-
-[[package]]
 name = "siar-routing-policy"
 version = "0.1.0"
 dependencies = [
@@ -7429,8 +7414,9 @@ dependencies = [
 name = "siar-testkit"
 version = "0.1.0"
 dependencies = [
+ "futures-executor",
  "siar-domain",
- "siar-dtn",
+ "siar-dtn-bundle",
 ]
 
 [[package]]

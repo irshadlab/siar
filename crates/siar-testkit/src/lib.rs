@@ -2,7 +2,7 @@
 //! testing, battery optimization, security audit") — next.md §113–116.
 //!
 //! [`mesh_sim`] is a deterministic, in-memory simulation over real
-//! `siar_dtn` types (not mocks) that can express next.md's own test
+//! `siar_dtn_bundle` types (not mocks) that can express next.md's own test
 //! scenarios directly: §113's A-B-C-D chain, §114's partition-then-
 //! bridge, §115's links appearing/disappearing between ticks. What it
 //! proves is protocol-level: hop-limit-respecting eventual delivery,

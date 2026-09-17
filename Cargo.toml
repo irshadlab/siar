@@ -37,8 +37,6 @@ members = [
     "crates/siar-transport-bluetooth-classic",
     "crates/siar-transport-ble",
     "crates/siar-transport-ble-android",
-    "crates/siar-dtn",
-    "crates/siar-routing",
     "crates/siar-emergency",
     "crates/siar-testkit",
     "crates/siar-connectivity",
@@ -77,14 +75,20 @@ siar-transport = { path = "crates/siar-transport" }
 siar-messaging = { path = "crates/siar-messaging" }
 siar-ui-state = { path = "crates/siar-ui-state" }
 siar-media-core = { path = "crates/siar-media-core" }
-siar-dtn = { path = "crates/siar-dtn" }
-siar-routing = { path = "crates/siar-routing" }
 siar-connectivity = { path = "crates/siar-connectivity" }
 siar-transport-ble = { path = "crates/siar-transport-ble" }
 siar-media-image = { path = "crates/siar-media-image" }
 
 # --- pure-Rust, zero-overhead-first choices ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }
+# Lets `siar-testkit::mesh_sim` call `siar_dtn_bundle`'s async
+# `BundleStore` trait synchronously via `block_on` — everything that
+# trait does here resolves immediately (no real disk/network I/O), so
+# this never actually blocks on anything; it's the standalone
+# executor, not the full `futures` facade crate or a `tokio` runtime,
+# matching this crate's own "no I/O at all" stated scope (see
+# `siar-testkit`'s `lib.rs` doc comment).
+futures-executor = "0.3"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["alloc"] }
 bytes = { version = "1", features = ["serde"] }

@@ -797,6 +797,7 @@ pub mod broadcast;
 pub mod cache;
 pub mod candidate;
 pub mod config;
+pub mod congestion;
 pub mod decision;
 pub mod descriptor;
 pub mod diagnostics;
@@ -811,6 +812,7 @@ pub mod explain;
 pub mod failure;
 pub mod fairness;
 pub mod golden_tests;
+pub mod link_health;
 pub mod metrics;
 pub mod multidevice;
 pub mod path_switch;
@@ -822,6 +824,7 @@ pub mod privacy;
 pub mod probability;
 pub mod quality;
 pub mod reevaluation;
+pub mod relay_composition;
 pub mod requirements;
 pub mod resilience;
 pub mod resolve;
@@ -845,6 +848,7 @@ pub use broadcast::{BroadcastDeliveryTracker, BroadcastId};
 pub use cache::RouteCache;
 pub use candidate::{PathCandidate, TransportEndpoint};
 pub use config::{ConfigError, RoutingConfig};
+pub use congestion::CongestionTracker;
 pub use decision::{
     decide_route, ApplicationPolicy, DeferredReason, PolicyLayers, RejectReason,
     RouteDecisionResult, SystemPolicy,
@@ -871,6 +875,7 @@ pub use explain::{
     RouteReason,
 };
 pub use failure::RouteFailureClass;
+pub use link_health::{health_from_reliability, LinkHealth, SendOutcome};
 pub use metrics::{
     Bitrate, Confidence, CongestionState, EnergyCost, MeasuredValue, NetworkCost, PathMetrics,
     Ratio, SignalQuality, StabilityScore,
@@ -889,6 +894,7 @@ pub use quality::{quality_signal_for, PathQualitySignal};
 pub use reevaluation::{
     path_has_failed, quality_change_exceeds_threshold, should_reevaluate_file_route,
 };
+pub use relay_composition::{compose_via_relay, RelayAdvertisement};
 pub use requirements::DeliveryRequirements;
 pub use resilience::{
     diagnose, escalation_stage_of, hedge_policy_for, should_escalate_beyond,

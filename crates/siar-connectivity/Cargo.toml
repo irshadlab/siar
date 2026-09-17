@@ -8,14 +8,11 @@ rust-version.workspace = true
 [dependencies]
 siar-domain.workspace = true
 siar-transport.workspace = true
-siar-routing.workspace = true
-# Needed as of this pass: `TransportManager::record_send_outcome`
-# names `iroh::EndpointId` directly in its signature (matching
-# `PathTable`'s key type — see `siar_routing::path`'s doc comment).
-# Everything before this pass only ever got `EndpointId` values back
-# inferred from `siar_transport::SiarEndpoint`'s return types, never
-# spelling the crate path out, which is why this dependency wasn't
-# already listed despite the type being used throughout this file.
+siar-routing-policy.workspace = true
+# Needed as of this pass: `TransportManager`/`CandidateTable` name
+# `iroh::EndpointId`/`EndpointAddr` directly (matching
+# `siar_routing_policy::PathCandidate`'s `endpoint` bytes and
+# `DeviceRoutes`'s join — see `device_routes.rs`'s doc comment).
 iroh.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]

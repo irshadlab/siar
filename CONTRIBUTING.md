@@ -45,14 +45,16 @@ Before writing code, please understand SIAR's architectural boundaries:
 ```
 ┌────────────────────────────────────────────────────────┐
 │               APPS LAYER (GNU AGPLv3)                  │
-│  apps/cli, apps/desktop, apps/android, apps/emergency  │
+│  apps/cli, apps/desktop, apps/android,                 │
+│  apps/emergency-node                                   │
 └───────────────────────────┬────────────────────────────┘
                             │
 ┌───────────────────────────▼────────────────────────────┐
 │         CORE LIBRARIES LAYER (MIT OR Apache-2.0)       │
 │  crates/siar-messaging, crates/siar-storage,           │
 │  crates/siar-crypto-mls, crates/siar-transport,        │
-│  crates/siar-routing, crates/siar-dtn, etc.            │
+│  crates/siar-routing-policy, crates/siar-dtn-bundle,   │
+│  crates/siar-connectivity, etc.                        │
 └────────────────────────────────────────────────────────┘
 ```
 

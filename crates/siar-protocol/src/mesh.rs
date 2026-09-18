@@ -40,9 +40,8 @@ pub struct MeshEnvelope {
     /// attempt — flagged as a follow-up, not silently downgraded to
     /// "good enough."
     pub destination: DeviceId,
-    /// Opaque `u64` ticks, same "caller supplies `now`, no wall clock
-    /// read in this crate" pattern `siar_dtn::bundle::MeshBundle`
-    /// already uses, for the same next.md §96 reason.
+    /// Opaque `u64` ticks, caller supplies `now`, no wall clock
+    /// read in this crate (for reproducible testing and monotonic timestamps).
     pub created_at: u64,
     pub expires_at: u64,
     pub hop_limit: u8,
@@ -69,13 +68,8 @@ impl MeshEnvelope {
     }
 
     /// next.md §30: every forward decrements the hop count; at zero,
-    /// drop. Mirrors `siar_dtn::bundle::MeshBundle::forwarded`'s exact
-    /// contract (`None` means "stop, don't forward further") — this
-    /// type doesn't depend on `siar-dtn` to reuse that method directly
-    /// (see this crate's `Cargo.toml` for why: `siar-protocol` sits
-    /// below `siar-dtn` in next.md §4's layering), so the same small
-    /// piece of logic is duplicated here rather than inverting that
-    /// dependency.
+    /// drop. Contract mirrors the DTN forwarding rule (`None` means "stop,
+    /// don't forward further").
     pub fn forwarded(mut self) -> Option<Self> {
         if self.hop_limit == 0 {
             return None;

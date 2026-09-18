@@ -5,10 +5,10 @@
 //! piece Phase 7 found missing) also needed it: `siar-protocol` sits
 //! below `siar-dtn` in next.md §4's layer diagram, so `siar-protocol`
 //! depending on `siar-dtn` for this would be a backwards dependency.
-//! `siar_dtn::bundle` still re-exports this under its old path, so
-//! nothing that already wrote `siar_dtn::bundle::MessagePriority`
-//! (`siar-routing`, `siar-testkit`) needs to change.
-
+//! With the retirement of `siar-dtn` and `siar-routing` (see `MIGRATION.md`),
+//! all consumers across the workspace import `MessagePriority` directly from
+//! `siar_domain`.
+//!
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

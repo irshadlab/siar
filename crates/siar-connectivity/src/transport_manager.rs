@@ -57,6 +57,17 @@ pub struct CandidateTable {
     device_routes: Mutex<DeviceRoutes>,
     candidates: Mutex<HashMap<(DeviceId, TransportKind), PathCandidate>>,
     link_health: Mutex<HashMap<(DeviceId, TransportKind), LinkHealth>>,
+    /// When each candidate was last (re)confirmed by
+    /// [`Self::sync_local_peers`] — a real, named gap in this crate's
+    /// first pass (`MIGRATION.md` step 5): the old `PathTable::
+    /// remove_stale` actively evicted entries no longer refreshed by
+    /// mDNS, but nothing tracked an equivalent timestamp on
+    /// `PathCandidate` itself (it has no such field, by that crate's
+    /// own design — `siar_routing_policy::PathCandidate` doesn't know
+    /// about wall-clock observation recency at all). Tracked here,
+    /// alongside the table that actually needs it, rather than by
+    /// adding a field to `PathCandidate` for one caller's bookkeeping.
+    last_observed: Mutex<HashMap<(DeviceId, TransportKind), u64>>,
 }
 
 impl CandidateTable {
@@ -65,6 +76,7 @@ impl CandidateTable {
             device_routes: Mutex::new(DeviceRoutes::new()),
             candidates: Mutex::new(HashMap::new()),
             link_health: Mutex::new(HashMap::new()),
+            last_observed: Mutex::new(HashMap::new()),
         }
     }
 
@@ -78,6 +90,34 @@ impl CandidateTable {
             .lock()
             .expect("DeviceRoutes lock poisoned")
             .record(device, endpoint, now);
+    }
+
+    /// The `EndpointId -> DeviceId` resolution [`Self::sync_local_peers`]
+    /// itself relies on, exposed for a caller that needs the same
+    /// resolution for its own purposes (e.g. resolving the advertiser
+    /// or the claimed destination of a received routing advertisement
+    /// into a `DeviceId` before it can be composed into a
+    /// [`PathCandidate`] at all — see `siar_routing_policy::
+    /// relay_composition`). Deliberately the *same* underlying
+    /// [`DeviceRoutes`] `sync_local_peers` uses, not a second instance
+    /// a caller would otherwise have to keep in sync by hand.
+    pub fn device_for(&self, endpoint: iroh::EndpointId) -> Option<DeviceId> {
+        self.device_routes
+            .lock()
+            .expect("DeviceRoutes lock poisoned")
+            .device_for(endpoint)
+    }
+
+    /// The forward direction of [`Self::device_for`] — `device`'s
+    /// last self-disclosed endpoint, if this table has recorded one
+    /// (via [`Self::record_device_endpoint`]). What a caller needing
+    /// to push something to a known destination (rather than merely
+    /// resolve an observed peer's identity) actually needs.
+    pub fn known_endpoint_for(&self, device: DeviceId) -> Option<iroh::EndpointId> {
+        self.device_routes
+            .lock()
+            .expect("DeviceRoutes lock poisoned")
+            .get(device)
     }
 
     /// Refreshes `LocalLan`/`IrohDirect`/`IrohRelay` candidates from a
@@ -96,6 +136,10 @@ impl CandidateTable {
             .lock()
             .expect("DeviceRoutes lock poisoned");
         let mut candidates = self.candidates.lock().expect("candidates lock poisoned");
+        let mut last_observed = self
+            .last_observed
+            .lock()
+            .expect("last_observed lock poisoned");
         for addr in observed {
             let Some(device) = device_routes.device_for(addr.id) else {
                 // Real, named gap — see this module's top doc comment.
@@ -122,8 +166,41 @@ impl CandidateTable {
                     state: CandidateState::Active,
                 },
             );
-            let _ = now; // reserved for a future staleness pass, same as `now` on `record`
+            last_observed.insert((device, kind), now);
         }
+    }
+
+    /// Drops any candidate not reconfirmed by [`Self::sync_local_peers`]
+    /// within the last `max_age` — next.md §92's "mobile topology
+    /// changes too quickly" reasoning, the same one the retired
+    /// `PathTable::remove_stale`'s own doc comment already gave. Also
+    /// delegates to [`DeviceRoutes::remove_stale`] with the same
+    /// `max_age`, since a device's self-disclosed endpoint hint and a
+    /// candidate built from mDNS observation go stale for the same
+    /// underlying reason.
+    pub fn remove_stale(&self, now: u64, max_age: u64) {
+        let mut candidates = self.candidates.lock().expect("candidates lock poisoned");
+        let mut last_observed = self
+            .last_observed
+            .lock()
+            .expect("last_observed lock poisoned");
+        let mut link_health = self
+            .link_health
+            .lock()
+            .expect("LinkHealth map lock poisoned");
+        last_observed.retain(|key, &mut observed_at| {
+            let keep = now.saturating_sub(observed_at) <= max_age;
+            if !keep {
+                candidates.remove(key);
+                link_health.remove(key);
+            }
+            keep
+        });
+        drop((candidates, last_observed, link_health));
+        self.device_routes
+            .lock()
+            .expect("DeviceRoutes lock poisoned")
+            .remove_stale(now, max_age);
     }
 
     /// Every current candidate for `device`, across every transport
@@ -218,9 +295,21 @@ impl TransportManager {
         self.table.record_device_endpoint(device, endpoint, now);
     }
 
+    pub fn device_for(&self, endpoint: iroh::EndpointId) -> Option<DeviceId> {
+        self.table.device_for(endpoint)
+    }
+
+    pub fn known_endpoint_for(&self, device: DeviceId) -> Option<iroh::EndpointId> {
+        self.table.known_endpoint_for(device)
+    }
+
     pub fn sync_local_peers(&self, now: u64) {
         self.table
             .sync_local_peers(&self.endpoint.local_peers(), now);
+    }
+
+    pub fn remove_stale(&self, now: u64, max_age: u64) {
+        self.table.remove_stale(now, max_age);
     }
 
     pub fn candidates_for(&self, device: DeviceId) -> Vec<PathCandidate> {
@@ -374,5 +463,56 @@ mod tests {
 
         let candidates = table.candidates_for(device);
         assert_eq!(candidates[0].health, RouteHealth::Unreachable);
+    }
+
+    #[test]
+    fn device_for_resolves_the_same_disclosures_sync_local_peers_uses() {
+        let table = CandidateTable::new();
+        let device = DeviceId::new();
+        let endpoint = test_endpoint_id(8);
+        table.record_device_endpoint(device, endpoint, 0);
+        assert_eq!(table.device_for(endpoint), Some(device));
+        assert_eq!(table.device_for(test_endpoint_id(9)), None);
+        assert_eq!(table.known_endpoint_for(device), Some(endpoint));
+    }
+
+    #[test]
+    fn remove_stale_drops_candidates_not_reconfirmed_by_sync_local_peers() {
+        let table = CandidateTable::new();
+        let device = DeviceId::new();
+        let endpoint = test_endpoint_id(10);
+        table.record_device_endpoint(device, endpoint, 0);
+        let addr = iroh::EndpointAddr {
+            id: endpoint,
+            addrs: std::collections::BTreeSet::from([iroh::TransportAddr::Ip(
+                "192.168.1.5:4433".parse().unwrap(),
+            )]),
+        };
+        table.sync_local_peers(&[addr], 0);
+        assert_eq!(table.candidates_for(device).len(), 1);
+
+        table.remove_stale(1000, 500);
+        assert!(
+            table.candidates_for(device).is_empty(),
+            "a candidate not reconfirmed within max_age should be dropped"
+        );
+    }
+
+    #[test]
+    fn remove_stale_keeps_candidates_reconfirmed_within_max_age() {
+        let table = CandidateTable::new();
+        let device = DeviceId::new();
+        let endpoint = test_endpoint_id(11);
+        table.record_device_endpoint(device, endpoint, 0);
+        let addr = iroh::EndpointAddr {
+            id: endpoint,
+            addrs: std::collections::BTreeSet::from([iroh::TransportAddr::Ip(
+                "192.168.1.5:4433".parse().unwrap(),
+            )]),
+        };
+        table.sync_local_peers(&[addr], 900);
+
+        table.remove_stale(1000, 500);
+        assert_eq!(table.candidates_for(device).len(), 1);
     }
 }

@@ -328,7 +328,7 @@ SIAR Complete Unified Multi-Transport Architecture:
 * **Sub-15ms Failover**: If a user walks out of Wi-Fi range during an active voice/video call, the stream transitions to cellular or BLE without terminating the cryptographic session or dropping audio packets.
 
 #### 3. Delay-Tolerant Networking (DTN) & Physical Data Mules
-* Implemented in [`siar-dtn-bundle`](file:///home/irshad/Projects/siar/crates/siar-dtn-bundle) and [`siar-dtn`](file:///home/irshad/Projects/siar/crates/siar-dtn).
+* Implemented in [`siar-dtn-bundle`](file:///home/irshad/Projects/siar/crates/siar-dtn-bundle).
 * When two nodes are completely partitioned by an air gap or geographic distance with no active radio link and no Internet connection, SIAR switches to DTN store-carry-forward algorithms:
   * **Spray-and-Wait (Binary Spraying)**: Initializes bundles with $L$ copies (e.g., $L=8$), splitting copies in half with each encountered carrier node until $L=1$, bounding network congestion while minimizing delivery latency.
   * **PRoPHET Routing**: Uses historical contact probabilities to route bundles toward high-probability delivery nodes.

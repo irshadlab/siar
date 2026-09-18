@@ -6,7 +6,7 @@ Source spec: `sys-arch/02-multi-device-identity-architecture.md` — 204 numbere
 
 **✅ 204/204 — spec complete** (2026-09-05/06, 11 rounds this session on top of ~90/204 already done beforehand).
 
-251/251 tests, clippy clean (`-D warnings`), fmt clean, zero regressions to `siar-routing-policy`/`siar-crypto` at any point across all 11 rounds. Compiled and tested against the real workspace `Cargo.lock` with rustc 1.91.1, every round.
+256/256 tests (251 baseline + 5 TransportKeyBinding reconciliation tests), clippy clean (`-D warnings`), fmt clean, zero regressions to `siar-routing-policy`/`siar-crypto` at any point across all rounds. Compiled and tested against the real workspace `Cargo.lock` with rustc 1.91.1.
 
 **"Complete" does not mean "nothing left to improve."** This crate's own `lib.rs` doc comment ends with an itemized 21-item Definition-of-Done self-audit (§202): **19/21 fully done, 2 honestly `PartiallyDone`**:
 - `UserConfirmationRequired` — the prompt is modeled (`approval::LinkingApprovalPrompt`), but this crate ships no UI at all, by design.
@@ -41,7 +41,7 @@ Full per-section rationale for every one of these lives in the crate's own `lib.
 
 ## Implementing crate(s)
 
-- `siar-identity-multidevice` — 60 source files, 251 tests, spec-complete.
+- `siar-identity-multidevice` — 61 source files, 256 tests, spec-complete (including TransportKeyBinding reconciliation).
 
 ## Note
 

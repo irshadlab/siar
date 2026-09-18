@@ -125,8 +125,11 @@ pub struct MemberDevice {
 
 /// Resolves an account to its known devices' addressing info
 /// (plan.md §38's fanout target list). A real implementation backs
-/// this with the device registry (`siar_domain::DeviceRegistry`) plus
-/// a contact/ticket store; tests can supply a closure-backed stub.
+/// this with a device registry (`siar_identity_multidevice::
+/// directory::DeviceDirectory` — a different, concrete type of the
+/// same name, this workspace's real one since `siar_domain`'s former
+/// `DeviceRegistry` was retired, see `MIGRATION.md`) plus a
+/// contact/ticket store; tests can supply a closure-backed stub.
 pub trait DeviceDirectory: Send + Sync {
     fn devices_for(&self, account: AccountId) -> Vec<MemberDevice>;
 }

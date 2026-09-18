@@ -16,7 +16,7 @@
 //! implemented so far: discovery frequency is [`mode::settings_for`]
 //! here; "reduce media auto-download" and "extend critical-message
 //! retention" are policy decisions for whatever owns attachment
-//! fetching and `siar_dtn::store::BundleStore`'s retention respectively
+//! fetching and `siar_dtn_bundle::store::BundleStore`'s retention respectively
 //! — this crate defines the mode a caller is in, not every downstream
 //! behavior that mode should trigger elsewhere in the workspace.
 //!

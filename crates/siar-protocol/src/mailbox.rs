@@ -100,8 +100,8 @@ pub struct MailboxCheckIn {
     pub issued_at_millis: u64,
     /// Ed25519 signature over this check-in's own fields (see
     /// `signing_payload`) — 64 raw signature bytes. `Vec<u8>` rather
-    /// than `[u8; 64]`, matching `siar_crypto::device_cert::
-    /// DeviceCertificate::signature`'s own already-established
+    /// than `[u8; 64]`, matching `siar_identity_multidevice::
+    /// certificate::DeviceCertificate::signature`'s own already-established
     /// precedent for exactly this: serde's derive doesn't support
     /// fixed-size arrays longer than 32 elements without an extra
     /// crate (confirmed by a real compile error against this exact

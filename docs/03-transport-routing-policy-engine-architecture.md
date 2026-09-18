@@ -145,13 +145,11 @@ Complete — Round 1 (§1–§42), Round 2 (§43–§56), Round 3 (§57–§62),
 ## Implementing crate(s)
 
 - `siar-routing-policy`
-
-- `siar-routing (pre-existing, next.md-era — unreconciled second routing/scoring system, see below)`
-
+- `siar-connectivity` (transport managers, candidate tables, and address heuristics)
 
 ## Known gaps / open questions
 
-- Unresolved-by-design reconciliation: two routing/scoring systems — `siar-routing` (next.md-era) vs `siar-routing-policy` (Part 03-era) — documented in the newer crate's own lib.rs, not silently merged.
+- **Resolved reconciliation**: The former next.md-era `siar-routing` crate has been retired; key capabilities (`LinkHealth`, `relay_composition`, `CongestionTracker`) were ported into `siar-routing-policy`, while `CandidateTable` and `DeviceRoutes` live in `siar-connectivity` (see [`MIGRATION.md`](../MIGRATION.md)).
 - §55 Mesh Forwarding: needs dedicated next-hop, route utility, hop budget, and relay trust policy models.
 
 

@@ -4,13 +4,10 @@
 //! Policy Engine Architecture" (the third of three architecture
 //! documents supplied this pass; Part 01 has its own crate,
 //! `siar-protocol-ext`; Part 02 has `siar-identity-multidevice`, which
-//! this crate depends on for real — see [`resolve`]). Unlike Parts 01
-//! and 02, this workspace had **no** crate built against Part 03's
-//! specific spec text before this session — the existing
-//! `siar-routing` crate is a related but independently-evolved system
-//! built against a different, earlier document ("next.md"), and is
-//! left untouched here (see this comment's own closing section for how
-//! the two relate).
+//! this crate depends on for real — see [`resolve`]). The pre-existing
+//! `siar-routing` crate ("next.md"-era) has been retired and reconciled
+//! into this crate and `siar-connectivity` (see `MIGRATION.md` and this
+//! comment's own closing section for the disposition).
 //!
 //! ## Scope: §43-182 substantially covered; see "Definition of Done"
 //! ## (§198) near the end of this comment for the honest self-audit

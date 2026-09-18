@@ -75,10 +75,8 @@ impl DtnBundle {
     }
 
     /// §21: "Every forward decrements local remaining hop budget. At
-    /// zero: do not forward further." Same `Option`-returning shape as
-    /// `siar_dtn::bundle::MeshBundle::forwarded` (this workspace's
-    /// existing, differently-modeled DTN crate) for the same reason:
-    /// `None` means "this was the last hop, treat exactly like drop."
+    /// zero: do not forward further." Returns `None` when this was the last hop
+    /// (treat exactly like drop).
     pub fn forwarded(mut self) -> Option<Self> {
         if self.hop_limit == 0 {
             return None;

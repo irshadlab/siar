@@ -25,10 +25,10 @@ SIAR is a production-grade, decentralized, local-first communication system engi
 │  siar-identity-multidevice │ siar-crypto │ siar-crypto-mls              │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                 STORAGE & TRANSACTIONAL OUTBOX LAYER                    │
-│  siar-storage (Embedded SQL) │ siar-dtn (Store-Carry-Forward Vault)     │
+│  siar-storage (Embedded SQL) │ siar-dtn-bundle (Store-Carry-Forward)    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                  AUTONOMOUS MULTIPATH ROUTING CORE                      │
-│  siar-routing │ siar-connectivity │ siar-protocol │ siar-protocol-ext  │
+│  siar-routing-policy │ siar-connectivity │ siar-protocol-ext            │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                       PLUGGABLE TRANSPORTS                              │
 │  siar-transport (Iroh/QUIC) │ siar-transport-ble │ -wifi-direct/-aware  │
@@ -49,12 +49,12 @@ SIAR is a production-grade, decentralized, local-first communication system engi
 | :---: | :--- | :--- | :--- |
 | **01** | [`01-protocol-extension-system-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/01-protocol-extension-system-architecture.md) | `siar-protocol-ext` | Protocol negotiation, extension descriptors & versioning |
 | **02** | [`02-multi-device-identity-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/02-multi-device-identity-architecture.md) | `siar-identity-multidevice` | Account root authority, device certs & revocation |
-| **03** | [`03-transport-routing-policy-engine-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/03-transport-routing-policy-engine-architecture.md) | `siar-routing` | Dynamic link scoring, path selection & failover |
+| **03** | [`03-transport-routing-policy-engine-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/03-transport-routing-policy-engine-architecture.md) | `siar-routing-policy` | Dynamic link scoring, path selection & failover |
 | **04** | [`04-offline-event-log-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/04-offline-event-log-architecture.md) | `siar-storage`, `siar-messaging` | Transactional outbox, event ordering & delivery states |
 | **05** | [`05-robust-file-blob-subsystem-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/05-robust-file-blob-subsystem-architecture.md) | `siar-storage` | BLAKE3 chunking, resumable transfers & deduplication |
-| **06** | [`06-dtn-store-carry-forward-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/06-dtn-store-carry-forward-architecture.md) | `siar-dtn` | Delay-tolerant routing, epidemic anti-entropy & quotas |
+| **06** | [`06-dtn-store-carry-forward-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/06-dtn-store-carry-forward-architecture.md) | `siar-dtn-bundle` | Delay-tolerant routing, epidemic anti-entropy & quotas |
 | **07** | [`07-capability-negotiation-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/07-capability-negotiation-architecture.md) | `siar-protocol` | Runtime capability exchange & transport handoffs |
-| **08** | [`08-resource-limits-backpressure-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/08-resource-limits-backpressure-architecture.md) | `siar-routing`, `siar-storage` | Token-bucket rate limiting, backpressure & DoS defense |
+| **08** | [`08-resource-limits-backpressure-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/08-resource-limits-backpressure-architecture.md) | `siar-resource-limits`, `siar-storage` | Token-bucket rate limiting, backpressure & DoS defense |
 | **09** | [`09-crash-recovery-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/09-crash-recovery-architecture.md) | `siar-storage`, `apps/desktop` | WAL recovery, panic hooks & corrupted state isolation |
 | **10** | [`10-fuzzing-protocol-test-suite-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/10-fuzzing-protocol-test-suite-architecture.md) | `fuzz/`, `tests/` | Protocol fuzzers, property tests & network simulator |
 | **11** | [`11-relay-self-hosted-infrastructure-architecture.md`](file:///home/irshad/Projects/siar/sys-arch/11-relay-self-hosted-infrastructure-architecture.md) | `apps/relay` | Self-hosted Iroh relays & encrypted mailbox servers |

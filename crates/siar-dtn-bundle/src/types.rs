@@ -82,12 +82,9 @@ pub enum StorageClass {
     DeliveryReceipt,
 }
 
-/// §36's own field name (`DtnPriority`) — deliberately a distinct type
-/// from `siar_domain::MessagePriority` (which `siar-dtn`'s existing
-/// `MeshBundle` already uses), rather than reusing it, since this
-/// crate's whole `DtnBundle` type is itself a parallel, not-yet-
-/// reconciled model to `siar-dtn`'s `MeshBundle` — see this crate's own
-/// top doc comment.
+/// §36's own field name (`DtnPriority`) — spec-defined priority tiers
+/// specifically for DTN bundle store-carry-forward scheduling and
+/// spray allocation (see §22).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DtnPriority {
     Low,

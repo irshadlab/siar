@@ -23,7 +23,7 @@ SIAR uses a **Single Core, Native Presentation** architectural model:
                                      |
 +------------------------------------v------------------------------------------+
 |                       Underlying Rust Workspace Services                      |
-| (siar-storage, siar-messaging, siar-routing, siar-crypto, siar-calls)         |
+| (siar-storage, siar-messaging, siar-routing-policy, siar-crypto, siar-calls)  |
 +-------------------------------------------------------------------------------+
 ```
 

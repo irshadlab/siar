@@ -8,10 +8,9 @@ rust-version.workspace = true
 [dependencies]
 # siar-blob-manifest/siar-event-log for payload.rs's real BlobId/EventId
 # integration (§7) — no siar-domain direct dependency needed beyond
-# what those two already re-export; no siar-dtn (the existing,
-# differently-modeled next.md-era crate — see lib.rs's own doc comment
-# for how the two relate) and no siar-transport/iroh (no wire/encounter
-# transport integration — see lib.rs's own scope section).
+# what those two already re-export; no siar-dtn (the retired
+# next.md-era crate, reconciled per MIGRATION.md) and no siar-transport/iroh
+# (no wire/encounter transport integration — see lib.rs's own scope section).
 siar-blob-manifest = { path = "../siar-blob-manifest" }
 siar-event-log = { path = "../siar-event-log" }
 # `siar-routing-policy` for routing_bridge.rs's real integration — see

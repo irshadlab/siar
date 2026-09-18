@@ -15,7 +15,7 @@
 ### 🕊️ Free for Humanity Commitment
 **SIAR is, and will always remain, 100% free and open-source software for all of humanity.** 
 
-- **Permissive Libraries (`crates/*`)**: All underlying Rust crates (`siar-crypto`, `siar-crypto-mls`, `siar-transport`, `siar-storage`, `siar-messaging`, `siar-routing`, `siar-dtn`, etc.) are licensed under **MIT OR Apache-2.0** to maximize developer adoption, academic research, and interoperability across the ecosystem.
+- **Permissive Libraries (`crates/*`)**: All underlying Rust crates (`siar-crypto`, `siar-crypto-mls`, `siar-transport`, `siar-storage`, `siar-messaging`, `siar-routing-policy`, `siar-dtn-bundle`, `siar-connectivity`, etc.) are licensed under **MIT OR Apache-2.0** to maximize developer adoption, academic research, and interoperability across the ecosystem.
 - **Copyleft Standalone Applications (`apps/*`)**: Complete end-user applications (`apps/android`, `apps/desktop`, `apps/cli`) and headless relay daemons (`apps/emergency-node`) are licensed under **GNU AGPLv3** to ensure that modifications to user-facing applications and network services remain open and accessible to the public.
 
 ### 💡 Fueling Development via Commercial Reinvestment

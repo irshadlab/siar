@@ -59,18 +59,44 @@ impl NewDeviceKeys {
         self.device_signing_key.verifying_key().to_bytes()
     }
 
-    /// A real, named gap: [`crate::certificate::DeviceCertificate`]
-    /// only certifies the signing key (see
-    /// [`NewDeviceKeys::signing_public_key_bytes`]'s own doc comment)
-    /// — the device's transport public key travels alongside a
-    /// certificate but isn't itself bound by the root key's signature.
-    /// A fuller design would likely extend `DeviceCertificate` with a
-    /// second certified field, or have the signing key sign a separate
-    /// "this is my transport key" statement; neither is attempted
-    /// here — this crate stops at generating the key, not at closing
-    /// that binding gap.
+    /// A real, named gap when this was first written: [`crate::
+    /// certificate::DeviceCertificate`] only certifies the signing key
+    /// (see [`NewDeviceKeys::signing_public_key_bytes`]'s own doc
+    /// comment) — the device's transport public key traveled alongside
+    /// a certificate but wasn't itself bound by anything. Closed by
+    /// [`NewDeviceKeys::bind_transport_key`], added alongside
+    /// [`crate::transport_key_binding::TransportKeyBinding`] — see that
+    /// module's own doc comment for why it's a second, device-signed
+    /// binding rather than a new field on `DeviceCertificate` itself.
     pub fn transport_public_key_bytes(&self) -> [u8; 32] {
         X25519PublicKey::from(&self.transport_key).to_bytes()
+    }
+
+    /// Signs [`Self::transport_public_key_bytes`] with this device's
+    /// own signing key, scoped to `certificate`'s generation — see
+    /// [`crate::transport_key_binding::TransportKeyBinding`]'s own doc
+    /// comment for the full reasoning. Errors with
+    /// [`crate::error::IdentityError::CertificateNotForThisDevice`] if
+    /// `certificate` wasn't actually issued for this device's own
+    /// signing key — signing a binding against someone else's
+    /// certificate would produce a value that could never verify, so
+    /// this is rejected up front rather than handed back as a
+    /// certificate-shaped value that just happens to always fail
+    /// [`crate::transport_key_binding::TransportKeyBinding::verify`].
+    pub fn bind_transport_key(
+        &self,
+        certificate: &crate::certificate::DeviceCertificate,
+    ) -> Result<crate::transport_key_binding::TransportKeyBinding, crate::error::IdentityError>
+    {
+        if certificate.device_public_key != self.signing_public_key_bytes() {
+            return Err(crate::error::IdentityError::CertificateNotForThisDevice);
+        }
+        Ok(crate::transport_key_binding::TransportKeyBinding::sign(
+            &self.device_signing_key,
+            certificate.device_id,
+            certificate.generation,
+            self.transport_public_key_bytes(),
+        ))
     }
 }
 

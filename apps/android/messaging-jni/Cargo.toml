@@ -23,7 +23,6 @@ siar-crypto.workspace = true
 siar-storage.workspace = true
 siar-transport.workspace = true
 siar-messaging.workspace = true
-siar-routing.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 iroh.workspace = true

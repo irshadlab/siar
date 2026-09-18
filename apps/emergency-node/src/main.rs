@@ -2,125 +2,99 @@
 //! small Linux box, running BLE/Wi-Fi/Ethernet/Iroh with a large DTN
 //! store. Phase 7 of `next.md`'s roadmap.
 //!
-//! What this binary actually does right now: generates or loads a
-//! *persistent* identity (unlike `apps/cli`'s throwaway
-//! `DeviceIdentity::generate()` every run — a relay node needs the same
-//! identity across restarts so peers can keep trusting it, hence this
-//! phase's addition of `DeviceIdentity::save_to_file`/`load_from_file`
-//! to `siar-crypto`), binds a [`SiarEndpoint`] (reusing every transport
-//! already built — Iroh direct/relay, LAN mDNS from Phase 1), prints
-//! its connection ticket the same way `apps/cli`'s `listen` does, and
-//! constructs the DTN machinery Phases 4–5 built (`BundleStore`,
-//! `SeenBundles`, `PathTable`, `PriorityScheduler`), sized from CLI
-//! flags.
+//! What this binary does: generates or loads a *persistent* identity
+//! (unlike `apps/cli`'s throwaway `DeviceIdentity::generate()` every
+//! run — a relay node needs the same identity across restarts so peers
+//! can keep trusting it), binds a [`SiarEndpoint`] (reusing every
+//! transport already built — Iroh direct/relay, LAN mDNS from Phase 1),
+//! prints its connection ticket the same way `apps/cli`'s `listen`
+//! does, and constructs the DTN/routing machinery below.
 //!
-//! What it does now, this pass: real destination-aware forwarding,
-//! replacing the naive flood this file's own doc comment used to
-//! describe as the whole story, plus authenticating the mailbox
-//! check-ins that forwarding now partly depends on. Three real pieces
-//! closed these gaps:
+//! **Reconciliation note** (see `MIGRATION.md`'s device-certificate
+//! section): this file used to be built against `siar-routing`/
+//! `siar-dtn`, both since retired. Routing is now real
+//! `siar_connectivity::TransportManager` (backed by
+//! `siar_routing_policy`'s `link_health`/`relay_composition`/
+//! `congestion` — the three genuine gaps ported from `siar-routing`).
+//! DTN storage/dedup is now [`bundle_store`], a small module local to
+//! *this binary* rather than a port onto `siar-dtn-bundle`: that
+//! crate's `DtnBundle` addresses destinations with an opaque
+//! `RouteToken`, which is a real, deliberate privacy design this
+//! relay's actual wire format doesn't yet support — `MeshEnvelope`
+//! (this workspace's only real wire representation of mesh/DTN
+//! traffic) still carries a plain `DeviceId` destination (see that
+//! struct's own doc comment: an independent, already-flagged gap).
+//! [`bundle_store::StoredBundle`] mirrors `MeshEnvelope` directly
+//! instead of pretending an opacity the wire format doesn't provide.
 //!
-//! - **`siar_connectivity::TransportManager`** existed (built in an
-//!   earlier session closing `siar-routing`'s own flagged gap) but was
-//!   never actually constructed or used anywhere in this binary —
-//!   confirmed by grepping this file before this pass touched it: the
-//!   name only appeared in doc-comment prose, never in an `use` or a
-//!   `let`. Now it's wired: `sync_local_peers` runs on a timer,
-//!   keeping `PathTable` current with whichever peers Phase 1's mDNS
-//!   discovery can currently see on the LAN.
-//! - **`siar_routing::device_routes::DeviceRoutes`**, new this pass —
-//!   see that module's own doc comment for the full reasoning. In
-//!   short: `PathTable` is keyed on `EndpointId`, but a `MeshBundle`'s
-//!   `destination` is a `DeviceId`; nothing anywhere mapped one to the
-//!   other. `MailboxCheckIn`'s self-disclosure is the one real signal
-//!   this relay has for that mapping, so it's recorded here and used to
-//!   push a bundle proactively to its destination's last-known endpoint
-//!   the moment it arrives, instead of only reactively flooding it to
-//!   whoever happens to make contact next.
-//! - **`siar_protocol::mailbox::DeviceKeyDirectory`**, new this pass —
-//!   next.md §32's mailbox-authentication gap, which `mailbox.rs`'s own
-//!   doc comment used to flag outright ("this type's `device` field is
-//!   a bare, unauthenticated claim"). A `MailboxCheckIn` is now
-//!   verified (Ed25519 signature + freshness window) and its claimed
-//!   device's key trust-on-first-use pinned before this relay trusts it
-//!   for anything — including the `DeviceRoutes` recording above, which
-//!   would otherwise have been trusting the exact same unauthenticated
-//!   claim it was built to act on.
+//! - **Routing**: `TransportManager::sync_local_peers` runs on a timer,
+//!   keeping its `PathCandidate` table current with whichever peers
+//!   Phase 1's mDNS discovery can currently see on the LAN.
+//!   `TransportManager::device_for`/`record_device_endpoint` is the
+//!   `EndpointId <-> DeviceId` join a `MailboxCheckIn`'s self-
+//!   disclosure feeds — the one real signal this relay has for that
+//!   mapping — used to push a bundle proactively to its destination's
+//!   last-known endpoint the moment it arrives, instead of only
+//!   reactively flooding it to whoever happens to make contact next.
+//! - **Mailbox authentication**: `siar_protocol::mailbox::
+//!   DeviceKeyDirectory` verifies a `MailboxCheckIn`'s Ed25519
+//!   signature and freshness window, and pins its claimed device's key
+//!   trust-on-first-use, before this relay trusts it for anything —
+//!   including the `TransportManager::record_device_endpoint` call
+//!   above, which would otherwise be trusting the exact same
+//!   unauthenticated claim it acts on.
 //!
-//! The remaining naive-flood fallback (for a bundle whose destination
-//! has no known endpoint hint yet) now at least orders its candidates
-//! by `SchedulePriority` via `PriorityScheduler`, instead of whatever
-//! order `BundleStore::iter()` happened to yield.
+//! The naive-flood fallback (for a bundle whose destination has no
+//! known endpoint hint yet) orders its candidates by
+//! `TrafficPriority`, narrowed by `siar_routing_policy::congestion::
+//! CongestionTracker::congestion_ceiling` once genuinely backed up —
+//! `bundle_store` itself is the real backlog `CongestionTracker`
+//! reports on, not a second queue (see that type's own doc comment).
 //!
 //! What's still NOT real destination-aware routing, flagged rather than
-//! oversold: `DeviceRoutes` only ever learns a mapping from a device's
-//! own voluntary check-in — there's still no way to learn "device X is
+//! oversold: `TransportManager` only ever learns an `EndpointId <->
+//! DeviceId` mapping from a device's own voluntary check-in with *this*
+//! relay specifically — there's still no way to learn "device X is
 //! reachable via peer Y" from ordinary traffic, since `MeshEnvelope`
-//! deliberately carries no sender identity (next.md §73–74's mesh-
+//! deliberately carries no sender identity (next.md §73-74's mesh-
 //! privacy design). A destination that's never checked in with this
-//! relay is still only reachable via the naive flood. Multi-hop
-//! path computation, BLE→Wi-Fi upgrades, and gateway bridging remain
-//! exactly as unbuilt as `siar-routing`'s own crate doc comment already
-//! states. And mailbox authentication is still only half of next.md
-//! §32 — see `mailbox.rs`'s own doc comment for the unlinkability half
-//! that remains open on purpose.
+//! relay is still only reachable via the naive flood.
 //!
-//! Congestion detection (also flagged unbuilt in earlier passes) is now
-//! real for the queue-occupancy half: the candidate-forwarding loop
-//! below derives its `dequeue_next` ceiling from
-//! `PriorityScheduler::congestion_ceiling` instead of a hardcoded
-//! `None`. The RTT/reliability half (`siar_routing::link_health::
-//! LinkHealth`, wired into `siar_connectivity::TransportManager::
-//! record_send_outcome`) now has a real caller: every `endpoint.send`
-//! in this file goes through the new `send_and_record` helper, which
-//! times the attempt and folds the outcome back into `TransportManager`
-//! — see that function's own doc comment for the one honest
-//! approximation it makes (classifying every send as
-//! `TransportLink::InternetDirect` without actually checking whether
-//! iroh negotiated a direct connection or fell back to relay).
+//! Real, bounded 2-hop composition exists (`siar_routing_policy::
+//! relay_composition::compose_via_relay`, driven by real
+//! `WireMessage::RouteAdvertisement`s this relay both sends and
+//! receives — see `route_advertisement.rs`'s doc comment for the
+//! message shape and its deliberately unauthenticated trust model) but
+//! composing now needs *both* the advertiser and the claimed
+//! destination resolved to a `DeviceId` first, which this relay can
+//! only do for a device that has checked in with it directly — see the
+//! `WireMessage::RouteAdvertisement` receive arm below for the real,
+//! named narrowing that follows from `PathCandidate` being `DeviceId`-
+//! keyed rather than the retired `PathTable`'s `EndpointId` keying.
+//! Multi-hop beyond one relay, BLE<->Wi-Fi upgrades, and gateway
+//! bridging remain unbuilt. Mailbox authentication is still only half
+//! of next.md §32 — see `mailbox.rs`'s own doc comment for the
+//! unlinkability half that remains open on purpose.
 //!
-//! Multi-hop route computation also moved from "nothing" to "a real,
-//! bounded primitive with no real caller": `siar_routing::path::
-//! PathTable::compose_via_relay` can now derive a genuine 2-hop
-//! candidate route once given a `RelayAdvertisement`, but nothing in
-//! this binary (or anywhere in this workspace) produces one — this
-//! relay still has no routing-advertisement exchange, so `DeviceRoutes`
-//! remains this binary's only actual multi-hop-relevant signal, and
-//! only for the one-hop "device checked in with me directly" case. See
-//! `siar-routing`'s own crate doc comment for the full accounting.
+//! The RTT/reliability half of congestion detection
+//! (`siar_routing_policy::link_health::LinkHealth`, wired into
+//! `TransportManager::record_send_outcome`) has a real caller: every
+//! `endpoint.send` in this file goes through the `send_and_record`
+//! helper, which times the attempt and folds the outcome back into
+//! `TransportManager` — see that function's own doc comment for the
+//! one honest approximation it makes.
 //!
-//! This relay now also adopts `siar_protocol::mailbox::
-//! TokenMailboxStore` — the token-keyed counterpart to `bundle_store`
-//! below, filled by `WireMessage::TokenMailboxDeposit` and drained by
+//! This relay also runs `siar_protocol::mailbox::TokenMailboxStore` —
+//! the token-keyed counterpart to `bundle_store`, filled by
+//! `WireMessage::TokenMailboxDeposit` and drained by
 //! `WireMessage::AnonymousMailboxCheckIn`. Unlike the `MailboxCheckIn`
 //! arm, there's no signature check here — presenting a token *is* the
 //! authorization (see `siar_crypto::mailbox_token`'s own doc comment
-//! for that bearer-capability tradeoff). `apps/cli` now has a real
-//! sender/receiver for this path (`send-anon`/`check-mailbox-anon`,
-//! via `MessageService::send_text_anon`/`build_anonymous_check_in`/
-//! `decrypt_token_mailbox_envelope`) — `apps/desktop` still only
-//! builds/sends the `DeviceId`-addressed `MailboxCheckIn`; wiring the
-//! same choice into its UI is separate, real follow-up work.
+//! for that bearer-capability tradeoff). `apps/cli` has a real
+//! sender/receiver for this path (`send-anon`/`check-mailbox-anon`);
+//! `apps/desktop` still only builds/sends the `DeviceId`-addressed
+//! `MailboxCheckIn` — wiring the same choice into its UI is separate,
 //! real follow-up work.
-//!
-//! Finally, this relay now sends and receives real
-//! `WireMessage::RouteAdvertisement`s — `siar_routing::path::
-//! PathTable::compose_via_relay`'s own doc comment named this exchange
-//! as not existing anywhere in the workspace; it now does. See
-//! `route_advertisement.rs`'s doc comment for the message shape and,
-//! importantly, its deliberately unauthenticated trust model. The raw-
-//! bytes `EndpointId` round-trip below (`PublicKey::as_bytes`/
-//! `from_bytes`) was verified directly against iroh 1.0.3's real
-//! published docs this pass, not guessed — the one iroh API surface
-//! this pass could confirm without a compiler, since docs.rs is
-//! reachable even though building iroh itself still isn't (see this
-//! workspace's own memory of the edition2024 wall for why).
-//!
-//! `MeshBundle` (`siar-dtn::bundle`) gained `destination`/`payload_hash`
-//! fields alongside an earlier pass's forwarding logic — without them, a
-//! bundle converted from a received `MeshEnvelope` for storage had no
-//! way to be converted back into a valid one to forward. Every existing
-//! construction site was updated to match.
 //!
 //! `siar_messaging::MessageService::handle_incoming` requires a
 //! `&PeerTicket` — the sender's public keys, known *in advance* — to
@@ -137,40 +111,43 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use siar_connectivity::TransportManager;
 use siar_crypto::DeviceIdentity;
-use siar_domain::DeviceId;
-use siar_dtn::dedup::SeenBundles;
-use siar_dtn::store::BundleStore;
+use siar_domain::{DeviceId, MessagePriority};
 use siar_protocol::{
     DeviceKeyDirectory, RouteAdvertisement, TokenMailboxEnvelope, TokenMailboxStore, WireMessage,
 };
-use siar_routing::device_routes::DeviceRoutes;
-use siar_routing::path::RelayAdvertisement;
-use siar_routing::scheduler::{PriorityScheduler, SchedulePriority};
+use siar_protocol_ext::lifecycle::TrafficPriority;
+use siar_routing_policy::congestion::CongestionTracker;
+use siar_routing_policy::link_health::SendOutcome;
+use siar_routing_policy::relay_composition::{compose_via_relay, RelayAdvertisement};
+use siar_routing_policy::types::TransportKind;
 use siar_transport::{PeerTransport, SiarEndpoint};
 use tokio::sync::mpsc;
+
+mod bundle_store;
+use bundle_store::{BundleStore, SeenIds, StoredBundle};
 
 /// next.md §68: "Emergency: configurable 500 MB – several GB" — this
 /// binary's own default, not a hard limit; override with
 /// `--quota-bytes`.
 const DEFAULT_QUOTA_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
 const DEFAULT_SEEN_CAPACITY: usize = 100_000;
-const DEFAULT_SCHEDULER_CAPACITY_PER_QUEUE: usize = 1024;
+const DEFAULT_CONGESTION_CAPACITY_PER_TIER: usize = 1024;
 /// Fraction of a throttled tier's capacity that counts as "backed up"
-/// for `PriorityScheduler::congestion_ceiling` (see that method's doc
+/// for `CongestionTracker::congestion_ceiling` (see that method's doc
 /// comment). Chosen conservatively — react to backlog before a queue
 /// is anywhere near actually full and starting to reject new items —
 /// not tuned against real traffic, same status every other constant in
 /// this file carries.
 const CONGESTION_OCCUPANCY_THRESHOLD: f32 = 0.5;
-/// How long a `DeviceRoutes`/`PathTable` entry is trusted before
-/// `remove_stale` drops it — next.md §92's "mobile topology changes too
-/// quickly" reasoning, same one `PathTable::remove_stale`'s own doc
-/// comment already gives. Ten minutes, not a value next.md specifies
-/// anywhere: a relay node is meant to be relatively stationary
-/// (Raspberry Pi / small box, per this file's own top doc comment), so
-/// this favors "stale entries get cleaned up eventually" over guessing
-/// at a tighter mobile-handset-appropriate number this binary doesn't
-/// need.
+/// How long a `TransportManager` candidate or device-endpoint hint is
+/// trusted before `remove_stale` drops it — next.md §92's "mobile
+/// topology changes too quickly" reasoning, same one
+/// `TransportManager::remove_stale`'s own doc comment already gives.
+/// Ten minutes, not a value next.md specifies anywhere: a relay node
+/// is meant to be relatively stationary (Raspberry Pi / small box, per
+/// this file's own top doc comment), so this favors "stale entries get
+/// cleaned up eventually" over guessing at a tighter mobile-handset-
+/// appropriate number this binary doesn't need.
 const ROUTE_STALE_AFTER_MILLIS: u64 = 10 * 60 * 1000;
 /// How often the periodic sync/cleanup task runs.
 const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -181,6 +158,22 @@ const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 /// and this relay won't cause spurious rejections, tight enough that a
 /// captured check-in can't be replayed hours or days later.
 const MAILBOX_CHECKIN_MAX_AGE_MILLIS: u64 = 5 * 60 * 1000;
+
+/// This relay's own reasoned mapping onto `siar_protocol_ext`'s
+/// 6-tier `TrafficPriority` vocabulary — `siar_domain::MessagePriority`
+/// (5 tiers: Emergency/Critical/Interactive/Normal/Background) has no
+/// tier as narrow as `TrafficPriority::Control`, so `Emergency` maps
+/// onto `Critical` (the most urgent tier available) rather than
+/// `Control` (reserved, per that type's own doc comment, for protocol-
+/// level control traffic this relay doesn't originate any of).
+fn traffic_priority_for(priority: MessagePriority) -> TrafficPriority {
+    match priority {
+        MessagePriority::Emergency => TrafficPriority::Critical,
+        MessagePriority::Critical => TrafficPriority::Control,
+        MessagePriority::Interactive | MessagePriority::Normal => TrafficPriority::Normal,
+        MessagePriority::Background => TrafficPriority::Background,
+    }
+}
 
 struct Config {
     identity_path: PathBuf,
@@ -250,12 +243,11 @@ fn load_or_create_identity(path: &std::path::Path) -> Result<DeviceIdentity> {
 }
 
 /// A stored bundle carries everything a `MeshEnvelope` needs (see
-/// `siar-dtn::bundle::MeshBundle`'s own doc comment on why
-/// `destination`/`payload_hash` were added specifically so this
-/// round-trip is possible) — shared by both this file's forward-on-
-/// contact step and its mailbox check-in handler, which both need to
-/// turn a stored bundle back into wire bytes.
-fn bundle_to_envelope(bundle: siar_dtn::bundle::MeshBundle) -> siar_protocol::MeshEnvelope {
+/// `bundle_store::StoredBundle`'s own doc comment) — shared by both
+/// this file's forward-on-contact step and its mailbox check-in
+/// handler, which both need to turn a stored bundle back into wire
+/// bytes.
+fn bundle_to_envelope(bundle: StoredBundle) -> siar_protocol::MeshEnvelope {
     siar_protocol::MeshEnvelope {
         id: bundle.id,
         destination: bundle.destination,
@@ -269,22 +261,23 @@ fn bundle_to_envelope(bundle: siar_dtn::bundle::MeshBundle) -> siar_protocol::Me
 }
 
 /// Times a real `SiarEndpoint::send` attempt and folds the outcome into
-/// `siar_routing::link_health::LinkHealth::record_outcome`'s own doc
-/// comment named as missing from this workspace ever since it was
-/// built. Every real outbound send in this file now goes through this
-/// instead of calling `endpoint.send` directly, so `PathTable`'s
-/// `rtt_millis`/`reliability` fields stop being permanent `None`/`1.0`
-/// placeholders the moment this relay actually talks to anyone.
+/// `TransportManager::record_send_outcome`, which this workspace's
+/// `siar_routing_policy::link_health::LinkHealth` port closed as a
+/// real gap. Every real outbound send in this file now goes through
+/// this instead of calling `endpoint.send` directly, so a candidate's
+/// `rtt_millis`/`packet_loss` fields stop being permanent
+/// `None`/absent placeholders the moment this relay actually talks to
+/// anyone.
 ///
 /// `known_addr`, when the caller happens to already have the
 /// destination's full `iroh::EndpointAddr` in hand (not just its
-/// `EndpointId`), is classified via `siar_routing::path::
-/// classify_endpoint_addr` — real evidence-based `LocalLan`/
-/// `InternetDirect`/`InternetRelay` distinction instead of the
-/// blanket `InternetDirect` default this function used everywhere
-/// before. `None` (most call sites in this file only ever have a bare
+/// `EndpointId`), is classified via `siar_connectivity::
+/// candidate_source::classify_endpoint_addr` — real evidence-based
+/// `LocalLan`/`IrohDirect`/`IrohRelay` distinction instead of the
+/// blanket `IrohDirect` default this function used everywhere before.
+/// `None` (most call sites in this file only ever have a bare
 /// `EndpointId` from an incoming frame's sender, not its full
-/// addressing) falls back to that same `InternetDirect` default — see
+/// addressing) falls back to that same `IrohDirect` default — see
 /// `classify_endpoint_addr`'s own doc comment for exactly what the
 /// classification is and isn't (advertised reachability, not a
 /// measured path either way).
@@ -301,19 +294,13 @@ async fn send_and_record(
         .await;
     let elapsed_millis = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
     let outcome = match &result {
-        Ok(()) => siar_routing::link_health::SendOutcome::success(elapsed_millis),
-        Err(_) => siar_routing::link_health::SendOutcome::failure(),
+        Ok(()) => SendOutcome::success(elapsed_millis),
+        Err(_) => SendOutcome::failure(),
     };
-    let link = known_addr
-        .map(siar_routing::path::classify_endpoint_addr)
-        .unwrap_or(siar_domain::TransportLink::InternetDirect);
-    transport_manager.record_send_outcome(
-        destination,
-        link,
-        siar_routing::path::NextHop::Direct,
-        siar_domain::now_millis(),
-        outcome,
-    );
+    let kind = known_addr
+        .map(siar_connectivity::candidate_source::classify_endpoint_addr)
+        .unwrap_or(TransportKind::IrohDirect);
+    transport_manager.record_send_outcome(destination, kind, outcome);
     result
 }
 
@@ -365,18 +352,18 @@ async fn main() -> Result<()> {
         blobs,
     ));
 
-    // next.md §68's DTN storage, §31's dedup, §91's path table, §93's
-    // scheduler, plus this pass's `DeviceRoutes` — see this file's top
-    // doc comment for how they're actually wired together now.
-    // `Mutex`, not the async-aware channel types elsewhere in this
-    // workspace: everything below is short synchronous critical
-    // sections (lock, read/mutate, drop before any `.await` — see the
-    // receive loop's own comments on why that ordering matters), never
-    // held across a suspend point.
+    // next.md §68's DTN storage, §31's dedup, §91's path table (now
+    // `TransportManager`), §93's scheduler (now `CongestionTracker`) —
+    // see this file's top doc comment for how they're actually wired
+    // together now. `Mutex`, not the async-aware channel types
+    // elsewhere in this workspace: everything below is short
+    // synchronous critical sections (lock, read/mutate, drop before
+    // any `.await` — see the receive loop's own comments on why that
+    // ordering matters), never held across a suspend point.
     let bundle_store: Mutex<BundleStore> = Mutex::new(BundleStore::new(config.quota_bytes));
-    let seen: Mutex<SeenBundles> = Mutex::new(SeenBundles::new(config.seen_capacity));
+    let seen: Mutex<SeenIds<siar_domain::MessageId>> =
+        Mutex::new(SeenIds::new(config.seen_capacity));
     let transport_manager = Arc::new(TransportManager::new(endpoint.clone()));
-    let device_routes: Mutex<DeviceRoutes> = Mutex::new(DeviceRoutes::new());
     let device_keys: Mutex<DeviceKeyDirectory> = Mutex::new(DeviceKeyDirectory::new());
     // The unlinkable counterpart to `bundle_store` — see
     // `siar_protocol::mailbox::TokenMailboxStore`'s own doc comment for
@@ -387,26 +374,28 @@ async fn main() -> Result<()> {
     // message used, so one dedup set correctly covers both).
     let token_mailbox: Mutex<TokenMailboxStore<TokenMailboxEnvelope>> =
         Mutex::new(TokenMailboxStore::new());
-    let scheduler: Mutex<PriorityScheduler<siar_domain::MessageId>> =
-        Mutex::new(PriorityScheduler::new(DEFAULT_SCHEDULER_CAPACITY_PER_QUEUE));
 
-    // Keeps `PathTable` (via `TransportManager`) and `DeviceRoutes` both
-    // current on a timer — next.md §92's "mobile topology changes too
-    // quickly" applies to both: a LAN peer that's walked out of mDNS
-    // range, or a device whose `MailboxCheckIn` endpoint hint is stale,
-    // should both stop being trusted eventually rather than lingering
-    // forever.
+    // Keeps `TransportManager`'s candidates (and the `DeviceRoutes`
+    // hints backing them) current on a timer — next.md §92's "mobile
+    // topology changes too quickly" applies to both: a LAN peer that's
+    // walked out of mDNS range, or a device whose `MailboxCheckIn`
+    // endpoint hint is stale, should both stop being trusted eventually
+    // rather than lingering forever.
     //
     // The same tick also *sends* `RouteAdvertisement`s — the other half
     // of the exchange `WireMessage::RouteAdvertisement`'s receive-side
-    // arm above consumes. Deliberately narrow, matching
+    // arm below consumes. Deliberately narrow, matching
     // `route_advertisement.rs`'s own "no propagation policy beyond
     // this" doc comment: advertises only this relay's own *direct*
-    // routes (`NextHop::Direct` — never re-advertising something heard
-    // from someone else's advertisement, which is exactly the
-    // unbounded-flooding case that doc comment flags as unhandled), to
-    // every currently-known local peer, once per tick — no fan-out
-    // beyond that.
+    // routes, to every currently-known local peer, once per tick — no
+    // fan-out beyond that. Every candidate `TransportManager` currently
+    // holds genuinely is direct — nothing in this workspace populates
+    // it via `relay_composition::compose_via_relay` yet (see this
+    // file's own `WireMessage::RouteAdvertisement` handling below,
+    // which only *consumes* that composition, not produces it) — so
+    // there's no `NextHop`-style filter to apply here the way the
+    // retired `PathTable` needed one; that distinction would only
+    // start mattering once something starts composing.
     {
         let transport_manager = transport_manager.clone();
         let endpoint = endpoint.clone();
@@ -416,28 +405,28 @@ async fn main() -> Result<()> {
                 interval.tick().await;
                 let now = siar_domain::now_millis();
                 transport_manager.sync_local_peers(now);
-                transport_manager
-                    .path_table()
-                    .remove_stale(now, ROUTE_STALE_AFTER_MILLIS);
+                transport_manager.remove_stale(now, ROUTE_STALE_AFTER_MILLIS);
 
-                // Snapshot of (destination, best direct entry) pairs,
-                // resolved and the lock dropped before any `.await`
-                // below — same "resolve then act" split this file's
-                // other `Mutex`-guarded sections already use for the
-                // same reason (holding a `MutexGuard` across
+                // Snapshot of (destination endpoint bytes, candidate)
+                // pairs, resolved and the lock dropped before any
+                // `.await` below — same "resolve then act" split this
+                // file's other `Mutex`-guarded sections already use for
+                // the same reason (holding a `MutexGuard` across
                 // `endpoint.send(...).await` would block every other
                 // task waiting on this same lock for the duration of a
-                // network send).
-                let direct_routes: Vec<(iroh::EndpointId, siar_routing::path::PathEntry)> = {
-                    let table = transport_manager.path_table();
-                    table
-                        .destinations()
-                        .filter_map(|destination| {
-                            table
-                                .routes_for(destination)
-                                .iter()
-                                .find(|entry| entry.next_hop == siar_routing::path::NextHop::Direct)
-                                .map(|entry| (destination, *entry))
+                // network send). `candidate.endpoint.0` is literally
+                // the destination's own `EndpointId` bytes for every
+                // candidate `sync_local_peers` constructs (see that
+                // method's own body) — no separate lookup needed to
+                // recover it.
+                let direct_routes: Vec<([u8; 32], siar_routing_policy::candidate::PathCandidate)> = {
+                    transport_manager
+                        .candidates()
+                        .values()
+                        .filter_map(|candidate| {
+                            let bytes: [u8; 32] =
+                                candidate.endpoint.0.as_slice().try_into().ok()?;
+                            Some((bytes, candidate.clone()))
                         })
                         .collect()
                 };
@@ -447,20 +436,24 @@ async fn main() -> Result<()> {
 
                 let peers = endpoint.local_peers();
                 for peer in &peers {
-                    for (destination, entry) in &direct_routes {
+                    for (destination_endpoint, candidate) in &direct_routes {
                         // Advertising a peer's own route back to itself
-                        // is a pure no-op for the receiver (`compose_via_relay`
-                        // would need a route *to* the peer, not *from*
-                        // it) and would be the simplest possible loop —
-                        // skipped, not relied on `compose_via_relay`'s
-                        // own no-chaining-through-`Via` guard to catch.
-                        if *destination == peer.id {
+                        // is a pure no-op for the receiver
+                        // (`compose_via_relay` would need a route *to*
+                        // the peer, not *from* it) and would be the
+                        // simplest possible loop.
+                        if *destination_endpoint == *peer.id.as_bytes() {
                             continue;
                         }
+                        let reliability = candidate
+                            .metrics
+                            .packet_loss
+                            .map(|loss| (1.0 - loss.get()) as f32)
+                            .unwrap_or(1.0);
                         let advertisement = WireMessage::RouteAdvertisement(RouteAdvertisement {
-                            destination_endpoint: *destination.as_bytes(),
-                            rtt_millis: entry.rtt_millis,
-                            reliability: entry.reliability,
+                            destination_endpoint: *destination_endpoint,
+                            rtt_millis: candidate.metrics.rtt_millis,
+                            reliability,
                             advertised_at: now,
                         });
                         if let Err(e) = send_and_record(
@@ -483,7 +476,7 @@ async fn main() -> Result<()> {
     tracing::info!(
         quota_bytes = config.quota_bytes,
         seen_capacity = config.seen_capacity,
-        "DTN store/dedup ready — destination-aware push via DeviceRoutes for devices that have checked in, priority-ordered flood fallback otherwise"
+        "DTN store/dedup ready — destination-aware push via TransportManager for devices that have checked in, priority-ordered flood fallback otherwise"
     );
 
     while let Some(frame) = rx.recv().await {
@@ -545,20 +538,21 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                // The self-disclosure moment `DeviceRoutes` exists for
-                // (see that module's own doc comment) — recorded before
-                // answering, so a bundle for this exact device that
-                // arrives later in this same process's lifetime can be
-                // pushed to it directly instead of waiting for another
-                // check-in. Only reached once `verify_and_pin` above has
-                // actually confirmed this device controls the key it
-                // claims — `DeviceRoutes` no longer trusts a bare,
-                // unauthenticated assertion the way it would have before
-                // this pass.
-                device_routes
-                    .lock()
-                    .expect("DeviceRoutes lock poisoned")
-                    .record(check_in.device, frame.from, siar_domain::now_millis());
+                // The self-disclosure moment `TransportManager`'s
+                // `DeviceRoutes` join exists for (see that module's own
+                // doc comment) — recorded before answering, so a
+                // bundle for this exact device that arrives later in
+                // this same process's lifetime can be pushed to it
+                // directly instead of waiting for another check-in.
+                // Only reached once `verify_and_pin` above has actually
+                // confirmed this device controls the key it claims —
+                // this no longer trusts a bare, unauthenticated
+                // assertion the way it would have before that pass.
+                transport_manager.record_device_endpoint(
+                    check_in.device,
+                    frame.from,
+                    siar_domain::now_millis(),
+                );
 
                 // next.md §76–77's mailbox check-in — see
                 // `siar-protocol::mailbox`'s doc comment for what this
@@ -694,41 +688,62 @@ async fn main() -> Result<()> {
                 // verify (no signature; trusting a direct transport
                 // peer the same amount the existing naive-flood forward
                 // already does, not a new or stronger trust boundary).
-                let Ok(destination) =
+                //
+                // Real, named narrowing versus the retired
+                // `EndpointId`-native `PathTable`: composing now needs
+                // *both* the advertiser and the claimed destination
+                // resolved to a `DeviceId` first (`PathCandidate` is
+                // `DeviceId`-keyed by design — see `siar_connectivity::
+                // TransportManager`'s own doc comment), and this relay
+                // can only do that resolution for a device that has
+                // itself checked in with *this* relay directly. An
+                // advertisement about a destination that has only ever
+                // checked in with the advertiser, never with us, can't
+                // be composed — dropped below, not guessed at.
+                let Some(via_device) = transport_manager.device_for(frame.from) else {
+                    tracing::debug!(from = ?frame.from, "no known device for the advertiser itself yet, dropping advertisement");
+                    continue;
+                };
+                let Ok(destination_endpoint) =
                     iroh::EndpointId::from_bytes(&advertisement.destination_endpoint)
                 else {
                     tracing::debug!(from = ?frame.from, "route advertisement had a malformed destination endpoint, dropping");
                     continue;
                 };
-                let relay_advertisement = RelayAdvertisement {
-                    via: frame.from,
-                    destination,
-                    rtt_millis: advertisement.rtt_millis,
-                    reliability: advertisement.reliability,
-                    last_seen: advertisement.advertised_at,
+                let Some(destination_device) = transport_manager.device_for(destination_endpoint)
+                else {
+                    tracing::debug!(from = ?frame.from, "no known device for the advertised destination yet, dropping advertisement");
+                    continue;
                 };
-                // One lock, both calls: `compose_via_relay` takes `&self`
-                // and `upsert_route` takes `&mut self`, but nothing here
-                // suspends between them (no `.await`), so there's no
-                // reason to drop and re-acquire — same "hold across a
-                // synchronous critical section, never across an await"
-                // rule this file's own top block comment already states
-                // for every other `Mutex` here.
-                let mut table = transport_manager.path_table();
-                match table.compose_via_relay(&relay_advertisement) {
-                    Some(entry) => {
-                        table.upsert_route(destination, entry);
-                        tracing::debug!(from = ?frame.from, destination = ?destination, "composed and stored a 2-hop route from an advertisement");
+                let relay_advertisement = RelayAdvertisement {
+                    via: via_device,
+                    destination: destination_device,
+                    relay_endpoint: siar_routing_policy::candidate::TransportEndpoint(
+                        advertisement.destination_endpoint.to_vec(),
+                    ),
+                    rtt_millis: advertisement.rtt_millis,
+                    reliability: siar_routing_policy::metrics::Ratio::new(
+                        advertisement.reliability as f64,
+                    ),
+                    last_seen_millis: advertisement.advertised_at,
+                };
+                let direct_candidates = transport_manager.candidates_for(via_device);
+                match compose_via_relay(&direct_candidates, &relay_advertisement) {
+                    Some(composed) => {
+                        transport_manager
+                            .candidates()
+                            .insert((composed.peer, composed.transport), composed);
+                        tracing::debug!(from = ?frame.from, destination = ?destination_device, "composed and stored a 2-hop route from an advertisement");
                     }
                     None => {
-                        // We have no *direct* route to `frame.from`
+                        // We have no *direct* candidate to `via_device`
                         // ourselves (the precondition `compose_via_relay`
                         // requires) — nothing to compose yet. Not an
                         // error: `TransportManager::sync_local_peers`'s
                         // own periodic tick will supply that direct
-                        // route once/if it exists, and a later
+                        // candidate once/if it exists, and a later
                         // advertisement will compose successfully then.
-                        tracing::debug!(from = ?frame.from, destination = ?destination, "no direct route to the advertiser yet, dropping advertisement");
+                        tracing::debug!(from = ?frame.from, destination = ?destination_device, "no direct candidate to the advertiser yet, dropping advertisement");
                     }
                 }
             }
@@ -738,11 +753,10 @@ async fn main() -> Result<()> {
                 // next.md §31 dedup: a bundle that's already been seen
                 // (forwarded here before, or looped back around) is
                 // dropped without touching the store — `check_and_record`
-                // both checks and marks in one call, same pattern
-                // `siar-dtn`'s own tests exercise.
+                // both checks and marks in one call.
                 let already_seen = seen
                     .lock()
-                    .expect("SeenBundles lock poisoned")
+                    .expect("SeenIds lock poisoned")
                     .check_and_record(mesh_envelope.id);
                 if already_seen {
                     tracing::debug!(id = ?mesh_envelope.id, from = ?frame.from, "duplicate MeshEnvelope, dropping");
@@ -762,7 +776,7 @@ async fn main() -> Result<()> {
                 // default_replication_budget` is exactly that policy,
                 // already built in `siar-domain` for this.
                 let destination = mesh_envelope.destination;
-                let bundle = siar_dtn::bundle::MeshBundle {
+                let bundle = StoredBundle {
                     id: mesh_envelope.id,
                     destination,
                     payload_hash: mesh_envelope.payload_hash,
@@ -778,7 +792,7 @@ async fn main() -> Result<()> {
                 let evicted = bundle_store
                     .lock()
                     .expect("BundleStore lock poisoned")
-                    .insert(bundle, now);
+                    .insert(bundle);
                 if evicted.is_empty() {
                     tracing::info!(id = ?mesh_envelope.id, from = ?frame.from, destination = ?destination, "stored MeshEnvelope for later carriage");
                 } else {
@@ -797,10 +811,7 @@ async fn main() -> Result<()> {
                 // bundle to it right now rather than waiting for it to
                 // either check in again or happen to be the next peer
                 // this relay hears from.
-                let known_endpoint = device_routes
-                    .lock()
-                    .expect("DeviceRoutes lock poisoned")
-                    .get(destination);
+                let known_endpoint = transport_manager.known_endpoint_for(destination);
                 if let Some(target_endpoint) = known_endpoint {
                     if target_endpoint != frame.from {
                         // Resolved to a plain owned `Option<MeshBundle>`
@@ -862,53 +873,63 @@ async fn main() -> Result<()> {
         // means that peer is reachable right now, so it's offered every
         // currently-forwardable stored bundle that wasn't already
         // handled above. This is still a flood for any bundle whose
-        // destination `DeviceRoutes` doesn't know yet (next.md §39's
-        // full route-scoring needs a live multi-hop path view this
-        // binary doesn't have — see this file's top doc comment) — but
-        // it's no longer an *unordered* one: candidates are queued
-        // through `PriorityScheduler` so Emergency-tier bundles are
-        // offered before Background-tier ones whenever both are
-        // waiting.
-        let candidates: Vec<(siar_domain::MessageId, SchedulePriority)> = bundle_store
+        // destination `TransportManager` doesn't know an endpoint for
+        // yet (next.md §39's full route-scoring needs a live multi-hop
+        // path view this binary doesn't have — see this file's top doc
+        // comment) — but it's no longer an *unordered* one: candidates
+        // are ordered by `TrafficPriority` and, once actually backed
+        // up, narrowed by `CongestionTracker::congestion_ceiling` so
+        // Emergency-tier bundles are offered before Background-tier
+        // ones whenever both are waiting.
+        //
+        // `bundle_store` itself — not a separate persisted queue — is
+        // this loop's real backlog: it's rebuilt fresh from that
+        // ground truth every iteration, so a freshly-constructed
+        // `CongestionTracker` reporting each current bundle's tier is
+        // enough; there's no separate running counter to keep in sync
+        // across iterations (see `CongestionTracker`'s own doc comment
+        // on why it's occupancy-only, not a second queue — this loop's
+        // `bundle_store` is exactly the real storage that doc comment
+        // says belongs elsewhere).
+        let now = siar_domain::now_millis();
+        let candidates: Vec<StoredBundle> = bundle_store
             .lock()
             .expect("BundleStore lock poisoned")
             .iter()
-            .filter(|bundle| Some(bundle.id) != just_received && Some(bundle.id) != already_pushed)
-            .map(|bundle| {
-                (
-                    bundle.id,
-                    SchedulePriority::from_message_priority(bundle.priority),
-                )
+            .filter(|bundle| {
+                Some(bundle.id) != just_received
+                    && Some(bundle.id) != already_pushed
+                    && !bundle.is_expired(now)
             })
+            .cloned()
             .collect();
 
-        // Dequeued into a plain `Vec` first, with the `PriorityScheduler`
-        // lock released before any `.await` — same "resolve under the
-        // lock, then act without it" split used above for `DeviceRoutes`/
-        // `BundleStore`; holding a `std::sync::MutexGuard` across
-        // `endpoint.send(...).await` would be a real bug, not just a
-        // style nit.
-        let ordered_ids: Vec<siar_domain::MessageId> = {
-            let mut scheduler = scheduler.lock().expect("PriorityScheduler lock poisoned");
-            for (id, priority) in candidates {
-                // A full queue at this priority just means this
-                // iteration offers fewer candidates to this peer than
-                // it otherwise would — not a reason to fail the whole
-                // receive loop over a bounded-capacity admission
-                // policy doing exactly what next.md §94 asks of it.
-                let _ = scheduler.enqueue(priority, id);
-            }
-            // Was `dequeue_next(None)` — always uncongested — until
-            // this pass. Now derives the ceiling from this same
-            // scheduler's own queue occupancy (next.md §93's own
-            // congestion behavior, self-produced from data this loop
-            // already has, no external RTT/loss measurement needed —
-            // see `PriorityScheduler::congestion_ceiling`'s doc comment
-            // for why that's a real, separate half of the same gap this
-            // relay isn't closing here).
-            let ceiling = scheduler.congestion_ceiling(CONGESTION_OCCUPANCY_THRESHOLD);
-            std::iter::from_fn(|| scheduler.dequeue_next(ceiling)).collect()
-        };
+        let mut tracker = CongestionTracker::new(DEFAULT_CONGESTION_CAPACITY_PER_TIER);
+        for bundle in &candidates {
+            tracker.record_enqueued(traffic_priority_for(bundle.priority));
+        }
+        // A full tier at this capacity just means this iteration's
+        // occupancy report saturates rather than over-counts — not a
+        // reason to fail the whole receive loop over a bounded-report
+        // ceiling doing exactly what next.md §94 asks of it.
+        let ceiling = tracker.congestion_ceiling(CONGESTION_OCCUPANCY_THRESHOLD);
+
+        let mut ordered_bundles: Vec<StoredBundle> = candidates
+            .into_iter()
+            .filter(|bundle| {
+                ceiling
+                    .map(|c| traffic_priority_for(bundle.priority) <= c)
+                    .unwrap_or(true)
+            })
+            .collect();
+        // `TrafficPriority`'s derived `Ord` follows its own declared
+        // tier order (`Critical` first, `Background` last) — an
+        // ascending sort is exactly "most urgent offered first."
+        ordered_bundles.sort_by_key(|bundle| traffic_priority_for(bundle.priority));
+        let ordered_ids: Vec<siar_domain::MessageId> = ordered_bundles
+            .into_iter()
+            .map(|bundle| bundle.id)
+            .collect();
 
         for id in ordered_ids {
             let Some(bundle) = bundle_store

@@ -3,10 +3,12 @@
 //! snapshot derived from events" — the alternative to a full signed
 //! event log this crate takes, since a snapshot's rollback rule (§56)
 //! is simpler to state and enforce correctly than event-log conflict
-//! resolution, and §52 explicitly allows it). This workspace already
-//! has an event-sourced alternative for a *different* device-trust
-//! model — `siar_domain::device::{DeviceEvent, DeviceRegistry}` — see
-//! `certificate.rs`'s own doc comment for how the two relate.
+//! resolution, and §52 explicitly allows it). This workspace used to
+//! also have an event-sourced alternative for a *different*,
+//! now-retired device-trust model — `siar_domain::device::{DeviceEvent,
+//! DeviceRegistry}` — see `MIGRATION.md`'s device-certificate
+//! reconciliation section; this directory is now the sole local
+//! device-registry model in this workspace.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,20 +1,20 @@
 //! §8 "Device Certificate", §9 "Device Certificate Semantics", §30
 //! "Device Expiry".
 //!
-//! This is a *different* certificate model from the one already in
-//! this workspace, `siar_crypto::device_cert::DeviceCertificate` —
-//! that one is device-vouches-for-device (an already-trusted device
-//! signs a new device's keys directly, no account root key involved;
-//! see that module's own doc comment, built against a different,
-//! older doc — "plan.md §42"). This one is root-key-signed, per §6
-//! "Root Key Strategy": the account's root identity key signs every
-//! device certificate, and is used for little else. Both types are
-//! real and neither is deleted or silently replaced here — reconciling
-//! them (migrating `siar_domain::device`/`siar-messaging`'s existing
-//! device-linking call sites onto this root-key model, or deciding not
-//! to) is a deliberate product/architecture decision this crate
-//! doesn't make unilaterally. See this crate's own top-level doc
-//! comment for the full picture.
+//! **Resolved reconciliation** (see `MIGRATION.md`'s device-certificate
+//! section): this workspace used to also have a *different* certificate
+//! model, `siar_crypto::device_cert::DeviceCertificate` — device-
+//! vouches-for-device, no account root key involved, built against an
+//! older doc ("plan.md §42"). That model has been retired in favor of
+//! this one (root-key-signed, per §6 "Root Key Strategy": the
+//! account's root identity key signs every device certificate, and is
+//! used for little else) — this is now the sole device-certificate
+//! model in this workspace. The one real capability the old model had
+//! that this one's literal §8 struct doesn't — binding a device's
+//! transport key alongside its signing key in one certificate — is
+//! closed separately by [`crate::transport_key_binding::
+//! TransportKeyBinding`], not by extending this struct; see that
+//! module's own doc comment for why.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,9 +38,9 @@ pub struct DeviceCertificate {
     /// 64 raw signature bytes as `Vec<u8>`, not `[u8; 64]` — serde's
     /// derive doesn't implement `Serialize`/`Deserialize` for arrays
     /// past 32 elements without an extra crate (confirmed by a real
-    /// compile error against this exact field, not a guess — matching
-    /// `siar_crypto::device_cert::DeviceCertificate::signature`'s own
-    /// documented reason for the same choice). `verify_signature`
+    /// compile error against this exact field, not a guess).
+    /// [`crate::transport_key_binding::TransportKeyBinding::signature`]
+    /// follows the same convention. `verify_signature`
     /// enforces it's actually 64 bytes.
     pub signature: Vec<u8>,
 }

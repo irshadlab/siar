@@ -6,8 +6,8 @@ number order. Update this file every time a spec's coverage changes.
 
 Spec source: `sys-arch/` (33 numbered core-architecture docs +
 27 `ui-ux-NN` docs, uploaded once, Wiki-style). Workspace source:
-33-crate Rust workspace (`siar-source`) + `apps/{cli,desktop,android,
-emergency-node}` + `platform/android`.
+31 domain crates (`crates/*`) + `apps/{cli,desktop,emergency-node,
+android/rust-jni-glue,android/messaging-jni}` + `platform/android`.
 
 Legend: ✅ Done/substantial · 🟡 Partial · ⚪ Not started · 🔒 Blocked on
 a prerequisite · 📋 Reconciled (already covered elsewhere, no new code
@@ -961,12 +961,10 @@ interface name).
 | 08 | siar-resource-limits | ✅ ~56/193 |
 | 09 | siar-crash-recovery | 🟡 ~15/186 (real total corrected this session — earliest-stage of the nine) |
 
-**Three real, unresolved reconciliation questions**, deliberately not
-silently resolved — documented in the newer crate's own `lib.rs`:
-- two device-cert models (`siar_crypto::device_cert` vs
-  `siar-identity-multidevice`)
-- two routing/scoring systems (`siar-routing` vs `siar-routing-policy`)
-- two DTN bundle models (`siar-dtn` vs `siar-dtn-bundle`)
+**All three reconciliation questions are now resolved** (see [`MIGRATION.md`](MIGRATION.md) for full details):
+- **Device certificate reconciliation**: Retired `siar_crypto::device_cert` and plan-era `siar_domain::device::{DeviceRegistry, DeviceEvent}` in favor of root-key-signed `siar-identity-multidevice` with additive `TransportKeyBinding`.
+- **Routing reconciliation**: Retired `siar-routing` into `siar-routing-policy` (link health, relay composition, congestion tracker) and `siar-connectivity` (`CandidateTable`, `DeviceRoutes`).
+- **DTN reconciliation**: Retired `siar-dtn` into `siar-dtn-bundle` (seen-bundle dedup, async `BundleStore`, opaque `RouteToken`) and local quota-bounded storage in `apps/emergency-node`.
 
 ---
 
@@ -1061,8 +1059,8 @@ land at `/usr/lib/rust-1.91/bin`. Combined with the right system libs
 libwebkit2gtk-4.1-dev libasound2-dev cmake libopus-dev libdav1d-dev`),
 `cargo check --workspace --all-targets` against the ORIGINAL
 repo-root `Cargo.lock` (v4 format — parses fine under cargo 1.91;
-don't delete/regenerate it) passes clean across all 33 crates,
-including `apps/desktop` (webview/GTK/audio/AV1). So: `apps/desktop`
+don't delete/regenerate it) passes clean across all 31 domain crates
+and workspace apps, including `apps/desktop` (webview/GTK/audio/AV1). So: `apps/desktop`
 and `apps/android`'s Rust glue ARE now compile-verifiable here — only
 real device/emulator testing (actual Kotlin/JNI runtime behavior,
 hardware codecs) remains genuinely out of reach. Disk space is tight
@@ -1087,13 +1085,9 @@ only genuine device/emulator/hardware-codec behavior does.
 Spec 01 (`siar-protocol-ext`) is complete (108/108). Spec 02
 (`siar-identity-multidevice`) is now ALSO complete (204/204) as of
 2026-09-05. Spec 03 (`siar-routing-policy`) is in progress, ~80/200 as
-of 2026-09-10 (round 9, §97-104) — the next crate in this project's
-explicit priority order ("work through the 9 Tier 0 core specs first,
-one by one"), continuing with §105 onward. Note there is a real, documented unresolved
-reconciliation question between `siar-routing` (pre-existing,
-next.md-era) and `siar-routing-policy` (this spec's own crate) — see
-that crate's own `lib.rs` for the current state of that question
-before starting new work there.
+of 2026-09-10 (round 9, §97-104) — completed 200/200 on 2026-09-15.
+The pre-existing `siar-routing` crate has been fully retired and reconciled
+into `siar-routing-policy` and `siar-connectivity` (see `MIGRATION.md`).
 
 Original list, resumes once Tier 0 is done:
 

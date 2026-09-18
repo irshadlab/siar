@@ -2,14 +2,13 @@
 
 //! siar-dtn-bundle: a first slice of "Part 06 — DTN Store-Carry-Forward
 //! Architecture" (the sixth of the architecture documents supplied so
-//! far). This workspace already has a working, differently-modeled DTN
-//! crate, `siar-dtn` (`MeshBundle`, `BundleStore` — sync, not async,
-//! built against "next.md" §29-39/§68-69), the same relationship every
-//! other new crate from this document series has had to an existing
-//! next.md-era sibling (`siar-routing`/`siar-routing-policy`,
-//! `siar_crypto::device_cert`/`siar-identity-multidevice`). Neither
-//! crate depends on or replaces the other — reconciling them is a real
-//! product decision, not made here.
+//! far). This workspace used to also have a differently-modeled,
+//! "next.md"-era DTN crate, `siar-dtn` (`MeshBundle`, sync
+//! `BundleStore`) — retired into this crate; see `MIGRATION.md`'s
+//! routing/DTN reconciliation section for the disposition (this
+//! crate's own [`dedup`] module is the one real gap that was ported
+//! over; everything else was superseded by this crate's richer,
+//! async, privacy-improved model).
 //!
 //! ## Scope: §189 "Implementation Phases" 1, plus real slices of 2-4
 //!

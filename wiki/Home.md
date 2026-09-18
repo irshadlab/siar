@@ -47,7 +47,7 @@ mindmap
 ## 📚 Table of Contents by Domain
 
 ### 🏛️ Part I: Core Architecture, Identity & Cryptography
-* **[[01-System-Overview-and-Architecture]]**: High-level design, survivability invariants, workspace topology (33 Rust crates, 4 apps).
+* **[[01-System-Overview-and-Architecture]]**: High-level design, survivability invariants, workspace topology (31 Rust domain crates, 3 apps, 2 Android JNI bridges).
 * **[[02-Multi-Device-Identity-and-Trust]]**: Ed25519 root authority, monotonic certificates, device tree revocation, SAS out-of-band verification.
 * **[[03-Cryptographic-Engine-and-Key-Management]]**: IETF MLS (RFC 9420) tree ratchets, pairwise Double Ratchet, BLAKE3 convergent chunk encryption, post-quantum hybrid KEM roadmap.
 
@@ -88,7 +88,7 @@ mindmap
 
 | Pillar | Architectural Principle | Implementation in SIAR |
 | :--- | :--- | :--- |
-| **1. Autonomous Survivability** | Zero dependency on centralized servers, DNS, certificates authorities, or cellular backhauls. | `siar-routing`, `siar-dtn`, `siar-transport-*` |
+| **1. Autonomous Survivability** | Zero dependency on centralized servers, DNS, certificates authorities, or cellular backhauls. | `siar-routing-policy`, `siar-connectivity`, `siar-dtn-bundle`, `siar-transport-*` |
 | **2. Multi-Transport Agility** | Seamlessly hop between Internet, LAN, Wi-Fi Direct, Wi-Fi Aware, Bluetooth Classic, and BLE. | `siar-connectivity`, `siar-routing-policy` |
 | **3. Cryptographic Sovereignty** | Ed25519 master root keys with multi-device certificate trees and MLS group encryption. | `siar-crypto`, `siar-identity-multidevice`, `siar-crypto-mls` |
 | **4. Delay-Tolerant Dissemination** | Messages survive complete network partitions via physical mule carry and hop-by-hop spray forwarding. | `siar-dtn-bundle`, `siar-blob-manifest` |

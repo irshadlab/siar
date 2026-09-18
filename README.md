@@ -104,7 +104,6 @@ SIAR is structured into five distinct, decoupled architectural layers:
 |                            3. Routing, Policy & DTN Engine                            |
 |  - siar-routing-policy (Multi-Metric)     - siar-dtn-bundle (Spray-and-Wait Forward)  |
 |  - siar-connectivity (Link State Probes)  - siar-emergency (Priority Classes P0–P3)   |
-|  - siar-routing (PathTable & Latency)     - siar-dtn (Store-Carry-Forward Buffer)     |
 +---------------------------------------------------------------------------------------+
 |                             2. Storage, Crypto & Reliability                          |
 |  - siar-crypto (Ed25519/X25519 AEAD)      - siar-crypto-mls (RFC 9420 MLS E2EE)       |
@@ -209,7 +208,7 @@ Required security properties:
 
 ## DTN: Store-Carry-Forward
 
-*Specification: [`sys-arch/06`](sys-arch/06-dtn-store-carry-forward-architecture.md) · Crates: [`siar-dtn`](crates/siar-dtn), [`siar-dtn-bundle`](crates/siar-dtn-bundle)*
+*Specification: [`sys-arch/06`](sys-arch/06-dtn-store-carry-forward-architecture.md) · Crate: [`siar-dtn-bundle`](crates/siar-dtn-bundle)*
 
 DTN (Delay-Tolerant Networking) enables communication without a continuous end-to-end path:
 
@@ -332,9 +331,9 @@ The anonymity plane is an additive routing class integrated with SIAR's existing
 
 ---
 
-## Workspace Crate Map (33 Crates)
+## Workspace Crate Map (31 Domain Crates)
 
-SIAR is a modular Rust cargo workspace comprising **33 domain crates**, **4 application binaries**, Android JNI runtime bridges, and fuzz testing targets:
+SIAR is a modular Rust cargo workspace comprising **31 domain crates**, **3 application binaries**, 2 Android JNI runtime bridges, and fuzz testing targets:
 
 ```text
 siar/
@@ -358,11 +357,9 @@ siar/
 │   │   ├── siar-protocol-ext/            # Extensible protocol engine: FairScheduler, BoundedQueue, health
 │   │   └── siar-capability/              # Two-phase capability negotiation & codec matrices
 │   ├── [Mesh Routing, Policy & Connectivity]
-│   │   ├── siar-routing/                 # PathTable, link health scoring, latency metrics, classification
 │   │   ├── siar-routing-policy/          # Multi-metric candidate scoring, hysteresis, decide_route
 │   │   └── siar-connectivity/            # Cross-transport state engine & dynamic link probes
 │   ├── [DTN, Emergency Priority & Scheduling]
-│   │   ├── siar-dtn/                     # Opportunistic DTN store-carry-forward buffer & anti-entropy
 │   │   ├── siar-dtn-bundle/              # Bundle framing & Spray-and-Wait forwarding strategies
 │   │   └── siar-emergency/               # Priority class queuing (P0–P3) & battery override
 │   ├── [Storage, Blobs & Reliability]
@@ -494,10 +491,10 @@ All coverage figures are from the `sys-arch/` specification corpus (33 numbered 
 - Zero regressions in any dependent crate at any point across all 19 rounds of spec work
 - Real bugs caught by tests (not review): pooled-connection reuse silently dropping messages after the first; expired operation never enforced at routing-decision level; DTN `file_chunk()` constructor contradicting its own spec example; stickiness test using a stale pre-mutation health snapshot
 
-**Three open reconciliation questions** (documented in the relevant crates' own `lib.rs`):
-- Two device-cert models (`siar_crypto::device_cert` vs `siar-identity-multidevice`)
-- Two routing/scoring systems (`siar-routing` vs `siar-routing-policy`)
-- Two DTN bundle models (`siar-dtn` vs `siar-dtn-bundle`)
+**Resolved reconciliation questions** (see [`MIGRATION.md`](MIGRATION.md) for full disposition):
+- **Device certificate reconciliation**: Retired plan.md-era `siar_crypto::device_cert` and `siar_domain::device::{DeviceRegistry, DeviceEvent}` in favor of root-key-signed `siar-identity-multidevice` with additive `TransportKeyBinding`.
+- **Routing reconciliation**: Retired `siar-routing` into `siar-routing-policy` (link health, relay composition, congestion tracker) and `siar-connectivity` (`CandidateTable`, `DeviceRoutes`).
+- **DTN reconciliation**: Retired `siar-dtn` into `siar-dtn-bundle` (seen-bundle dedup, async `BundleStore`, opaque `RouteToken`) and local quota-bounded storage in `apps/emergency-node`.
 
 ---
 
@@ -624,7 +621,7 @@ SIAR Interactive Messenger
 
 1. **Show My Peer Ticket** — displays your Base64-encoded `PeerTicket`; share out-of-band via QR code or text.
 2. **Add Contact** — paste a contact's `PeerTicket`; the CLI decodes and resolves the peer's public key and endpoint address.
-3. **Send Direct Text** — checks `PathTable` for active routes (`LocalLan`, `InternetDirect`, BLE) and dispatches through the routing policy engine.
+3. **Send Direct Text** — checks candidate routes via `TransportManager` (`LocalLan`, `InternetDirect`, BLE) and dispatches through the routing policy engine.
 4. **Send Anonymous Mailbox Message** — delivers to a relay node via an unlinkable single-use token mailbox path.
 
 ### 2. Desktop Application (`siar-desktop`)
@@ -707,9 +704,9 @@ SIAR employs a two-tier open-source licensing model designed for maximum library
 ├──────────────────────────────────────┬──────────────────────────────────────┤
 │    Core Libraries (crates/*)         │    Standalone Apps (apps/*)          │
 │    - siar-crypto / siar-crypto-mls   │    - apps/android (Jetpack Compose)  │
-│    - siar-transport / siar-routing   │    - apps/desktop (Dioxus GUI)       │
+│    - siar-transport / siar-routing-policy│ - apps/desktop (Dioxus GUI)       │
 │    - siar-storage / siar-messaging   │    - apps/cli (Terminal Node)        │
-│    - siar-dtn / siar-protocol        │    - apps/emergency-node (Daemon)    │
+│    - siar-dtn-bundle / siar-protocol │    - apps/emergency-node (Daemon)    │
 │                                      │                                      │
 │    📜 MIT License OR Apache-2.0      │    📜 GNU AGPLv3 / Commercial        │
 │    (Permissive Open Source)          │    (Copyleft & Enterprise Exemption) │

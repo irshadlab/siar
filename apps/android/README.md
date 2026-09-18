@@ -82,14 +82,16 @@ missing since they were built: "this workspace doesn't have an
   identity the same way.
 - **`LocalLan`/`InternetDirect`/`InternetRelay` are now genuinely
   distinguished**, not defaulted to `InternetDirect` everywhere.
-  `siar_routing::path::classify_endpoint_addr` classifies a peer's
-  *advertised* addresses (private/link-local IP → `LocalLan`, public
-  IP → `InternetDirect`, relay-URL-only → `InternetRelay`) — real
-  evidence, not a measured path (iroh's own `conn_type` API for that
-  was removed upstream; see that function's own doc comment for the
-  full story). Wired into both `apps/emergency-node`'s `send_and_record`
-  (where the caller happens to already have the full address) and
-  `siar-android-messaging`'s `send_text`/`send_text_anon`.
+  A local endpoint classifier in `siar-android-messaging` (and
+  `siar-connectivity::classify_endpoint_addr`, ported from the retired
+  `siar-routing` crate) classifies a peer's *advertised* addresses
+  (private/link-local IP → `LocalLan`, public IP → `InternetDirect`,
+  relay-URL-only → `InternetRelay`) — real evidence, not a measured path
+  (iroh's own `conn_type` API for that was removed upstream; see that
+  function's own doc comment for the full story). Wired into both
+  `apps/emergency-node`'s `send_and_record` (where the caller happens
+  to already have the full address) and `siar-android-messaging`'s
+  `send_text`/`send_text_anon`.
 - **`.so` build script now exists**: `build-native.sh` runs a real,
   explicitly-scoped `cargo ndk` invocation across all 4 ABIs, for
   exactly the 7 Android-relevant crates — a real build/error report

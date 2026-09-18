@@ -1,7 +1,7 @@
 # 04 — Autonomous Routing & Policy Engine
 
 > **Corresponding Specifications:** [`sys-arch/03-transport-routing-policy-engine-architecture.md`](../sys-arch/03-transport-routing-policy-engine-architecture.md), [`sys-arch/12-multipath-networking-architecture.md`](../sys-arch/12-multipath-networking-architecture.md)  
-> **Key Crates:** [`crates/siar-routing-policy`](../crates/siar-routing-policy), [`crates/siar-routing`](../crates/siar-routing), [`crates/siar-connectivity`](../crates/siar-connectivity)
+> **Key Crates:** [`crates/siar-routing-policy`](../crates/siar-routing-policy), [`crates/siar-connectivity`](../crates/siar-connectivity)
 
 ---
 

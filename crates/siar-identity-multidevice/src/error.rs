@@ -39,4 +39,20 @@ pub enum IdentityError {
     /// requirement.
     #[error("identity fork detected for this account at generation {generation}: two different signed directories claim the same generation — do not silently choose one, this requires reconciliation/security handling")]
     IdentityForkDetected { generation: u64 },
+    /// [`crate::transport_key_binding::TransportKeyBinding::verify`] —
+    /// the binding's own `device_id`/`certificate_generation` don't
+    /// match the [`crate::certificate::DeviceCertificate`] it's being
+    /// checked against. Distinct from `InvalidSignature`: the
+    /// signature bytes might be perfectly valid, just for a different
+    /// certificate than the one the caller is checking against here.
+    #[error("transport key binding's device_id/generation does not match the certificate it was checked against")]
+    TransportKeyBindingMismatch,
+    /// [`crate::device_keys::NewDeviceKeys::bind_transport_key`] — the
+    /// certificate presented was not issued for *this* device's own
+    /// signing key. Distinct from `TransportKeyBindingMismatch`: that
+    /// one is about an existing binding checked against the wrong
+    /// certificate; this one is caught before a binding is even
+    /// created, so signing anything would be meaningless.
+    #[error("certificate's device_public_key does not match this device's own signing key")]
+    CertificateNotForThisDevice,
 }

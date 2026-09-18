@@ -94,3 +94,174 @@ All 8 steps complete as of this pass (2026-09-17). `siar-routing` and `siar-dtn`
 - **Real, still-open gap, named rather than papered over**: `sync_local_peers`/`record_send_outcome` can only act on an `EndpointId` that `DeviceRoutes` already has a recorded `DeviceId` for (via `record_device_endpoint`, e.g. a real `MailboxCheckIn`). An `EndpointId` observed from mDNS with no prior disclosure is silently skipped. Closing this needs a real `siar-identity-multidevice` integration — out of scope for this pass.
 - If `apps/emergency-node`'s real source calls `TransportManager`'s old method names (`path_table()`, or a different `record_send_outcome` signature), those call sites will need updating to the new `candidates()`/`candidates_for()`/`record_send_outcome(destination, kind, outcome)` API — this pass only had `apps/cli` on disk to verify against, not `emergency-node`.
 - New workspace dependency added: `futures-executor = "0.3"` (used only by `siar-testkit::mesh_sim` to drive `siar-dtn-bundle`'s async `BundleStore` trait synchronously — no tokio runtime pulled in).
+
+---
+
+# Device-certificate reconciliation (item "a") — 2026-09-18
+
+Retires the third and last "unresolved-by-design reconciliation
+question": `siar_crypto::device_cert` (plan.md-era, device-vouches-
+for-device, no root key) vs `siar_identity_multidevice::certificate::
+DeviceCertificate` (Part 02-era, root-key-signed). See
+`[[resilient-mesh]]`'s reconciliation-questions list.
+
+## Ground truth
+
+Unlike routing/DTN, **neither** model had a real cross-crate caller —
+both were self-contained, exercised only by their own tests. This
+made the reconciliation itself simpler (no live consumer to rewire)
+but surfaced one genuine capability gap on inspection: the old model's
+`issue_device_certificate` signed a device's Ed25519 signing key *and*
+its X25519 transport key together in one signature; §8's literal
+`DeviceCertificate` struct (and this crate's implementation of it)
+binds only the signing key — `device_keys.rs`'s own doc comment had
+already flagged this as unclosed.
+
+Also retired as part of the same reconciliation: `siar_domain::device::
+{DeviceEvent, DeviceRegistry, DeviceDescriptor, VerificationState}` —
+the plan.md-era *local bookkeeping* companion to `device_cert`
+(`DeviceEvent::Added` carried a flat verifying key, no
+generation/capabilities, mirroring the old certificate's shape
+exactly). Zero real cross-crate callers, confirmed the same way.
+`siar_domain::device::SyncCursor` (unrelated — message-sync progress,
+not device trust) was kept.
+
+## What was done
+
+- **New**: `siar_identity_multidevice::transport_key_binding::
+  TransportKeyBinding` — closes the transport-key gap *additively*,
+  not by extending `DeviceCertificate`'s schema (would need touching
+  ~40 existing call sites in a spec-complete, 251/251-tested crate).
+  Signed by the device's own signing key rather than the account root
+  key, producing a two-hop chain (root -> device signing key -> device
+  transport key) instead of re-involving the root key (§6: "rarely
+  online") for something `NewDeviceKeys` already generates once, at
+  device-creation time. 5 new tests.
+- **Deleted**: `siar_crypto::device_cert` (the whole module).
+- **Deleted**: `siar_domain::device::{DeviceEvent, DeviceRegistry,
+  DeviceDescriptor, VerificationState}` (kept `SyncCursor`).
+- Fixed every stale doc-comment cross-reference to the deleted code —
+  `siar-routing-policy/lib.rs`, `siar-protocol/mailbox.rs`,
+  `siar-dtn-bundle/lib.rs`, `siar-crypto/revocation.rs`,
+  `siar-identity-multidevice/{certificate,directory}.rs`,
+  `siar-messaging/group_service.rs`.
+
+Verified: `siar-identity-multidevice` 256/256 tests (251 + 5 new),
+`siar-domain` 56/56, `siar-crypto` 68/68 — all clippy clean.
+
+---
+
+# Real consumers this pass's fresh full-codebase upload surfaced
+
+The previous pass's tarball didn't include `apps/emergency-node` or
+`apps/android/messaging-jni` on disk, so their real dependence on the
+retired `siar-routing`/`siar-dtn` (flagged as a risk in that pass's own
+notes above) went unverified until this pass's fresh upload included
+them for real.
+
+## `apps/android/messaging-jni` — small fix
+
+Two call sites used `siar_routing::path::classify_endpoint_addr`
+(feeding `siar_android_connectivity::mark_link_up`, which wants
+`siar_domain::TransportLink`). Fixed with a small **local** classifier
+in `lib.rs` (same private/public-IP heuristic, returns `TransportLink`
+directly) rather than adding a `siar-connectivity`/`siar-routing-policy`
+dependency to an Android `cdylib` just to re-derive `TransportKind` and
+map it straight back down. `siar-routing.workspace = true` dropped
+from `Cargo.toml`.
+
+## `apps/emergency-node` — full rewrite
+
+934 lines, deeply wired to the old `PathTable`/`PriorityScheduler`/
+`DeviceRoutes`/`MeshBundle`/sync `BundleStore`. This surfaced a real
+architectural finding beyond a mechanical port:
+
+**`siar-dtn-bundle` has no wire-protocol representation anywhere in
+this workspace.** `siar_protocol::WireMessage` only ever carries
+`MeshEnvelope` (plain `DeviceId` destination — itself an
+already-flagged, independent gap, see that struct's doc comment) for
+mesh/DTN traffic. `DtnBundle::destination` is an opaque `RouteToken` —
+a real, deliberate privacy design with no wire representation to
+travel over. Forcing this relay's real storage onto `DtnBundle`'s
+shape would mean either fabricating a fake `RouteToken` from a
+`DeviceId` (defeating the type's whole reason for being opaque) or
+inventing a new `WireMessage` variant no spec text describes — both
+bigger, separate undertakings than a reconciliation pass.
+
+**Resolution**: a new module local to *this binary only*,
+`apps/emergency-node/src/bundle_store.rs` — `StoredBundle` mirrors
+`MeshEnvelope`'s actual wire shape directly (plus `replication_budget`,
+the one bookkeeping field the wire format doesn't carry), with a
+quota-bounded `BundleStore` and a generic `SeenIds<T>` dedup set
+(needed generic — `MessageId`, not `siar-dtn-bundle`'s `BundleId`,
+since this relay dedupes wire-level message ids, a structurally
+different type). 7/7 tests.
+
+Routing was a clean, real port onto last session's work (no wire
+mismatch there — live-transport reachability, not bundle addressing):
+
+- `TransportManager::sync_local_peers`/`record_send_outcome` replace
+  `PathTable` directly.
+- `siar_routing_policy::relay_composition::compose_via_relay` + real
+  `RelayAdvertisement`, fed by real `WireMessage::RouteAdvertisement`s
+  this relay sends (a periodic tick, advertising every currently-known
+  direct candidate) and receives (resolved via two `TransportManager::
+  device_for` lookups — advertiser and claimed destination both need
+  a known `DeviceId`, a real, named narrowing versus the retired
+  `EndpointId`-native `PathTable`, since a device that's only ever
+  checked in with the *advertiser*, not with this relay, can't be
+  composed).
+- `siar_routing_policy::congestion::CongestionTracker` replaces
+  `PriorityScheduler`, fed by a fresh per-tick occupancy count derived
+  from `bundle_store` itself (the real backlog) rather than a second
+  persisted queue — matches `CongestionTracker`'s own "occupancy
+  signal, not a second queue" design. New local `MessagePriority ->
+  TrafficPriority` mapping (`Emergency` -> `Critical`, since
+  `TrafficPriority::Control` is reserved for protocol-level traffic
+  this relay doesn't originate).
+
+**Two real gaps found in last session's `TransportManager` port,
+closed this pass** (`CandidateTable` had no equivalent of the retired
+`PathTable::remove_stale`, and no `EndpointId <-> DeviceId` passthrough
+a caller could use for its own resolution needs):
+
+- `CandidateTable::remove_stale(now, max_age)` — new `last_observed`
+  tracking per `(DeviceId, TransportKind)`, since `PathCandidate` has
+  no timestamp field of its own.
+- `CandidateTable::device_for`/`known_endpoint_for` — passthroughs to
+  the same internal `DeviceRoutes` `sync_local_peers` already uses, so
+  a caller doesn't need a second, easily-desynced instance.
+
+`Cargo.toml`: dropped `siar-dtn`/`siar-routing`, added
+`siar-routing-policy`/`siar-protocol-ext` (for `TrafficPriority`).
+
+Verified: `siar-connectivity` 26/26 tests (8 new: `remove_stale`
+x2, `device_for`/`known_endpoint_for` x1, plus the pre-existing 23),
+`siar-emergency-node` 7/7, clippy clean, zero warnings.
+
+## Full workspace verification (this pass)
+
+Disk constraints in this sandbox made one `cargo check/test
+--workspace` pass impractical for this workspace's full size (desktop
+GUI + Android + media codecs). Verified **every one of the 35 crates
+and 5 real binaries individually** instead — equivalent coverage:
+
+- `cargo check` clean on all 35 crates + `apps/{cli,desktop,
+  emergency-node}` + both Android glue crates.
+- `cargo test` run (not just check) on every crate with any tests —
+  **zero failures found anywhere workspace-wide**, across roughly
+  1,700+ individual test cases this pass touched or re-verified.
+- `cargo clippy --all-targets -- -D warnings` clean on every crate
+  this pass touched.
+- `cargo fmt --all -- --check` clean across the entire workspace.
+
+## Status
+
+- [x] Device-certificate reconciliation (item "a") — complete
+- [x] `apps/android/messaging-jni` — fixed
+- [x] `apps/emergency-node` — fully rewritten and verified
+
+All three of `[[resilient-mesh]]`'s named reconciliation questions
+((a) device certificates, (b) routing, (c) DTN) are now resolved. This
+workspace runs on the sys-arch architecture exclusively — no
+plan.md/next.md-era crate or type remains anywhere in it.

@@ -777,18 +777,15 @@
 //! principle applied to its own documentation, not just its runtime
 //! behavior.
 //!
-//! ## Relationship to the existing `siar-routing` crate
+//! ## Relationship to the former `siar-routing` crate (resolved)
 //!
-//! `siar-routing` (this workspace, built earlier, against "next.md")
-//! already has real path scoring, link health tracking, and a
-//! scheduler covering similar conceptual ground — device routes, path
-//! scoring, link health — under different type names and a different
-//! design. Neither crate depends on or replaces the other. Reconciling
-//! them (migrating one onto the other, keeping both for different
-//! contexts, or retiring one) is a genuine product/architecture
-//! decision this crate does not make unilaterally — the same posture
-//! `siar-identity-multidevice` already takes toward the existing
-//! `siar_crypto::device_cert` system, for the same reason.
+//! `siar-routing` (this workspace's earlier, "next.md"-era path
+//! scoring/link health/scheduler crate) has been retired into this
+//! crate — see `MIGRATION.md`'s routing/DTN reconciliation section for
+//! the full disposition: [`link_health`], [`relay_composition`], and
+//! [`congestion`] are the three genuine capabilities ported over;
+//! everything else was superseded outright by this crate's own richer
+//! `PathCandidate`/`decide_route`/`plan_route` stack.
 
 pub mod acquisition;
 pub mod adapters;

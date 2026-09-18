@@ -29,7 +29,7 @@ pub use call::{
 };
 pub use connectivity::{ConnectivityState, EffectiveConnectivity, TransportLink};
 pub use delivery::DeliveryState;
-pub use device::{DeviceDescriptor, DeviceEvent, DeviceRegistry, SyncCursor, VerificationState};
+pub use device::SyncCursor;
 pub use error::DomainError;
 pub use group::{
     fanout_targets, DurableGroupEvent, EphemeralGroupEvent, GroupEpoch, GroupMember, GroupState,

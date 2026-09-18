@@ -1,4 +1,4 @@
-//! The wire message `siar_routing::path::PathTable::compose_via_relay`
+//! The wire message `siar_routing_policy::relay_composition::compose_via_relay`
 //! has been waiting for since it was built: that method's own doc
 //! comment named its `RelayAdvertisement` parameter as "the caller-
 //! supplied signal a real routing-advertisement exchange would
@@ -9,9 +9,9 @@
 //! candidate through this relay without needing its own direct
 //! connection to that destination.
 //!
-//! ## Why this lives in `siar-protocol`, not `siar-routing`
+//! ## Why this lives in `siar-protocol`, not `siar-routing-policy`
 //!
-//! `siar_routing::path::RelayAdvertisement` is keyed on `iroh::
+//! `RelayAdvertisement` is keyed on `iroh::
 //! EndpointId` directly — fine for a pure-logic crate operating on
 //! already-typed values, wrong for a wire message. `siar-protocol`
 //! deliberately has no `iroh` dependency (every other wire type in this
@@ -23,13 +23,13 @@
 //! `siar-connectivity`) reconstructs the typed `EndpointId` via
 //! `iroh::EndpointId::from_bytes` — the same already-established
 //! pattern `siar_messaging::PeerTicket`'s own fields use for the keys
-//! it carries — before building a `siar_routing::path::
-//! RelayAdvertisement` from this type.
+//! it carries — before building a `siar_routing_policy::
+//! relay_composition::RelayAdvertisement` from this type.
 //!
 //! ## What this closes, and what it still doesn't
 //!
 //! This is the wire format and (once a caller sends/receives it) the
-//! actual exchange — `siar_routing::path::compose_via_relay`'s
+//! actual exchange — `siar_routing_policy::relay_composition::compose_via_relay`'s
 //! "computation built, no real source" gap is genuinely closed by
 //! whichever binary wires this in. What it does NOT do on its own:
 //!
@@ -70,7 +70,7 @@ pub struct RouteAdvertisement {
     /// The advertiser's own estimate of its route to
     /// `destination_endpoint` — what it would report about *its* path,
     /// same "the relay's own second-hop estimate" shape
-    /// `siar_routing::path::RelayAdvertisement`'s own fields already
+    /// `siar_routing_policy::relay_composition::RelayAdvertisement`'s own fields already
     /// have (this type exists specifically to become one of those on
     /// the receiving end).
     pub rtt_millis: Option<u32>,

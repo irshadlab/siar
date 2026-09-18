@@ -189,6 +189,42 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc;
 
+/// Real evidence-based link classification — moved here from the
+/// retired `siar_routing::path::classify_endpoint_addr` (see
+/// `MIGRATION.md`'s device-certificate/reconciliation notes for why
+/// `siar-routing` no longer exists). Same private/public-IP heuristic,
+/// same documented limitation (an advertised LAN IP actually reached
+/// over relay still classifies as `LocalLan`), just returning
+/// `siar_domain::TransportLink` directly rather than
+/// `siar_routing_policy::TransportKind` — this crate reports link
+/// status straight into `siar_android_connectivity::ConnectivityState`
+/// (a `TransportLink`-typed API), so there's no reason to pull in
+/// `siar-connectivity`/`siar-routing-policy`'s heavier dependency
+/// chain (transitively, `siar-protocol-ext` and friends) into an
+/// Android `cdylib` just to re-derive `TransportKind` and then map it
+/// straight back down to `TransportLink` again.
+fn classify_endpoint_addr(addr: &iroh::EndpointAddr) -> siar_domain::TransportLink {
+    let mut saw_any_ip = false;
+    for socket_addr in addr.ip_addrs() {
+        saw_any_ip = true;
+        if is_local_or_private_ip(socket_addr) {
+            return siar_domain::TransportLink::LocalLan;
+        }
+    }
+    if saw_any_ip {
+        siar_domain::TransportLink::InternetDirect
+    } else {
+        siar_domain::TransportLink::InternetRelay
+    }
+}
+
+fn is_local_or_private_ip(socket_addr: &std::net::SocketAddr) -> bool {
+    match socket_addr.ip() {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback(),
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+    }
+}
+
 fn base64_encode(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -716,12 +752,10 @@ fn send_text_inner(peer_ticket: &str, text: &str) -> Result<String, String> {
     let peer = PeerTicket::decode(peer_ticket).map_err(|e| e.to_string())?;
     let text = MessageText::parse(text.to_string()).map_err(|e| e.to_string())?;
     // Real evidence-based link classification, replacing the bootstrap-
-    // time blanket `InternetDirect` — see `siar_routing::path::
-    // classify_endpoint_addr`'s own doc comment for exactly what this
-    // is (advertised reachability) and isn't (a measured path).
-    siar_android_connectivity::mark_link_up(siar_routing::path::classify_endpoint_addr(
-        &peer.endpoint_addr,
-    ));
+    // time blanket `InternetDirect` — see this file's own
+    // `classify_endpoint_addr`'s doc comment for exactly what this is
+    // (advertised reachability) and isn't (a measured path).
+    siar_android_connectivity::mark_link_up(classify_endpoint_addr(&peer.endpoint_addr));
     runtime().block_on(async {
         // Phase-1 stand-in, same as `apps/cli`'s own `send`: a real
         // client looks up (or creates) the conversation with this peer
@@ -770,9 +804,7 @@ fn send_text_anon_inner(
     // talks over, same reasoning `classify_endpoint_addr` applies
     // anywhere else in this workspace: classify what's actually
     // reached, not the final recipient the traffic is addressed to.
-    siar_android_connectivity::mark_link_up(siar_routing::path::classify_endpoint_addr(
-        &relay.endpoint_addr,
-    ));
+    siar_android_connectivity::mark_link_up(classify_endpoint_addr(&relay.endpoint_addr));
     runtime().block_on(async {
         app.service
             .send_text_anon(&peer, &relay, text)

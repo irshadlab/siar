@@ -933,6 +933,6 @@ Decentralized communications cannot mature into global, mission-critical infrast
 
 **Spec 02: Multi-Device Identity Architecture** demonstrates that sovereign, local-first architectures can achieve the seamless user experience of modern cloud messengers without compromising cryptographic rigor. By establishing a five-tier identity separation, enforcing monotonic generation ratchets, conducting zero-knowledge pairing ceremonies, and binding least-authority capability bitsets directly into signed directory snapshots, SIAR delivers an identity substrate capable of surviving both nation-state cyberattacks and total infrastructure collapse.
 
-In **Part 3 of this 24-part deep-dive series**, we will explore **Spec 03: Transport Routing Policy Engine Architecture** (`crates/siar-routing`). We will examine how SIAR abstracts physical network bearers, performs dynamic link cost estimation, executes multi-bearer failovers between QUIC, Wi-Fi Aware, and BLE, and routes encrypted packets across fragmented, partition-heavy mesh networks.
+In **Part 3 of this 24-part deep-dive series**, we will explore **Spec 03: Transport Routing Policy Engine Architecture** (`crates/siar-routing-policy`). We will examine how SIAR abstracts physical network bearers, performs dynamic link cost estimation, executes multi-bearer failovers between QUIC, Wi-Fi Aware, and BLE, and routes encrypted packets across fragmented, partition-heavy mesh networks.
 
 *Subscribe to follow along as we build the survivable, decentralized communication stack of the next century.*

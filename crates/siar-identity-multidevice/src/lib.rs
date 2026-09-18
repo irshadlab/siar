@@ -771,32 +771,22 @@
 //! exercised against this round's real output instead of a hand-built
 //! fixture standing in for one.
 //!
-//! ## A real, deliberate divergence: two device-certificate models
+//! ## Device-certificate reconciliation (resolved)
 //!
-//! This workspace already has a device-linking system —
+//! This workspace previously contained an older device-linking system —
 //! `siar_domain::device::{DeviceEvent, DeviceRegistry}` plus
 //! `siar_crypto::device_cert::{DeviceCertificate, issue_device_certificate,
-//! verify_device_certificate}` — built against a different, earlier
-//! design document ("plan.md §38–42"). That system is
-//! device-vouches-for-device: an already-trusted device signs a new
-//! device's keys directly, with no account root key anywhere in the
-//! model (that crate's own doc comment calls this a deliberate choice,
-//! "avoids inventing a key-hierarchy this plan never specified").
+//! verify_device_certificate}` — built against an earlier design document
+//! ("plan.md §38–42"). That system was device-vouches-for-device without
+//! an account root key.
 //!
-//! Part 02's spec explicitly asks for the opposite: a root identity key
-//! that signs every device certificate (§6), used rarely, with
-//! independent device keys never signing for each other. This crate
-//! implements *that* model, under different type names
-//! ([`certificate::DeviceCertificate`] here vs.
-//! `siar_crypto::device_cert::DeviceCertificate`) in a different crate,
-//! so nothing existing is silently replaced, broken, or shadowed.
-//!
-//! Reconciling the two — migrating the existing device-linking call
-//! sites in `siar-messaging`/`apps/*` onto this root-key model, keeping
-//! both for different trust contexts, or deciding the existing
-//! simpler model is sufficient and retiring this one — is a genuine
-//! product/architecture decision, not a mechanical follow-up. It is
-//! deliberately not made here.
+//! That older system has been fully retired in favor of Part 02's
+//! root-key-signed model implemented in this crate ([`certificate::DeviceCertificate`]),
+//! which is now the sole device-certificate model in the workspace (see
+//! `MIGRATION.md`). The capability from the older model that Part 02's
+//! literal certificate struct omitted — binding a device's transport key
+//! alongside its signing key — is closed additively by
+//! [`transport_key_binding::TransportKeyBinding`].
 //!
 //! ## What's explicitly NOT here
 //!

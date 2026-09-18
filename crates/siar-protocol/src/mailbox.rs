@@ -300,9 +300,9 @@ impl AnonymousMailboxCheckIn {
 ///
 /// Pure storage, no bundle contents/encryption opinions of its own —
 /// same "just persistence, not policy" shape as
-/// `siar_dtn::bundle`'s own storage layer, `V` left generic rather than
-/// hardcoded to `siar_dtn::bundle::MeshBundle` so this stays usable in
-/// isolated tests without pulling in that crate as a dependency.
+/// the DTN storage layer, `V` left generic rather than
+/// hardcoded to a concrete bundle type so this stays usable in
+/// isolated tests without pulling in storage crates as dependencies.
 ///
 /// `apps/emergency-node` (a later pass) is this type's first real
 /// caller — see [`TokenMailboxEnvelope`]'s own doc comment for the wire

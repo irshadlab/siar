@@ -71,7 +71,7 @@ pub enum RevocationReason {
 ///
 /// `signature` is `Vec<u8>`, not `[u8; 64]` — the same serde derive
 /// limitation every other 64-byte signature in this workspace already
-/// works around this way (see `device_cert.rs`,
+/// works around this way (see
 /// `siar_identity_multidevice::certificate`, `::directory`, `::invite`:
 /// serde's built-in array impls stop at 32 elements; a 64-byte array
 /// needs either `serde-big-array` or, as here, storing `Vec<u8>` on the

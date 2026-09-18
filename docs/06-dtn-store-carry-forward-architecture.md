@@ -12,12 +12,9 @@ Partial.
 
 - `siar-dtn-bundle`
 
-- `siar-dtn (pre-existing, next.md-era, sync — unreconciled second DTN bundle model, see below)`
-
-
 ## Known gaps / open questions
 
-- Unresolved-by-design reconciliation: two DTN bundle models — `siar-dtn` (sync, next.md-era) vs `siar-dtn-bundle` (async, Part 06-era).
+- **Resolved reconciliation**: The former next.md-era `siar-dtn` crate has been retired into `siar-dtn-bundle` (seen-bundle dedup ported) and local quota-bounded storage in `apps/emergency-node` (see [`MIGRATION.md`](../MIGRATION.md)).
 
 
 ## Note

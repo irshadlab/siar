@@ -94,7 +94,6 @@
 
 mod attachment;
 mod clone_detection;
-mod device_cert;
 mod domains;
 mod envelope;
 mod epoch;
@@ -116,7 +115,6 @@ pub use attachment::{
     decrypt_attachment, encrypt_attachment, AttachmentKey, BlobHash, EncryptedBlob,
 };
 pub use clone_detection::{CloneDetector, CloneVerdict, DeviceInstanceId};
-pub use device_cert::{issue_device_certificate, verify_device_certificate, DeviceCertificate};
 pub use domains::CryptoDomain;
 pub use envelope::{
     decrypt_envelope, encrypt_envelope, AuthenticationTag, MessageType, SecureMessageEnvelope,

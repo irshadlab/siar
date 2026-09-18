@@ -34,7 +34,6 @@ SIAR is structured into five distinct, decoupled architectural layers:
 |                            3. Routing, Policy & DTN Engine                            |
 |  - siar-routing-policy (Multi-Metric)     - siar-dtn-bundle (Spray-and-Wait Forward)  |
 |  - siar-connectivity (Link State Probes)  - siar-emergency (Priority Classes P0-P3)   |
-|  - siar-routing (PathTable & Latency)     - siar-dtn (Store-Carry-Forward Buffer)     |
 +---------------------------------------------------------------------------------------+
 |                             2. Storage, Crypto & Reliability                          |
 |  - siar-crypto (Ed25519/X25519 AEAD)      - siar-crypto-mls (RFC 9420 MLS E2EE)       |
@@ -52,9 +51,9 @@ SIAR is structured into five distinct, decoupled architectural layers:
 
 ---
 
-## 3. Workspace Crate Taxonomy (33 Crates)
+## 3. Workspace Crate Taxonomy (31 Domain Crates)
 
-The Rust workspace is partitioned into 33 specialized, single-responsibility crates alongside 4 applications and platform drivers:
+The Rust workspace is partitioned into 31 specialized, single-responsibility domain crates alongside application binaries and platform drivers:
 
 ```mermaid
 graph TD

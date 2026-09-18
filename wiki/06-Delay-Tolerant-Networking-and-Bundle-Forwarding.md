@@ -1,7 +1,7 @@
 # 06 — Delay-Tolerant Networking & Bundle Forwarding
 
 > **Corresponding Specifications:** [`sys-arch/06-dtn-store-carry-forward-architecture.md`](../sys-arch/06-dtn-store-carry-forward-architecture.md)  
-> **Key Crates:** [`crates/siar-dtn-bundle`](../crates/siar-dtn-bundle), [`crates/siar-dtn`](../crates/siar-dtn), [`crates/siar-storage`](../crates/siar-storage)
+> **Key Crates:** [`crates/siar-dtn-bundle`](../crates/siar-dtn-bundle), [`crates/siar-storage`](../crates/siar-storage)
 
 ---
 

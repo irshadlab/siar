@@ -12,6 +12,12 @@ thiserror.workspace = true
 uuid.workspace = true
 blake3.workspace = true
 async-trait.workspace = true
+# §92 Phase 2's durable backend (`stoolap_store`). Same crate,
+# same feature set, as `siar-storage`'s own dependency declaration —
+# not pulled in via `siar-storage` itself (see that module's own doc
+# comment on why this crate stays independent of that one).
+stoolap = { version = "0.4", default-features = false, features = ["parallel"] }
+base64.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

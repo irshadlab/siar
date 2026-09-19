@@ -22,6 +22,7 @@ thiserror.workspace = true
 tracing.workspace = true
 postcard.workspace = true
 serde.workspace = true
+async-trait.workspace = true
 x25519-dalek.workspace = true
 iroh.workspace = true
 # Added for send_text_anon's TokenMailboxEnvelope::payload_hash — the

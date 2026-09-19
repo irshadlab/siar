@@ -7079,6 +7079,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "siar-domain",
+ "siar-event-log",
  "thiserror 2.0.19",
  "uuid",
 ]

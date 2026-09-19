@@ -14,3 +14,8 @@ blake3.workspace = true
 chacha20poly1305.workspace = true
 rand_core.workspace = true
 postcard.workspace = true
+# §34 "File Events" (`events.rs`) — Phase 3 of
+# `04-offline-event-log-architecture.md`, the third domain in the same
+# pattern `siar-identity-multidevice`/`siar-messaging` already use for
+# §35/§33.
+siar-event-log.workspace = true

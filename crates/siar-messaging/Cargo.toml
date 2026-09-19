@@ -12,6 +12,11 @@ siar-crypto.workspace = true
 siar-crypto-mls.workspace = true
 siar-storage.workspace = true
 siar-transport.workspace = true
+# §33 "Messaging Events" (`events.rs`) — Phase 3 of
+# `04-offline-event-log-architecture.md`'s own implementation-phase
+# breakdown, same crate `siar-identity-multidevice::audit_log` already
+# depends on for §35's identity events.
+siar-event-log.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

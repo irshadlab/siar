@@ -2,12 +2,14 @@
 //! to what Phase 1 needs: one-to-one text messages, no groups, no
 //! multi-device fanout yet (plan.md §124's "Alice ↔ Bob text messaging").
 
+use crate::events::MessagingEvent;
 use crate::PeerTicket;
 use siar_crypto::{DeviceIdentity, Session};
 use siar_domain::{
     backoff_millis, with_jitter, AttachmentReference, BlobSize, CallControlEvent, ConversationId,
     DeliveryState, DeviceId, MediaType, MessageContent, MessageId, MessageText,
 };
+use siar_event_log::{append_with_retry, EventOrigin, EventStore};
 use siar_protocol::v1::{Envelope, EnvelopeKind, CURRENT_VERSION};
 use siar_protocol::{MailboxCheckIn, WireMessage};
 use siar_storage::{BlobRepository, MessageRepository, OutboxRepository, StoredMessage};
@@ -15,6 +17,15 @@ use siar_transport::{PeerTransport, SiarEndpoint};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+
+/// §33/Phase 3's own append retry budget for this crate's real call
+/// sites — see `siar_event_log::retry`'s own doc comment for why
+/// blind retry with the same event is safe. Small: a single
+/// conversation being written from two places in the same process at
+/// once (a send racing an incoming-message's own append) is the only
+/// realistic contention this crate has right now, not a real
+/// multi-writer workload.
+const EVENT_LOG_APPEND_MAX_ATTEMPTS: u32 = 5;
 
 /// plan.md §46: how long we wait for a `DeliveryAck` before treating a
 /// transport-accepted send as due for retry. Not part of the failure
@@ -69,6 +80,10 @@ pub struct MessageService {
     messages: Arc<dyn MessageRepository + Send + Sync>,
     outbox: Arc<dyn OutboxRepository + Send + Sync>,
     blobs: Arc<dyn BlobRepository + Send + Sync>,
+    /// `04-offline-event-log-architecture.md` §33's own real call
+    /// sites — see [`Self::with_event_log`]'s own doc comment for why
+    /// this is optional rather than a required constructor argument.
+    event_log: Option<Arc<dyn EventStore + Send + Sync>>,
 }
 
 impl MessageService {
@@ -87,6 +102,49 @@ impl MessageService {
             messages,
             outbox,
             blobs,
+            event_log: None,
+        }
+    }
+
+    /// Opt-in wiring for `siar-event-log`'s per-conversation messaging
+    /// event stream (`crate::events`) — additive, not a replacement for
+    /// `siar-storage`: this crate's tables remain the system of record
+    /// for message content/delivery state (see this type's private
+    /// `record_messaging_event` method for exactly what "additive"
+    /// means for a failed append). A separate builder method rather than a seventh `new(...)` argument, so existing
+    /// callers that don't want the event log keep compiling unchanged
+    /// — `new(...)`'s signature is otherwise untouched by this. Takes
+    /// and returns `self` by value (not `&mut self`) because
+    /// `MessageService` is typically wrapped in an `Arc` immediately
+    /// after construction for sharing across async tasks; wiring has
+    /// to happen before that `Arc` is taken, not after.
+    pub fn with_event_log(mut self, event_log: Arc<dyn EventStore + Send + Sync>) -> Self {
+        self.event_log = Some(event_log);
+        self
+    }
+
+    /// Records one of `crate::events::MessagingEvent`'s nine §33
+    /// variants to the event log, if one is wired
+    /// ([`Self::with_event_log`]). Best-effort: an append failure is
+    /// logged and swallowed, never propagated to the caller. That's a
+    /// deliberate scope choice, not an oversight — `siar-storage`'s
+    /// tables are still this crate's actual system of record (see
+    /// `MessageServiceError`'s own variants, none of which are about
+    /// the event log), so a send or receive succeeding or failing
+    /// should not hinge on whether an audit-trail write also landed.
+    /// Making the event log authoritative (so its own failure really
+    /// should fail the caller) is a bigger architectural step — Phase
+    /// 4/5's projections/outbox territory, not this round's.
+    async fn record_messaging_event(&self, event: MessagingEvent, origin: EventOrigin) {
+        let Some(store) = self.event_log.as_deref() else {
+            return;
+        };
+        let stream_id = event.stream_id();
+        let new_event = event.into_new_event(origin);
+        if let Err(e) =
+            append_with_retry(store, stream_id, new_event, EVENT_LOG_APPEND_MAX_ATTEMPTS).await
+        {
+            tracing::warn!(error = %e, "failed to record messaging event to the event log");
         }
     }
 
@@ -162,6 +220,33 @@ impl MessageService {
         // Transactional outbox: message + outbox row commit together
         // (plan.md §16–17) before we ever touch the network.
         self.outbox.enqueue(&stored, &peer.encode())?;
+
+        // §33's own first two named events, in the order they actually
+        // happen here: the message existed (`MessageCreated`) the
+        // instant its ciphertext was ready, and it was queued
+        // (`MessageQueued`) the instant `enqueue` above actually
+        // persisted it — both true by the time we reach this line,
+        // hence both recorded together rather than split across two
+        // separate call sites that would just be adjacent anyway.
+        self.record_messaging_event(
+            MessagingEvent::MessageCreated {
+                conversation_id: conversation,
+                message_id,
+                sender_device: self.device_id,
+                sequence: stored.sequence,
+                ciphertext: stored.payload.clone(),
+            },
+            EventOrigin::LocalDevice(self.device_id),
+        )
+        .await;
+        self.record_messaging_event(
+            MessagingEvent::MessageQueued {
+                conversation_id: conversation,
+                message_id,
+            },
+            EventOrigin::LocalDevice(self.device_id),
+        )
+        .await;
 
         let envelope = Envelope {
             version: CURRENT_VERSION,
@@ -455,6 +540,22 @@ impl MessageService {
                 let is_new = self.messages.insert_if_new(&stored)?;
 
                 if is_new {
+                    // §33 `MessageReceived` — real receipt of a
+                    // genuinely new message (not a retransmit; see the
+                    // comment above `insert_if_new` on why this is
+                    // inside the `is_new` branch). `envelope.sender` is
+                    // the remote peer's own device — this event is
+                    // theirs, not ours, hence `RemoteDevice`.
+                    self.record_messaging_event(
+                        MessagingEvent::MessageReceived {
+                            conversation_id: envelope.conversation_id,
+                            message_id: envelope.message_id,
+                            sender_device: envelope.sender,
+                        },
+                        EventOrigin::RemoteDevice(envelope.sender),
+                    )
+                    .await;
+
                     let ack = Envelope {
                         version: CURRENT_VERSION,
                         message_id: MessageId::new(),
@@ -486,6 +587,20 @@ impl MessageService {
                 self.messages
                     .update_delivery_state(acked_message, DeliveryState::Delivered)?;
                 self.outbox.complete(acked_message)?;
+                // §33 `MessageDelivered` — the confirmation that this
+                // message reached the recipient came from them
+                // (`envelope.sender` here is whoever sent the ACK, i.e.
+                // the original message's own recipient), so this is
+                // their event to originate, not ours, even though it's
+                // our own outbound message being confirmed.
+                self.record_messaging_event(
+                    MessagingEvent::MessageDelivered {
+                        conversation_id: envelope.conversation_id,
+                        message_id: acked_message,
+                    },
+                    EventOrigin::RemoteDevice(envelope.sender),
+                )
+                .await;
                 Ok(None)
             }
             EnvelopeKind::ReadReceipt { .. } => {

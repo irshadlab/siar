@@ -66,6 +66,20 @@ pub enum EventStoreError {
     },
     #[error("stream {0:?} not found")]
     StreamNotFound(StreamId),
+    /// §67 names this variant for exactly [`crate::stoolap_store`]'s
+    /// reason to exist: a real backend can fail underneath the trait
+    /// (disk, the embedded SQL engine itself) in ways an in-memory
+    /// store never can. Carries the backend's own error text rather
+    /// than trying to re-derive a closed taxonomy of stoolap failure
+    /// modes this crate doesn't own.
+    #[error("event store backend error: {0}")]
+    Backend(String),
+    /// §67's `Corrupt`, made real by [`crate::stoolap_store`]'s
+    /// on-read checksum verification (§22) — a stored row whose bytes
+    /// no longer match the checksum written alongside them at append
+    /// time (truncated write, on-disk bit-rot, a hand-edited row).
+    #[error("stored event failed integrity verification: {0}")]
+    Corrupt(String),
 }
 
 /// §20, verbatim signatures (`async fn` via `async-trait` — already a

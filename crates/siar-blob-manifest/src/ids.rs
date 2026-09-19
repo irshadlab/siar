@@ -78,6 +78,38 @@ impl Default for ManifestId {
     }
 }
 
+/// §26 "Transfer State Machine" (`transfer_state.rs`) tracks *a*
+/// transfer's state, but nothing before this identified *which*
+/// transfer — a real gap found while wiring §34's file events
+/// (`events.rs`): a [`ManifestId`] identifies the chunked content, not
+/// a directed offer of it, and the same manifest can legitimately be
+/// offered as more than one transfer (the same file sent to two
+/// different conversations is one blob, one manifest, two transfers).
+/// Same UUID-newtype shape as [`ManifestId`]/[`LogicalAttachmentId`]
+/// above, for the same reason: a transfer has no content of its own to
+/// hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct TransferId(Uuid);
+
+impl TransferId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for TransferId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for TransferId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// §19: "not stored in public blob metadata." A plain `[u8; 32]`
 /// wrapper, not `zeroize`-wrapped here — this crate defines the type
 /// shape only; it doesn't generate, store, or hold a live key anywhere

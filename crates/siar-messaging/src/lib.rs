@@ -13,6 +13,7 @@ mod blob_bridge;
 pub mod events;
 mod group_service;
 mod key_package_directory;
+pub mod projections;
 mod service;
 mod ticket;
 
@@ -23,6 +24,7 @@ pub use events::{
     EVENT_TYPE_MESSAGE_QUEUED, EVENT_TYPE_MESSAGE_READ, EVENT_TYPE_MESSAGE_RECEIVED,
     EVENT_TYPE_REACTION_ADDED, EVENT_TYPE_REACTION_REMOVED,
 };
+pub use projections::{ConversationSummary, ConversationSummaryProjection};
 pub use service::{IncomingEvent, MessageService};
 pub use ticket::PeerTicket;
 // `InMemoryDeviceDirectory` added to this re-export list — a real,

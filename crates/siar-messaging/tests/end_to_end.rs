@@ -310,6 +310,74 @@ async fn send_text_round_trip_records_the_full_04_event_log_history() {
     );
 }
 
+/// §18 "Read-Your-Writes"'s own concrete example ("SendMessage
+/// succeeds locally → conversation immediately shows message"), made
+/// real end to end through `MessageService::conversation_summary` —
+/// not just `siar_event_log::projection`'s own unit tests against a
+/// toy projection, and not just `projections.rs`'s own unit tests
+/// calling `catch_up` by hand. This test never calls `catch_up`
+/// itself — only `send_text`/`handle_incoming`, exactly as a real
+/// caller would, confirming `record_messaging_event`'s own automatic
+/// catch-up is what's actually keeping the summary current.
+#[tokio::test]
+async fn conversation_summary_reflects_sends_and_receipts_without_any_manual_catch_up() {
+    let mut alice = Node::spawn().await;
+    let mut bob = Node::spawn().await;
+    let alice_ticket = alice.ticket();
+    let bob_ticket = bob.ticket();
+    let conversation = ConversationId::new();
+
+    assert!(
+        alice.service.conversation_summary(conversation).is_none(),
+        "nothing sent yet"
+    );
+
+    let sent_id = alice
+        .service
+        .send_text(conversation, &bob_ticket, text("read your writes"))
+        .await
+        .expect("send_text succeeds");
+
+    // Immediately after `send_text` returns — no receive loop has run
+    // anywhere yet.
+    let alice_summary = alice
+        .service
+        .conversation_summary(conversation)
+        .expect("send_text must leave the summary populated, synchronously");
+    assert_eq!(alice_summary.message_count, 1);
+    assert_eq!(alice_summary.last_message_id, Some(sent_id));
+
+    // Bob's own summary is independent — nothing arrives for him until
+    // he actually receives the frame.
+    assert!(bob.service.conversation_summary(conversation).is_none());
+    let envelope = bob.recv_envelope().await;
+    bob.service
+        .handle_incoming(&alice_ticket, envelope)
+        .await
+        .expect("handle_incoming succeeds");
+    let bob_summary = bob
+        .service
+        .conversation_summary(conversation)
+        .expect("handle_incoming must leave the summary populated, synchronously");
+    assert_eq!(bob_summary.message_count, 1);
+    assert_eq!(bob_summary.last_message_id, Some(sent_id));
+
+    // The ack reaching Alice updates her `last_activity_at` but must
+    // NOT bump her `message_count` a second time for the same message.
+    let ack_envelope = alice.recv_envelope().await;
+    alice
+        .service
+        .handle_incoming(&bob_ticket, ack_envelope)
+        .await
+        .expect("processing the ack succeeds");
+    let alice_summary_after_ack = alice
+        .service
+        .conversation_summary(conversation)
+        .expect("still populated");
+    assert_eq!(alice_summary_after_ack.message_count, 1);
+    assert!(alice_summary_after_ack.last_activity_at >= alice_summary.last_activity_at);
+}
+
 #[tokio::test]
 async fn handle_incoming_is_idempotent_under_duplicate_delivery() {
     // plan.md §70: receiving the same envelope twice must not produce a

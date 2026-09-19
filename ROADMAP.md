@@ -1160,13 +1160,114 @@ effects/retry/recovery, which could plausibly subsume/replace
 real architectural question worth deciding deliberately rather than
 drifting into).
 
+**siar-event-log / siar-messaging — Phase 4, 2026-09-19 (same session,
+Claude's own choice — the user explicitly deferred "do best
+technically")**: new `siar-event-log::projection` — §16 `Projection`
+trait (`apply`/`reset`, the latter existing specifically so §16's
+"rebuildable" requirement is a real trait method, not a hope),
+§17 `ProjectionCheckpoint` (verbatim field names/types),
+`ProjectionCheckpointStore` trait + `InMemoryCheckpointStore` (same
+"real, tested, not durable yet" status `InMemoryEventStore` itself had
+before `stoolap_store` existed), and `ProjectionRunner::catch_up` — the
+pull-based runner: loads a checkpoint, replays from it (or from offset
+0 on first run OR on a `projection_version` mismatch, which also
+triggers `reset` — §16's "versioned"/"rebuildable" made structural,
+not just documented), applies each event in log order, saves an
+updated checkpoint per batch. Named honestly, in the module's own doc
+comment: §16 "deterministic"/"idempotent" are NOT enforced by this
+module — properties of what a `Projection` implementation's own
+`apply` does, unverifiable from outside; and §18 "read-your-writes"
+("critical projections update in the same transaction as the event")
+is NOT what `catch_up` does — it's a separate call after `append`
+returns, not inside `stoolap_store`'s own transaction (doing that for
+real would mean coupling `EventStore::append` to a specific registered
+projection set, undoing Phases 1-3's own backend/domain-neutral
+design) — what this module actually gives a caller is "call `catch_up`
+synchronously right after append returns," sufficient for §18's own
+single-process example but not a stronger guarantee than that. 6 new
+tests (fresh catch-up, true no-op when already caught up, resumes from
+checkpoint rather than replaying everything, respects a small
+`batch_size` across multiple internal reads, a version bump actually
+triggers full reset+replay, checkpoints for different projection ids
+never cross over) — 27/27 total in `siar-event-log`, clippy/fmt/docs
+clean.
+
+`siar_messaging::conversation_summary` (new `projections.rs`) is the
+first real `Projection` anywhere in this workspace, and §16's own
+worked example (`conversation_summary` is literally one of that
+section's seven named views) made real end to end: message_count,
+last_message_id, last_activity_at, per conversation — deliberately NOT
+duplicating `siar-storage`'s own message content/delivery-state tables
+(those already exist and are durable; this is a from-scratch
+demonstration of the new projection architecture against a genuinely
+useful view, not a redundant second copy of what already works). Only
+`MessageCreated`/`MessageReceived` bump `message_count` — every other
+of the nine §33 events still updates `last_activity_at` without
+double-counting. Filters `apply` to messaging's own `EventTypeId` range
+(100-108) before decoding anything, skipping — not erroring — events
+outside it: a real, not hypothetical, need, since `catch_up` calls
+`read_log`, which spans every stream on whatever `EventStore` it's
+given, messaging or not. `MessageService::with_event_log` now also
+wires a `ConversationSummaryProjection` + its own
+`InMemoryCheckpointStore` automatically (no separate opt-in — wanting
+the event log at all means getting a live summary view for free); a
+new `MessageService::conversation_summary(conversation_id)` is the
+query side; `record_messaging_event` calls `catch_up` synchronously
+right after every successful append, best-effort (logged, swallowed,
+same non-authoritative scope `append` itself already has — see that
+method's own doc comment for why). 4 new unit tests in `projections.rs`
+plus 2 new end-to-end tests reusing the real-QUIC `Node` harness (every
+`Node` now always carries a `ConversationSummaryProjection` internally
+via `with_event_log`, confirming existing tests — none of which look at
+it — still pass unmodified) — one repeats the full send→receive→ack
+flow asserting on raw event-log contents (already existed from last
+round), the new one
+(`conversation_summary_reflects_sends_and_receipts_without_any_manual_
+catch_up`) asserts on `conversation_summary()` directly through
+ordinary `send_text`/`handle_incoming` calls only, with no manual
+`catch_up` anywhere in the test — proving the automatic wiring, not
+just the projection logic in isolation. 31/31 tests in `siar-messaging`
+(19 unit + 12 integration), clippy clean, fmt clean, docs clean (same
+one pre-existing unrelated warning, still untouched). Needed a new
+`async-trait` dependency in `siar-messaging`'s own `Cargo.toml`
+(already a workspace dependency, just not previously used by this
+crate) for `#[async_trait] impl Projection for
+ConversationSummaryProjection`. Ran into a real sandbox disk-space
+exhaustion mid-round (`target/debug/incremental` had grown to 1.4 GB
+across this session's many rebuilds) — cleared incremental build
+artifacts, not source; nothing about the actual deliverable was
+affected, but noted here since it's the kind of thing that would look
+like a mysterious build failure without this line explaining it.
+Re-verified zero regressions in every crate depending on
+`siar-event-log` after this change: `siar-crash-recovery` (50/50),
+`siar-dtn-bundle` (43/43), `siar-identity-multidevice` (256/256),
+`siar-blob-manifest` (37/37).
+
+Real, named, still-open gaps: `conversation_summary`'s own state isn't
+durable (in-memory only, same as its checkpoint store) — a restart
+loses it, rebuildable only by a full replay of whatever the
+`EventStore` itself durably kept (which IS durable, via
+`stoolap_store` — only the projection's own materialized view isn't);
+no durable `ProjectionCheckpointStore` exists yet either, following the
+same pattern `stoolap_store` set for `EventStore` itself; identity's
+and files' own event catalogs still have no projection built against
+them; the "read-your-writes" gap named in this module's own doc
+comment (synchronous-call-after, not same-transaction) is real and
+would need a bigger `EventStore::append` redesign to close for good,
+not attempted. Suggested next: either build a durable
+`StoolapCheckpointStore`/durable projection backing (closing the
+"restart loses it" gap for real) or move to Phase 5 (outbox/effects/
+retry/recovery), revisiting the `siar-storage`-outbox architectural
+question named in the previous round's own gap list before building a
+second, possibly-conflicting one.
+
 
 | # | Crate | State |
 |---|---|---|
 | 01 | siar-protocol-ext | ✅ **108/108 — spec complete** (final round: §91-92 reconciled, §93-95 error codes/health/recovery, §96-99 scheduler contract/storage/metrics/capability isolation, §100-105 reconciled with notes, §106 honest 16-item Definition of Done self-audit — 4 genuine gaps named, §107-108 reconciled) |
 | 02 | siar-identity-multidevice | ✅ **204/204 — spec complete** (final round, 2026-09-05: §190-204 — algorithm agility/downgrade protection utilities kept deliberately minimal per spec's own "avoid needless abstraction" caution; a root-key backup envelope that structurally cannot carry plaintext key material; backup-import validation run before any local state is touched; identity-reset/account-deletion presentations with required disclaimer fields; a guarded organization-offboarding state machine that operates only on organization-scoped device ids, never a personal AccountId; multi-tenant-safe composite keys; migration-fixture round-trip tests (honestly incomplete pending §125); and an itemized 21-item Definition-of-Done self-audit — **19/21 fully done, 2 honestly `PartiallyDone`** (no-UI-shipped confirmation prompt; property/integration tests exist but no real fuzz harness). Also fixed a genuinely broken intra-doc link left over from an earlier round, dropping this crate's doc-warning count from 4 to 3. 6 new modules (`algorithm_agility.rs`, `root_key_backup.rs`, `identity_lifecycle.rs`, `migration_fixtures.rs`, `definition_of_done.rs`) plus a `namespace.rs` extension, 20 new tests, 251/251 total, clippy clean, zero regressions. Across all 11 rounds this session: 137 new tests written, zero regressions in siar-routing-policy/siar-crypto at any point, every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1. Real, named, still-open gaps carried forward into future work: §125 schema versioning absent from DeviceCertificate/DeviceDirectory; §164 no cargo-fuzz harness; §191 full cross-version migration tests blocked on §125; `storage::IdentityStore`/`transaction`/all four `client_api` traits have zero real call sites anywhere in this workspace yet; `RootTrustCacheEntry`/`VerifiedContact` overlap not consolidated; §107/§91 have no real BLE/Wi-Fi/NFC transport wiring.) |
 | 03 | siar-routing-policy | ✅ **200/200 — spec complete** (final round, 2026-09-15: §183-200 — §183-184 "Testing Matrix"/"Route Selection Golden Tests": all 5 of the spec's own worked examples transcribed as tests (1 caught a real bug in *this round's own test code* — a stale pre-mutation health snapshot in a stickiness test, fixed), plus 2 combos (BLE-only, Wi-Fi Direct+BLE) with no prior coverage under any framing; §185 "Property Tests" — 2 properties not yet covered under this broader framing (`allow_relay`/`allow_bluetooth` forbidden-transport, and *known* insufficient bandwidth as a genuine hard elimination, not just the existing unknown-bandwidth-isn't-penalized test); §186/§187 "Fuzzing"/"Benchmarking" — real, named gaps (no `cargo-fuzz`, no `criterion`), with 2 targeted NaN-safety tests as a partial substitute for the former; §188 "Scalability" needed zero code (operation-level routing, `RouteCache`, both already true); new `reevaluation.rs` for §189-191 (`quality_change_exceeds_threshold`/`should_reevaluate_file_route`; §191 needed zero code — already `RouteCache`/`RouteHint`); §192-197 "Architecture Reconciliation" added as new lib.rs documentation (module structure, no-UI-deps, `RoutingError`'s 6 variants mapped onto the spec's own suggested 7, no-anyhow, initial-scope/phases all honored); §198 "Definition of Done" — a full, honest self-audit (✅/⚠️/❌ per item, matching specs 01/02's own closing pattern); §199-200 closing documentation; **also found and fixed a real gap**: most of rounds 10-18's public types were never re-exported at the crate root, only rounds 1-9's — fixed with a full pass of `pub use` additions matching the established style. 18 new tests, 263/263 total, clippy/fmt/doc clean (7 broken intra-doc links fixed), zero regressions. Named, still-open gaps carried forward: no fuzz/benchmark harness, DTN delivery-probability computation (representation exists since round 16, computation needs real encounter history this crate has never had), §55 "Mesh Forwarding"'s richer candidate representation (named since round 2), `Destination::Group` resolution (named since round 18), a handful of individual adapter-reporting fields (Bluetooth proximity/paired state, Wi-Fi group/session, LAN interface name). Across all 18 rounds building this crate: round 18 covered §171-182, round 17 covered §160-170, round 16 covered §151-159, round 15 covered §140-150, round 14 covered §128-139, round 13 covered §121-127, round 12 covered §116-120, round 11 covered §108-115, round 10 covered §105-107, rounds 2-9 covered §43-104, round 1 covered §1-42 — every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1, zero regressions in any dependent crate at any point except one one-line fix in round 17) |
-| 04 | siar-event-log | 🟡 ~25/95 (Phases 1-3 complete, first real `append` caller wired into `siar-messaging` 2026-09-19; Phases 4-7 remain) |
+| 04 | siar-event-log | 🟡 ~30/95 (Phases 1-4 complete — projections/checkpoints/read-your-writes real as of 2026-09-19, `conversation_summary` wired into `siar-messaging`; Phases 5-7 remain) |
 | 05 | siar-blob-manifest | ✅ ~23/210 (+ metadata_encryption.rs) |
 | 06 | siar-dtn-bundle | ✅ ~50/192 |
 | 07 | siar-capability | ✅ ~19/164 |
@@ -1300,13 +1401,17 @@ Spec 01 (`siar-protocol-ext`) is complete (108/108). Spec 02
 (`siar-identity-multidevice`) is complete (204/204) as of 2026-09-05.
 Spec 03 (`siar-routing-policy`) is complete (200/200) as of 2026-09-15.
 Spec 04 (`siar-event-log`) is now the active crate in this project's
-explicit priority order — Phase 1 (types/trait/in-memory store), Phase
-2 (the real `stoolap`-backed durable store), Phase 3 (all three named
-domains), and a first real `append` caller (`siar-messaging`) are done
-as of 2026-09-19 (~25/95); continuing with Phase 4 (projections/
-checkpoints/rebuild) or Phase 5 (outbox/effects/retry/recovery) next —
-identity's and files' own event catalogs still have no `append` caller
-either, so wiring one of those is also a reasonable next slice instead. Note there is a real, documented
+explicit priority order — Phases 1-4 (types/trait/in-memory store, the
+real `stoolap`-backed durable store, all three named domains, and now
+projections/checkpoints/read-your-writes with a real
+`conversation_summary` projection wired into `siar-messaging`) are
+done as of 2026-09-19 (~30/95); continuing with a durable
+`ProjectionCheckpointStore` (closing the "restart loses the summary"
+gap) or Phase 5 (outbox/effects/retry/recovery — revisit the
+`siar-storage`-outbox architectural question named in an earlier
+round's gap list first) next. Identity's and files' own event catalogs
+still have no `append` caller or projection either, so wiring one of
+those remains a reasonable smaller next slice instead. Note there is a real, documented
 unresolved reconciliation question between `siar-routing`
 (pre-existing, next.md-era) and `siar-routing-policy` (spec 03's own
 crate) — see that crate's own `lib.rs` for the current state of that

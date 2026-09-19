@@ -21,6 +21,20 @@ impl EventId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+
+    /// Round-trip accessors for a real durable backend (§92 Phase 2):
+    /// a store has to put this id in a TEXT column and read it back —
+    /// `Uuid`'s own `Display`/[`Uuid::parse_str`] string form on the
+    /// caller's side, same convention `siar-domain`'s own
+    /// newtype ids (`DeviceId::as_uuid`/`from_uuid`) already use, kept
+    /// consistent rather than inventing a second one here.
+    pub const fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+
+    pub const fn from_uuid(id: Uuid) -> Self {
+        Self(id)
+    }
 }
 
 impl Default for EventId {
@@ -49,6 +63,14 @@ impl StreamId {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// The other half of [`Self::as_bytes`] — needed by §92 Phase 2's
+    /// real backend, which stores this as hex text (no blob column type
+    /// available — see `stoolap_store`'s own module doc) and has to
+    /// reconstruct the fixed-size array on read.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -58,6 +80,16 @@ pub struct CorrelationId(Uuid);
 impl CorrelationId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+
+    /// See [`EventId::as_uuid`]/[`EventId::from_uuid`] — same reasoning,
+    /// same convention.
+    pub const fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+
+    pub const fn from_uuid(id: Uuid) -> Self {
+        Self(id)
     }
 }
 

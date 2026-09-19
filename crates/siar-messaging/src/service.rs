@@ -3,13 +3,16 @@
 //! multi-device fanout yet (plan.md §124's "Alice ↔ Bob text messaging").
 
 use crate::events::MessagingEvent;
+use crate::projections::ConversationSummary;
+use crate::projections::ConversationSummaryProjection;
 use crate::PeerTicket;
 use siar_crypto::{DeviceIdentity, Session};
 use siar_domain::{
     backoff_millis, with_jitter, AttachmentReference, BlobSize, CallControlEvent, ConversationId,
     DeliveryState, DeviceId, MediaType, MessageContent, MessageId, MessageText,
 };
-use siar_event_log::{append_with_retry, EventOrigin, EventStore};
+use siar_event_log::projection::{InMemoryCheckpointStore, ProjectionRunner};
+use siar_event_log::{append_with_retry, EventOrigin, EventStore, DEFAULT_CATCH_UP_BATCH_SIZE};
 use siar_protocol::v1::{Envelope, EnvelopeKind, CURRENT_VERSION};
 use siar_protocol::{MailboxCheckIn, WireMessage};
 use siar_storage::{BlobRepository, MessageRepository, OutboxRepository, StoredMessage};
@@ -84,6 +87,14 @@ pub struct MessageService {
     /// sites — see [`Self::with_event_log`]'s own doc comment for why
     /// this is optional rather than a required constructor argument.
     event_log: Option<Arc<dyn EventStore + Send + Sync>>,
+    /// §16/§18's own `conversation_summary` worked example — see
+    /// [`Self::with_event_log`] and `crate::projections`'s own doc
+    /// comment. Always present together with `event_log` (both `Some`
+    /// or both `None`); kept as two separate `Option`s rather than one
+    /// `Option<(..., ...)>` only because the query side
+    /// ([`Self::conversation_summary`]) reads just this one field.
+    conversation_summary: Option<Arc<ConversationSummaryProjection>>,
+    summary_checkpoints: Option<Arc<InMemoryCheckpointStore>>,
 }
 
 impl MessageService {
@@ -103,6 +114,8 @@ impl MessageService {
             outbox,
             blobs,
             event_log: None,
+            conversation_summary: None,
+            summary_checkpoints: None,
         }
     }
 
@@ -118,33 +131,78 @@ impl MessageService {
     /// `MessageService` is typically wrapped in an `Arc` immediately
     /// after construction for sharing across async tasks; wiring has
     /// to happen before that `Arc` is taken, not after.
+    ///
+    /// Also wires §16/§18's own `conversation_summary` projection
+    /// (`crate::projections`) automatically — a caller that wants the
+    /// event log at all gets a live, queryable summary view for free,
+    /// with no separate opt-in: see [`Self::conversation_summary`] for
+    /// the query side and `record_messaging_event`'s own doc comment
+    /// for how it stays caught up.
     pub fn with_event_log(mut self, event_log: Arc<dyn EventStore + Send + Sync>) -> Self {
         self.event_log = Some(event_log);
+        self.conversation_summary = Some(Arc::new(ConversationSummaryProjection::new()));
+        self.summary_checkpoints = Some(Arc::new(InMemoryCheckpointStore::new()));
         self
+    }
+
+    /// §18 "read-your-writes", queryable: reflects every real append
+    /// `record_messaging_event` has made so far for this conversation,
+    /// synchronously — no separate background catch-up loop to wait
+    /// on. Returns `None` if [`Self::with_event_log`] was never
+    /// called, same as an unpopulated conversation would.
+    pub fn conversation_summary(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Option<ConversationSummary> {
+        self.conversation_summary
+            .as_ref()
+            .and_then(|projection| projection.get(conversation_id))
     }
 
     /// Records one of `crate::events::MessagingEvent`'s nine §33
     /// variants to the event log, if one is wired
-    /// ([`Self::with_event_log`]). Best-effort: an append failure is
+    /// ([`Self::with_event_log`]), then immediately catches up the
+    /// `conversation_summary` projection against it — §18's own
+    /// "critical projections update ... same transaction as the
+    /// event" relaxed to "synchronously, right after," per
+    /// `siar_event_log::projection`'s own doc comment on what this
+    /// crate's single-process, no-concurrent-writer setting actually
+    /// needs. Both steps are best-effort: a failure at either is
     /// logged and swallowed, never propagated to the caller. That's a
     /// deliberate scope choice, not an oversight — `siar-storage`'s
     /// tables are still this crate's actual system of record (see
     /// `MessageServiceError`'s own variants, none of which are about
-    /// the event log), so a send or receive succeeding or failing
-    /// should not hinge on whether an audit-trail write also landed.
-    /// Making the event log authoritative (so its own failure really
-    /// should fail the caller) is a bigger architectural step — Phase
-    /// 4/5's projections/outbox territory, not this round's.
+    /// the event log or its projections), so a send or receive
+    /// succeeding or failing should not hinge on whether an audit-trail
+    /// write or a read-model refresh also landed. Making either
+    /// authoritative enough that its own failure should fail the
+    /// caller is Phase 5 territory, not this round's.
     async fn record_messaging_event(&self, event: MessagingEvent, origin: EventOrigin) {
         let Some(store) = self.event_log.as_deref() else {
             return;
         };
         let stream_id = event.stream_id();
         let new_event = event.into_new_event(origin);
-        if let Err(e) =
-            append_with_retry(store, stream_id, new_event, EVENT_LOG_APPEND_MAX_ATTEMPTS).await
-        {
-            tracing::warn!(error = %e, "failed to record messaging event to the event log");
+        match append_with_retry(store, stream_id, new_event, EVENT_LOG_APPEND_MAX_ATTEMPTS).await {
+            Ok(_) => {
+                if let (Some(projection), Some(checkpoints)) =
+                    (&self.conversation_summary, &self.summary_checkpoints)
+                {
+                    let runner = ProjectionRunner::new(store, checkpoints.as_ref());
+                    if let Err(e) = runner
+                        .catch_up(projection.as_ref(), DEFAULT_CATCH_UP_BATCH_SIZE)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "failed to catch up the conversation_summary projection"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to record messaging event to the event log");
+            }
         }
     }
 

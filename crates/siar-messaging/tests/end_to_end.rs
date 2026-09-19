@@ -12,7 +12,11 @@ use siar_domain::{
     CallControlEvent, ConversationId, DeliveryState, DeviceId, MediaType, MessageContent,
     MessageText,
 };
-use siar_messaging::{IncomingEvent, MessageService, PeerTicket, StorageBlobStore};
+use siar_event_log::{EventStore, InMemoryEventStore};
+use siar_messaging::{
+    conversation_stream_id, decode_messaging_event, IncomingEvent, MessageService, MessagingEvent,
+    PeerTicket, StorageBlobStore,
+};
 use siar_storage::{
     open_in_memory, BlobRepository, MessageRepository, OutboxRepository, StoolapBlobRepository,
     StoolapMessageRepository, StoolapOutboxRepository,
@@ -33,6 +37,11 @@ struct Node {
     service: MessageService,
     messages: Arc<dyn MessageRepository + Send + Sync>,
     outbox: Arc<dyn OutboxRepository + Send + Sync>,
+    /// Always wired (`MessageService::with_event_log`) — every
+    /// existing test below still passes without ever looking at this,
+    /// confirming the event log is genuinely additive, not something
+    /// existing send/receive behavior secretly depends on.
+    event_log: Arc<InMemoryEventStore>,
     incoming: mpsc::Receiver<siar_transport::IncomingFrame>,
 }
 
@@ -57,6 +66,7 @@ impl Node {
                 .expect("endpoint binds"),
         );
 
+        let event_log = Arc::new(InMemoryEventStore::new());
         let service = MessageService::new(
             device_id,
             identity.try_clone().expect("identity clones"),
@@ -64,7 +74,8 @@ impl Node {
             Arc::clone(&messages),
             Arc::clone(&outbox),
             Arc::clone(&blobs),
-        );
+        )
+        .with_event_log(Arc::clone(&event_log) as Arc<dyn EventStore + Send + Sync>);
 
         Self {
             device_id,
@@ -73,6 +84,7 @@ impl Node {
             service,
             messages,
             outbox,
+            event_log,
             incoming: incoming_rx,
         }
     }
@@ -195,6 +207,106 @@ async fn send_text_delivers_and_the_ack_completes_the_outbox() {
     assert!(
         due.iter().all(|op| op.message_id != sent_id),
         "acked message must not still be due for retry"
+    );
+}
+
+/// The real point of `MessageService::with_event_log`/
+/// `record_messaging_event`: this is the same send→receive→ack flow
+/// as `send_text_delivers_and_the_ack_completes_the_outbox` above, but
+/// asserting on `siar-event-log`'s own per-conversation stream instead
+/// of (only) `siar-storage`'s tables — closing `04-offline-event-log-
+/// architecture.md`'s own previously-named "no real `append` caller
+/// anywhere" gap for real, not just at the unit-test level `events.rs`
+/// already covered.
+#[tokio::test]
+async fn send_text_round_trip_records_the_full_04_event_log_history() {
+    let mut alice = Node::spawn().await;
+    let mut bob = Node::spawn().await;
+    let alice_ticket = alice.ticket();
+    let bob_ticket = bob.ticket();
+    let conversation = ConversationId::new();
+
+    let sent_id = alice
+        .service
+        .send_text(conversation, &bob_ticket, text("event-logged hello"))
+        .await
+        .expect("send_text succeeds");
+
+    // Alice's own stream should already show Created + Queued — both
+    // recorded synchronously inside `send_text`, before any network
+    // round trip happens at all.
+    let alice_stream = conversation_stream_id(conversation);
+    let alice_events_after_send = alice
+        .event_log
+        .read_stream(alice_stream, 0, 10)
+        .await
+        .expect("read_stream succeeds");
+    assert_eq!(
+        alice_events_after_send.len(),
+        2,
+        "MessageCreated + MessageQueued should both be recorded by send_text alone"
+    );
+    let decoded: Vec<MessagingEvent> = alice_events_after_send
+        .iter()
+        .map(|e| decode_messaging_event(&e.envelope.payload).expect("decodes"))
+        .collect();
+    assert!(matches!(decoded[0], MessagingEvent::MessageCreated { .. }));
+    assert!(matches!(decoded[1], MessagingEvent::MessageQueued { .. }));
+
+    // Bob receives it — his own stream (a DIFFERENT `InMemoryEventStore`
+    // instance, per `Node::spawn`) should show MessageReceived.
+    let envelope = bob.recv_envelope().await;
+    bob.service
+        .handle_incoming(&alice_ticket, envelope)
+        .await
+        .expect("handle_incoming succeeds");
+
+    let bob_stream = conversation_stream_id(conversation);
+    let bob_events = bob
+        .event_log
+        .read_stream(bob_stream, 0, 10)
+        .await
+        .expect("read_stream succeeds");
+    assert_eq!(bob_events.len(), 1);
+    let MessagingEvent::MessageReceived {
+        message_id,
+        sender_device,
+        ..
+    } = decode_messaging_event(&bob_events[0].envelope.payload).expect("decodes")
+    else {
+        panic!("expected MessageReceived");
+    };
+    assert_eq!(message_id, sent_id);
+    assert_eq!(sender_device, alice.device_id);
+    assert_eq!(
+        bob_events[0].envelope.origin,
+        siar_event_log::EventOrigin::RemoteDevice(alice.device_id),
+        "the message's own sender is a remote device from Bob's point of view"
+    );
+
+    // The ACK travels back to Alice — her stream should now also show
+    // MessageDelivered, bringing her total to 3.
+    let ack_envelope = alice.recv_envelope().await;
+    alice
+        .service
+        .handle_incoming(&bob_ticket, ack_envelope)
+        .await
+        .expect("processing the ack succeeds");
+
+    let alice_events_final = alice
+        .event_log
+        .read_stream(alice_stream, 0, 10)
+        .await
+        .expect("read_stream succeeds");
+    assert_eq!(alice_events_final.len(), 3);
+    assert!(matches!(
+        decode_messaging_event(&alice_events_final[2].envelope.payload).expect("decodes"),
+        MessagingEvent::MessageDelivered { .. }
+    ));
+    assert_eq!(
+        alice_events_final[2].envelope.origin,
+        siar_event_log::EventOrigin::RemoteDevice(bob.device_id),
+        "the delivery confirmation originated from Bob acking it, not from Alice"
     );
 }
 

@@ -7341,6 +7341,7 @@ dependencies = [
 name = "siar-messaging"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "blake3",
  "iroh",
  "postcard",

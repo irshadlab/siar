@@ -51,6 +51,13 @@
 //! - [`transfer_state`] — §26's named states as a real state machine
 //!   (`TransferState::transition`) that rejects illegal transitions
 //!   instead of a bare enum a caller could set to anything.
+//! - [`events`] — `04-offline-event-log-architecture.md` §34 "File
+//!   Events", §92 Phase 3's third domain (after identity and
+//!   messaging — see that document's own crate for the other two).
+//!   Nine named events, a new [`ids::TransferId`] this module needed
+//!   and didn't have, and the same "construct only, never append"
+//!   split this crate's own state machine already keeps between
+//!   deciding and recording.
 //!
 //! Every module is covered by tests exercising real bytes/hashes/state
 //! transitions/ciphertext — including a tamper-detection test for
@@ -95,6 +102,7 @@
 pub mod chunking;
 pub mod descriptor;
 pub mod encryption;
+pub mod events;
 pub mod ids;
 pub mod limits;
 pub mod manifest;
@@ -109,7 +117,13 @@ pub use descriptor::{
     FileName, FileNameTooLong,
 };
 pub use encryption::{decrypt_blob, encrypt_blob, generate_blob_key, EncryptionError};
-pub use ids::{BlobEncryptionKey, BlobId, ChunkHash, LogicalAttachmentId, ManifestId};
+pub use events::{
+    decode_file_event, transfer_stream_id, FileEvent, EVENT_TYPE_BLOB_VERIFIED,
+    EVENT_TYPE_TRANSFER_ACCEPTED, EVENT_TYPE_TRANSFER_CANCELLED, EVENT_TYPE_TRANSFER_COMPLETED,
+    EVENT_TYPE_TRANSFER_CREATED, EVENT_TYPE_TRANSFER_FAILED, EVENT_TYPE_TRANSFER_PAUSED,
+    EVENT_TYPE_TRANSFER_RESUMED, EVENT_TYPE_TRANSFER_STARTED,
+};
+pub use ids::{BlobEncryptionKey, BlobId, ChunkHash, LogicalAttachmentId, ManifestId, TransferId};
 pub use limits::ManifestLimits;
 pub use manifest::{build_manifest, BlobManifest, ChunkDescriptor, ManifestError};
 pub use metadata_encryption::{decrypt_file_metadata, encrypt_file_metadata};

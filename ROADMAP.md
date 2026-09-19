@@ -1004,13 +1004,99 @@ messaging is the obvious first consumer per §33/§78) or Phase 4/5
 (projections + outbox), rather than jumping straight to Phase 7's
 snapshotting before anything produces enough events to need it.
 
+**siar-event-log / siar-messaging — round 1 of Phase 3, 2026-09-19**:
+answering the standing "phase-wise vs. section-wise" question first —
+this round deliberately kept doing what round 1 of Phase 2 already
+did: implement by the spec's own §92 phase grouping, not by numeric
+section order, then record section coverage in prose afterward for
+audit purposes. Reason: a phase's sections are already the spec's own
+verdict on what constitutes one coherent, shippable unit — Phase 2's
+own list (§11 atomic append, §12 concurrency, §19 backend, §22
+integrity, §57-58 schema/indexes) spans five non-adjacent sections that
+only compile and test together as a whole; section-order would have
+meant landing an `events` table with no transaction wrapping it, or a
+concurrency check with no schema to check against. The cost is that
+"§N done" isn't a running left-to-right counter — mitigated here (as
+last round) by naming exactly which sections each phase actually
+covered.
+
+Phase 3 itself ("messaging, files, identity integration"): identity
+turned out to already be real, done in an earlier session before this
+one (`siar-identity-multidevice::audit_log` — §35's five named events
+plus three extras, 8 `EventTypeId` tags 1-8, full postcard round-trip
+tests) — found, read, and left alone rather than redone. This round
+added the other real gap: §33 Messaging Events, as a new
+`siar-messaging::events` module in the exact same shape (`EventTypeId`
+constants — 100-108, deliberately ranged away from identity's 1-8,
+with an honestly-named gap that nothing enforces that convention
+across crates yet; a `MessagingEvent` enum with all nine named
+variants as their own `V1` schemas per §9, not `siar_storage::
+StoredMessage` reused; `into_new_event`/`decode_messaging_event`
+mirroring `audit_log`'s own `into_new_event`/`decode_audit_payload`).
+One real design difference from identity's version, worth recording:
+`audit_log::IdentityAuditPayload::origin` safely derives
+`LocalDevice`/`System` from the payload alone, because every identity
+operation it covers has exactly one local actor or none; messaging
+can't do that — `MessageReceived` is definitionally about a remote
+peer's message, so `MessagingEvent::into_new_event` takes `origin:
+EventOrigin` as an explicit caller-supplied argument instead of
+inferring it. 6 new tests, 15/15 total in `siar-messaging::events`
+plus the crate's pre-existing 9, clippy clean, fmt clean; the one doc
+warning `cargo doc` reports for this crate (`service.rs`'s own
+`[siar_crypto::mailbox_token::MailboxTokenSecret]` broken link) predates
+this round and is left as-is — not this change's to fix. No crate in
+this workspace currently depends on `siar-messaging`, so no dependent
+regression check was possible or needed. Verified against the actual
+uploaded `Cargo.lock` with rustc 1.91.1.
+
+Real, named, still-open gaps carried forward: §34 File Events (the
+`siar-blob-manifest` equivalent of this round's messaging work — not
+started); no real call site anywhere yet actually calls
+`EventStore::append` with either identity's or messaging's
+constructors — both crates only *construct* `NewEvent`s, matching each
+crate's own stated "policy layer, not I/O layer" design, but that means
+Phase 3's own promise ("integration") is honestly only half done until
+`MessageService`/`GroupService` (which already own `Arc<Database>` /
+transport) actually call `append` from a real send/receive code path;
+no shared cross-crate event-type-id registry (the informal
+"pick-a-block-per-domain" convention two crates now follow, undocumented
+anywhere both of them can see).
+
+**siar-blob-manifest — round 2 of Phase 3, 2026-09-19 (same session)**:
+completed Phase 3's third and last named domain, §34 File Events, in
+the same shape as the other two — new `events.rs`: `EventTypeId`
+200-208 (the third block in the informal per-domain-range convention
+noted above — messaging's own round already named this gap; this round
+doesn't fix it, just doesn't collide with it either), a `FileEvent`
+enum with all nine names from §34 (`TransferCreated` through
+`BlobVerified`), lining up one-for-one with the crate's own
+pre-existing `TransferState`/`TransferEvent` state machine
+(`transfer_state.rs`) without merging into it — deciding a transition
+and recording it stay separate, matching this crate's own established
+"types only, no I/O" scope. One real gap found and fixed while wiring
+this: nothing in the crate could identify *a transfer* — `ManifestId`
+identifies content, not a directed offer of it, and the same manifest
+can legitimately be re-offered as two different transfers — so a new
+`TransferId` newtype was added to `ids.rs` (same shape as
+`ManifestId`/`LogicalAttachmentId`). `BlobVerified` is modeled as a
+verification outcome, not a state-machine state, since
+`verify_complete_blob` can run either before or after a transfer's own
+`Completed` transition. 6 new tests, 37/37 total in the crate; clippy
+clean; fmt clean (one rustfmt diff applied); docs clean, zero warnings.
+Zero regressions in the two real dependents, `siar-crash-recovery`
+(50/50) and `siar-dtn-bundle` (43/43). Phase 3 is now done across all
+three of its named sub-items (§33/§34/§35); the two gaps named above —
+no real `EventStore::append` call site anywhere, no shared event-type
+registry — now apply identically to all three domains, not just
+messaging.
+
 
 | # | Crate | State |
 |---|---|---|
 | 01 | siar-protocol-ext | ✅ **108/108 — spec complete** (final round: §91-92 reconciled, §93-95 error codes/health/recovery, §96-99 scheduler contract/storage/metrics/capability isolation, §100-105 reconciled with notes, §106 honest 16-item Definition of Done self-audit — 4 genuine gaps named, §107-108 reconciled) |
 | 02 | siar-identity-multidevice | ✅ **204/204 — spec complete** (final round, 2026-09-05: §190-204 — algorithm agility/downgrade protection utilities kept deliberately minimal per spec's own "avoid needless abstraction" caution; a root-key backup envelope that structurally cannot carry plaintext key material; backup-import validation run before any local state is touched; identity-reset/account-deletion presentations with required disclaimer fields; a guarded organization-offboarding state machine that operates only on organization-scoped device ids, never a personal AccountId; multi-tenant-safe composite keys; migration-fixture round-trip tests (honestly incomplete pending §125); and an itemized 21-item Definition-of-Done self-audit — **19/21 fully done, 2 honestly `PartiallyDone`** (no-UI-shipped confirmation prompt; property/integration tests exist but no real fuzz harness). Also fixed a genuinely broken intra-doc link left over from an earlier round, dropping this crate's doc-warning count from 4 to 3. 6 new modules (`algorithm_agility.rs`, `root_key_backup.rs`, `identity_lifecycle.rs`, `migration_fixtures.rs`, `definition_of_done.rs`) plus a `namespace.rs` extension, 20 new tests, 251/251 total, clippy clean, zero regressions. Across all 11 rounds this session: 137 new tests written, zero regressions in siar-routing-policy/siar-crypto at any point, every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1. Real, named, still-open gaps carried forward into future work: §125 schema versioning absent from DeviceCertificate/DeviceDirectory; §164 no cargo-fuzz harness; §191 full cross-version migration tests blocked on §125; `storage::IdentityStore`/`transaction`/all four `client_api` traits have zero real call sites anywhere in this workspace yet; `RootTrustCacheEntry`/`VerifiedContact` overlap not consolidated; §107/§91 have no real BLE/Wi-Fi/NFC transport wiring.) |
 | 03 | siar-routing-policy | ✅ **200/200 — spec complete** (final round, 2026-09-15: §183-200 — §183-184 "Testing Matrix"/"Route Selection Golden Tests": all 5 of the spec's own worked examples transcribed as tests (1 caught a real bug in *this round's own test code* — a stale pre-mutation health snapshot in a stickiness test, fixed), plus 2 combos (BLE-only, Wi-Fi Direct+BLE) with no prior coverage under any framing; §185 "Property Tests" — 2 properties not yet covered under this broader framing (`allow_relay`/`allow_bluetooth` forbidden-transport, and *known* insufficient bandwidth as a genuine hard elimination, not just the existing unknown-bandwidth-isn't-penalized test); §186/§187 "Fuzzing"/"Benchmarking" — real, named gaps (no `cargo-fuzz`, no `criterion`), with 2 targeted NaN-safety tests as a partial substitute for the former; §188 "Scalability" needed zero code (operation-level routing, `RouteCache`, both already true); new `reevaluation.rs` for §189-191 (`quality_change_exceeds_threshold`/`should_reevaluate_file_route`; §191 needed zero code — already `RouteCache`/`RouteHint`); §192-197 "Architecture Reconciliation" added as new lib.rs documentation (module structure, no-UI-deps, `RoutingError`'s 6 variants mapped onto the spec's own suggested 7, no-anyhow, initial-scope/phases all honored); §198 "Definition of Done" — a full, honest self-audit (✅/⚠️/❌ per item, matching specs 01/02's own closing pattern); §199-200 closing documentation; **also found and fixed a real gap**: most of rounds 10-18's public types were never re-exported at the crate root, only rounds 1-9's — fixed with a full pass of `pub use` additions matching the established style. 18 new tests, 263/263 total, clippy/fmt/doc clean (7 broken intra-doc links fixed), zero regressions. Named, still-open gaps carried forward: no fuzz/benchmark harness, DTN delivery-probability computation (representation exists since round 16, computation needs real encounter history this crate has never had), §55 "Mesh Forwarding"'s richer candidate representation (named since round 2), `Destination::Group` resolution (named since round 18), a handful of individual adapter-reporting fields (Bluetooth proximity/paired state, Wi-Fi group/session, LAN interface name). Across all 18 rounds building this crate: round 18 covered §171-182, round 17 covered §160-170, round 16 covered §151-159, round 15 covered §140-150, round 14 covered §128-139, round 13 covered §121-127, round 12 covered §116-120, round 11 covered §108-115, round 10 covered §105-107, rounds 2-9 covered §43-104, round 1 covered §1-42 — every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1, zero regressions in any dependent crate at any point except one one-line fix in round 17) |
-| 04 | siar-event-log | 🟡 ~18/95 (Phase 1 + Phase 2 stoolap backend now real — round 1 of Phase 2, 2026-09-19; Phases 3-7 remain) |
+| 04 | siar-event-log | 🟡 ~22/95 (Phase 1 + Phase 2 + Phase 3 all complete — identity/messaging/files event catalogs done 2026-09-19; Phases 4-7 remain) |
 | 05 | siar-blob-manifest | ✅ ~23/210 (+ metadata_encryption.rs) |
 | 06 | siar-dtn-bundle | ✅ ~50/192 |
 | 07 | siar-capability | ✅ ~19/164 |
@@ -1144,11 +1230,12 @@ Spec 01 (`siar-protocol-ext`) is complete (108/108). Spec 02
 (`siar-identity-multidevice`) is complete (204/204) as of 2026-09-05.
 Spec 03 (`siar-routing-policy`) is complete (200/200) as of 2026-09-15.
 Spec 04 (`siar-event-log`) is now the active crate in this project's
-explicit priority order — Phase 1 (types/trait/in-memory store) and
-Phase 2 (the real `stoolap`-backed durable store) are done as of
-2026-09-19 (~18/95); continuing with Phase 3 onward (wiring a real
-domain — messaging is the natural first consumer per §33/§78) or
-Phase 4/5 (projections + outbox) next. Note there is a real, documented
+explicit priority order — Phase 1 (types/trait/in-memory store), Phase
+2 (the real `stoolap`-backed durable store), and Phase 3 (all three
+named domains — identity, messaging, files) are done as of 2026-09-19
+(~22/95); continuing with wiring a real `EventStore::append` call site
+(none of the three domain crates has one yet — all three currently
+only construct events) or Phase 4/5 (projections + outbox) next. Note there is a real, documented
 unresolved reconciliation question between `siar-routing`
 (pre-existing, next.md-era) and `siar-routing-policy` (spec 03's own
 crate) — see that crate's own `lib.rs` for the current state of that

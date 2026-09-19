@@ -7348,6 +7348,7 @@ dependencies = [
  "siar-crypto",
  "siar-crypto-mls",
  "siar-domain",
+ "siar-event-log",
  "siar-protocol",
  "siar-storage",
  "siar-transport",

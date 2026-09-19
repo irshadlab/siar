@@ -7268,9 +7268,11 @@ name = "siar-event-log"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "blake3",
  "serde",
  "siar-domain",
+ "stoolap",
  "thiserror 2.0.19",
  "tokio",
  "uuid",

@@ -58,8 +58,9 @@
 use serde::{Deserialize, Serialize};
 use siar_domain::{ConversationId, DeviceId, MessageId};
 use siar_event_log::envelope::EventOrigin;
-use siar_event_log::ids::{EventId, EventTypeId, StreamId, Timestamp};
+use siar_event_log::ids::{CorrelationId, EventId, EventTypeId, StreamId, Timestamp};
 use siar_event_log::store::NewEvent;
+use thiserror::Error;
 
 /// One stream per conversation — see this module's own doc comment.
 pub fn conversation_stream_id(conversation_id: ConversationId) -> StreamId {
@@ -199,28 +200,83 @@ impl MessagingEvent {
     /// itself a local device, so even that isn't safe to hardcode
     /// either way. `origin` is therefore a real parameter on
     /// [`Self::into_new_event`], not inferred.
-    pub fn into_new_event(self, origin: EventOrigin) -> NewEvent {
+    ///
+    /// §8 "Correlation and Causation": `event_id`, `correlation_id`,
+    /// and `causation_id` are all caller-supplied rather than generated
+    /// in here, unlike `audit_log::IdentityAuditPayload::into_new_event`
+    /// (which generates its own `EventId` and never sets either id,
+    /// since a single identity operation has no lifecycle to
+    /// correlate). A message's own lifecycle
+    /// (`MessageCreated`→`MessageQueued`→...→`MessageDelivered`) spans
+    /// several calls to this method over time, so only the caller —
+    /// `service.rs`'s own `MessageCorrelation` registry — can know
+    /// which `EventId` to mint next and which earlier one caused it;
+    /// see that type's own doc comment for the real mechanism.
+    pub fn into_new_event(
+        self,
+        event_id: EventId,
+        origin: EventOrigin,
+        correlation_id: Option<CorrelationId>,
+        causation_id: Option<EventId>,
+    ) -> NewEvent {
         let event_type = self.event_type();
         let payload =
             postcard::to_allocvec(&self).expect("MessagingEvent always postcard-serializes");
         NewEvent {
-            event_id: EventId::new(),
+            event_id,
             event_type,
-            schema_version: 1,
+            schema_version: CURRENT_MESSAGING_EVENT_SCHEMA_VERSION,
             created_at: Timestamp::now(),
             origin,
-            correlation_id: None,
-            causation_id: None,
+            correlation_id,
+            causation_id,
             payload,
         }
     }
 }
 
+/// §9 "Versioned Event Schemas": the schema version [`NewEvent`]
+/// carries alongside the payload bytes, not a magic number repeated at
+/// every call site. Bump this, and add a real `V2` decode branch to
+/// [`decode_messaging_event`] below, the day any of this module's nine
+/// variants' fields actually change shape — not attempted here since
+/// nothing has yet.
+pub const CURRENT_MESSAGING_EVENT_SCHEMA_VERSION: u16 = 1;
+
+/// §9's own read side of "never permanently serialize current domain
+/// structs" / "do not silently reinterpret old bytes using changed
+/// Rust structs": [`decode_messaging_event`] takes the STORED
+/// `schema_version` as a real parameter and checks it before trusting
+/// the bytes at all, rather than blindly running `postcard::from_bytes`
+/// against whatever `MessagingEvent`'s CURRENT Rust shape happens to
+/// be — which is exactly the anti-pattern §9 names, and is what this
+/// function used to do before this fix (`postcard`'s own enum
+/// encoding is positional/discriminant-based, so adding, removing, or
+/// reordering a variant silently reinterprets old bytes as the wrong
+/// variant instead of failing loudly).
+#[derive(Debug, Error)]
+pub enum MessagingEventDecodeError {
+    #[error("unsupported messaging event schema version {0} (highest known: {CURRENT_MESSAGING_EVENT_SCHEMA_VERSION})")]
+    UnsupportedVersion(u16),
+    #[error("payload did not decode as a valid messaging event: {0}")]
+    Malformed(#[from] postcard::Error),
+}
+
 /// The read-side counterpart to [`MessagingEvent::into_new_event`] —
 /// same role `audit_log::decode_audit_payload` plays for identity
-/// events.
-pub fn decode_messaging_event(payload: &[u8]) -> Result<MessagingEvent, postcard::Error> {
-    postcard::from_bytes(payload)
+/// events. `schema_version` should come from the same
+/// [`siar_event_log::envelope::EventEnvelope::schema_version`] the
+/// payload itself was read alongside — see
+/// [`MessagingEventDecodeError`]'s own doc comment for why this isn't
+/// just `decode_messaging_event(payload)` anymore.
+pub fn decode_messaging_event(
+    schema_version: u16,
+    payload: &[u8],
+) -> Result<MessagingEvent, MessagingEventDecodeError> {
+    match schema_version {
+        1 => Ok(postcard::from_bytes(payload)?),
+        other => Err(MessagingEventDecodeError::UnsupportedVersion(other)),
+    }
 }
 
 #[cfg(test)]
@@ -260,13 +316,16 @@ mod tests {
         };
         assert_eq!(event.stream_id(), conversation_stream_id(conversation_id));
 
-        let new_event = event
-            .clone()
-            .into_new_event(EventOrigin::LocalDevice(sender_device));
+        let new_event = event.clone().into_new_event(
+            EventId::new(),
+            EventOrigin::LocalDevice(sender_device),
+            None,
+            None,
+        );
         assert_eq!(new_event.event_type, EVENT_TYPE_MESSAGE_CREATED);
         assert_eq!(new_event.origin, EventOrigin::LocalDevice(sender_device));
 
-        let decoded = decode_messaging_event(&new_event.payload).unwrap();
+        let decoded = decode_messaging_event(new_event.schema_version, &new_event.payload).unwrap();
         assert_eq!(decoded, event);
     }
 
@@ -278,7 +337,12 @@ mod tests {
             message_id,
             sender_device,
         };
-        let new_event = event.into_new_event(EventOrigin::RemoteDevice(sender_device));
+        let new_event = event.into_new_event(
+            EventId::new(),
+            EventOrigin::RemoteDevice(sender_device),
+            None,
+            None,
+        );
         assert_eq!(new_event.origin, EventOrigin::RemoteDevice(sender_device));
         assert_eq!(new_event.event_type, EVENT_TYPE_MESSAGE_RECEIVED);
     }
@@ -348,11 +412,77 @@ mod tests {
         ];
         for event in events {
             assert_eq!(event.conversation_id(), conversation_id);
-            let new_event = event
-                .clone()
-                .into_new_event(EventOrigin::LocalDevice(device));
-            let decoded = decode_messaging_event(&new_event.payload).unwrap();
+            let new_event = event.clone().into_new_event(
+                EventId::new(),
+                EventOrigin::LocalDevice(device),
+                None,
+                None,
+            );
+            let decoded =
+                decode_messaging_event(new_event.schema_version, &new_event.payload).unwrap();
             assert_eq!(decoded, event);
         }
+    }
+
+    #[test]
+    fn decoding_rejects_an_unsupported_schema_version() {
+        let event = MessagingEvent::MessageQueued {
+            conversation_id: ConversationId::new(),
+            message_id: MessageId::new(),
+        };
+        let new_event = event.into_new_event(
+            EventId::new(),
+            EventOrigin::LocalDevice(DeviceId::new()),
+            None,
+            None,
+        );
+
+        // §9's own worked example, made real: the CURRENT
+        // `MessagingEvent` shape can decode this payload just fine —
+        // this test asserts the version GATE rejects it anyway when
+        // told the payload came from a schema version this module
+        // doesn't recognize, rather than trusting that the bytes
+        // happen to still parse.
+        let result = decode_messaging_event(99, &new_event.payload);
+        assert!(matches!(
+            result,
+            Err(MessagingEventDecodeError::UnsupportedVersion(99))
+        ));
+    }
+
+    #[test]
+    fn correlation_and_causation_round_trip_through_a_new_event() {
+        let (conversation_id, message_id, device) = ids();
+        let created_id = EventId::new();
+        let correlation_id = CorrelationId::new();
+        let created = MessagingEvent::MessageCreated {
+            conversation_id,
+            message_id,
+            sender_device: device,
+            sequence: 1,
+            ciphertext: vec![],
+        }
+        .into_new_event(
+            created_id,
+            EventOrigin::LocalDevice(device),
+            Some(correlation_id),
+            None,
+        );
+        assert_eq!(created.event_id, created_id);
+        assert_eq!(created.correlation_id, Some(correlation_id));
+        assert_eq!(created.causation_id, None);
+
+        let queued = MessagingEvent::MessageQueued {
+            conversation_id,
+            message_id,
+        }
+        .into_new_event(
+            EventId::new(),
+            EventOrigin::LocalDevice(device),
+            Some(correlation_id),
+            Some(created_id),
+        );
+        assert_eq!(queued.correlation_id, Some(correlation_id));
+        assert_eq!(queued.causation_id, Some(created_id));
     }
 }

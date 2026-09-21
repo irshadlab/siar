@@ -248,7 +248,9 @@ async fn send_text_round_trip_records_the_full_04_event_log_history() {
     );
     let decoded: Vec<MessagingEvent> = alice_events_after_send
         .iter()
-        .map(|e| decode_messaging_event(&e.envelope.payload).expect("decodes"))
+        .map(|e| {
+            decode_messaging_event(e.envelope.schema_version, &e.envelope.payload).expect("decodes")
+        })
         .collect();
     assert!(matches!(decoded[0], MessagingEvent::MessageCreated { .. }));
     assert!(matches!(decoded[1], MessagingEvent::MessageQueued { .. }));
@@ -272,7 +274,11 @@ async fn send_text_round_trip_records_the_full_04_event_log_history() {
         message_id,
         sender_device,
         ..
-    } = decode_messaging_event(&bob_events[0].envelope.payload).expect("decodes")
+    } = decode_messaging_event(
+        bob_events[0].envelope.schema_version,
+        &bob_events[0].envelope.payload,
+    )
+    .expect("decodes")
     else {
         panic!("expected MessageReceived");
     };
@@ -300,7 +306,11 @@ async fn send_text_round_trip_records_the_full_04_event_log_history() {
         .expect("read_stream succeeds");
     assert_eq!(alice_events_final.len(), 3);
     assert!(matches!(
-        decode_messaging_event(&alice_events_final[2].envelope.payload).expect("decodes"),
+        decode_messaging_event(
+            alice_events_final[2].envelope.schema_version,
+            &alice_events_final[2].envelope.payload
+        )
+        .expect("decodes"),
         MessagingEvent::MessageDelivered { .. }
     ));
     assert_eq!(
@@ -701,4 +711,101 @@ async fn send_text_anon_round_trips_through_the_relay_deposit() {
         panic!("expected Text content");
     };
     assert_eq!(received.as_str(), "via relay");
+}
+
+/// §14 "Transactional Outbox": "If the process dies, the outbox still
+/// exists" — the outbox is the actual system of record for send/retry,
+/// the event log is additive (see `MessageService::record_messaging_
+/// event`'s own doc comment). This test makes that real: an
+/// `EventStore` that fails on every single call must not stop
+/// `send_text` from persisting the message, enqueuing it in the real
+/// outbox, or returning `Ok`. This is the honest, achievable half of
+/// §14 for this workspace right now — `siar-storage`'s outbox and
+/// `siar-event-log`'s own store are two separate `stoolap::Database`
+/// instances (see `siar_event_log::stoolap_store`'s own doc comment),
+/// so true single-transaction atomicity across both (§14's own
+/// "MessageQueued, OutboxOperation, message projection, conversation
+/// summary" all in one commit) isn't attempted — only that a failure
+/// in one doesn't take down the other.
+struct AlwaysFailingEventStore;
+
+#[async_trait::async_trait]
+impl siar_event_log::EventStore for AlwaysFailingEventStore {
+    async fn append(
+        &self,
+        _request: siar_event_log::AppendRequest,
+    ) -> Result<siar_event_log::AppendResult, siar_event_log::EventStoreError> {
+        Err(siar_event_log::EventStoreError::Backend(
+            "simulated event log failure".to_string(),
+        ))
+    }
+
+    async fn read_stream(
+        &self,
+        _stream: siar_event_log::StreamId,
+        _from_version: u64,
+        _limit: usize,
+    ) -> Result<Vec<siar_event_log::StoredEvent>, siar_event_log::EventStoreError> {
+        Err(siar_event_log::EventStoreError::Backend(
+            "simulated event log failure".to_string(),
+        ))
+    }
+
+    async fn read_log(
+        &self,
+        _from_offset: siar_event_log::LocalLogOffset,
+        _limit: usize,
+    ) -> Result<Vec<siar_event_log::StoredEvent>, siar_event_log::EventStoreError> {
+        Err(siar_event_log::EventStoreError::Backend(
+            "simulated event log failure".to_string(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn send_text_survives_a_completely_broken_event_log() {
+    let alice = Node::spawn().await;
+    let bob = Node::spawn().await;
+    let bob_ticket = bob.ticket();
+    let conversation = ConversationId::new();
+
+    // Rebuild Alice's own service against the SAME real repositories
+    // and endpoint `Node::spawn` already set up, but with an
+    // `EventStore` that fails on every call — proving the failure
+    // mode is really independent of `siar-storage`, not just untested.
+    // `Node` doesn't keep its own `blobs` repository around (nothing
+    // else needs it post-construction) — a fresh one is fine here
+    // since this test never touches attachments.
+    let blobs: Arc<dyn BlobRepository + Send + Sync> = Arc::new(StoolapBlobRepository::new(
+        open_in_memory().expect("in-memory db opens"),
+    ));
+    let broken_service = MessageService::new(
+        alice.device_id,
+        alice.identity.try_clone().expect("identity clones"),
+        Arc::clone(&alice.endpoint),
+        Arc::clone(&alice.messages),
+        Arc::clone(&alice.outbox),
+        blobs,
+    )
+    .with_event_log(Arc::new(AlwaysFailingEventStore) as Arc<dyn EventStore + Send + Sync>);
+
+    let message_id = broken_service
+        .send_text(conversation, &bob_ticket, text("still works"))
+        .await
+        .expect("send_text must succeed even though the event log always fails");
+
+    let stored = alice
+        .messages
+        .get(message_id)
+        .expect("lookup succeeds")
+        .expect("the message was really persisted via siar-storage's own outbox");
+    assert_eq!(stored.conversation_id, conversation);
+
+    // §18's own read-your-writes summary is the one thing that's
+    // allowed to be missing here — it lives entirely inside the event
+    // log this service was built to fail.
+    assert!(
+        broken_service.conversation_summary(conversation).is_none(),
+        "no summary can exist when every append to back it failed"
+    );
 }

@@ -919,10 +919,10 @@ pub use audit_export::{AuditDeviceRow, AuditExport};
 pub use audit_log::{
     decode_audit_payload, device_linked_event, device_revoked_event, device_rotated_event,
     device_suspended_event, fork_detected_event, identity_stream_id, is_audited_status,
-    recovery_used_event, revocation_verified_event, root_rotated_event, IdentityAuditPayload,
-    EVENT_TYPE_DEVICE_LINKED, EVENT_TYPE_DEVICE_REVOKED, EVENT_TYPE_DEVICE_ROTATED,
-    EVENT_TYPE_DEVICE_SUSPENDED, EVENT_TYPE_FORK_DETECTED, EVENT_TYPE_RECOVERY_USED,
-    EVENT_TYPE_REVOCATION_VERIFIED, EVENT_TYPE_ROOT_ROTATED,
+    recovery_used_event, revocation_verified_event, root_rotated_event, AuditPayloadDecodeError,
+    IdentityAuditPayload, EVENT_TYPE_DEVICE_LINKED, EVENT_TYPE_DEVICE_REVOKED,
+    EVENT_TYPE_DEVICE_ROTATED, EVENT_TYPE_DEVICE_SUSPENDED, EVENT_TYPE_FORK_DETECTED,
+    EVENT_TYPE_RECOVERY_USED, EVENT_TYPE_REVOCATION_VERIFIED, EVENT_TYPE_ROOT_ROTATED,
 };
 pub use call_integration::{CallRingState, InvalidCallRingTransition};
 pub use capability::DeviceCapabilitySet;

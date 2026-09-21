@@ -1261,13 +1261,221 @@ retry/recovery), revisiting the `siar-storage`-outbox architectural
 question named in the previous round's own gap list before building a
 second, possibly-conflicting one.
 
+**siar-messaging — a section-wise audit pass over spec 04 §5-15,
+2026-09-19 (same session, user's own explicit request this round: read
+sections 5-15 in order, implement whatever's genuinely missing, leave
+whatever's already done, rather than continuing strictly phase by
+phase)**: this pass is worth recording as its own methodology data
+point, not just its findings. §5 (streams), §6 (local offset), §7
+(event origin), §10 (append-only), §11-12 (atomic append/concurrency),
+§13 (local-first ordering), and §15 (log isn't a job queue) were ALL
+already satisfied — most as a side effect of Phase 1/2 work done
+before "Phase" was even the organizing word for it. Left alone, per the
+user's own instruction, except for adding an explicit §13 confirmation
+this round (`send_text`'s existing enqueue → record-event →
+network-send ordering already matched §13's own diagram; it just
+wasn't named as such anywhere in the code — now it is, in a comment,
+with no logic changed). That leaves exactly two sections where reading
+the spec's own text line-by-line surfaced something phase-grouping had
+genuinely walked past:
+
+§8 "Correlation and Causation" — `EventEnvelope.correlation_id`/
+`causation_id` existed as fields since Phase 1 but were hardcoded to
+`None` at literally every call site in every domain crate; the feature
+existed in the type system and nowhere else. Built a real mechanism:
+`MessageCorrelation` (a new private struct in `service.rs`) — one row
+per `MessageId`, tracking the shared `CorrelationId` for that message's
+whole lifecycle and the `EventId` of whichever event was most recently
+recorded for it, so the next one's own `causation_id` has something
+real to point at. `MessagingEvent::into_new_event`'s signature changed
+to take `event_id`/`correlation_id`/`causation_id` as real parameters
+instead of generating an `EventId` internally and hardcoding the other
+two to `None` — a deliberate breaking change to this crate's own
+internal API (nothing outside this crate calls it), fixed at all
+call sites in the same round (both `events.rs`'s own unit tests and
+`projections.rs`'s). `send_text` now starts a correlation chain at
+`MessageCreated` and continues it at `MessageQueued` (whose
+`causation_id` is `MessageCreated`'s real `EventId`); `handle_incoming`
+starts a fresh chain at `MessageReceived` (nothing preceded it locally)
+and continues the ORIGINAL send-side chain at `MessageDelivered` by
+looking `acked_message` up in the same registry. Named honestly, in
+the registry's own doc comment: in-memory only, so a process restart
+between `send_text` and a later `DeliveryAck` for the same message
+loses the chain — `MessageDelivered` then gets `None`/`None` rather
+than a wrong link, which is the correct degradation, not a bug, but is
+real and worth knowing.
+
+§9 "Versioned Event Schemas" — found a real latent bug, not just a gap:
+`decode_messaging_event` (and, unfixed this round, `siar-blob-manifest`
+and `siar-identity-multidevice`'s own equivalents) ran
+`postcard::from_bytes` straight against the payload with zero regard
+for the STORED `schema_version` sitting right next to it in the
+envelope — exactly the anti-pattern §9 names by name ("do not silently
+reinterpret old bytes using changed Rust structs"), since postcard's
+own enum encoding is positional/discriminant-based: adding, removing,
+or reordering a variant in `MessagingEvent` would have silently
+decoded old rows as the wrong variant instead of failing loudly. Fixed
+for messaging (files/identity have the identical bug, named as an open
+gap below — not fixed this round, this pass stayed inside `siar-
+messaging` as the one crate with an actual multi-event workflow to
+test correlation against): `decode_messaging_event` now takes
+`schema_version: u16` as a real parameter, matches on it explicitly
+(`1 => decode`, anything else → `MessagingEventDecodeError::
+UnsupportedVersion`), and a new `CURRENT_MESSAGING_EVENT_SCHEMA_VERSION`
+constant replaces the magic `1` `into_new_event` used to write. New
+test asserts a fabricated "future" schema version is rejected even
+though the CURRENT struct shape could easily have decoded those exact
+bytes — proving the gate actually gates, not just that decoding still
+works.
+
+Also closed, as originally planned but not reached last round: a real
+§14 "Transactional Outbox" resilience test (`send_text_survives_a_
+completely_broken_event_log`) — an `EventStore` that fails on literally
+every call (`AlwaysFailingEventStore`), wired into a fresh
+`MessageService` built from the SAME real `siar-storage` repositories
+an existing `Node` already set up, proving `send_text` still persists
+the message, still returns `Ok`, and only `conversation_summary`
+(which lives entirely inside the failing store) comes back empty. This
+is the honest, achievable half of §14 for this workspace: real
+single-transaction atomicity across `siar-storage`'s outbox and
+`siar-event-log`'s own store isn't attempted (they're two separate
+`stoolap::Database` instances — see `stoolap_store`'s own doc comment),
+only that a total failure in one doesn't take down the other.
+
+9 new/changed tests total (2 correlation, 1 schema-rejection, 1 outbox
+resilience, plus fixing 5 existing call sites for the new
+`into_new_event`/`decode_messaging_event` signatures) — 34/34 in
+`siar-messaging` (21 unit + 13 integration), clippy clean, fmt clean,
+docs clean (same one pre-existing unrelated warning, still untouched).
+Re-verified `siar-event-log` itself is unaffected (27/27, correctly,
+since every change this round was internal to `siar-messaging`) and
+zero regressions in the crates depending on `siar-event-log`:
+`siar-crash-recovery` (50/50), `siar-dtn-bundle` (43/43),
+`siar-identity-multidevice` (256/256), `siar-blob-manifest` (37/37). No
+other spec (01/02/03) needed touching this round — checked, and none
+of this pass's two real gaps (§8, §9) reach outside `siar-event-log`/
+`siar-messaging`'s own territory.
+
+Real, named, still-open gaps: `siar-blob-manifest::decode_file_event`
+and `siar-identity-multidevice::decode_audit_payload` have the
+identical §9 schema-version bug `decode_messaging_event` just had —
+found, not fixed, this round (scope stayed inside messaging, the one
+crate with a real workflow to prove correlation against); §14's real
+architectural gap (two separate databases, no cross-store atomicity)
+remains exactly as named last round, now with a test proving the
+practical consequence is contained rather than just asserting it in
+prose. Suggested next: apply the same §9 fix to the other two domain
+crates (small, mechanical, now that the pattern is proven), or return
+to Phase 5/durable-checkpoint work named at the end of the previous
+round.
+
+**siar-blob-manifest / siar-identity-multidevice — closing the §9 gap
+everywhere, 2026-09-19 (same session)**: the mechanical follow-through
+named at the end of the previous round. Same fix, same shape, in both
+remaining domain crates: `decode_file_event` and `decode_audit_payload`
+now take `schema_version: u16` as a real parameter and reject anything
+they don't recognize (`FileEventDecodeError`/`AuditPayloadDecodeError`,
+both `UnsupportedVersion`/`Malformed`) instead of trusting the current
+Rust shape unconditionally; `into_new_event` in both now writes a real
+named constant (`CURRENT_FILE_EVENT_SCHEMA_VERSION`/
+`CURRENT_IDENTITY_AUDIT_SCHEMA_VERSION`) instead of a bare `1`. Neither
+crate's `into_new_event` gained §8 correlation/causation wiring —
+deliberately: neither has a real multi-event workflow with an actual
+`EventStore::append` caller yet (per each crate's own `lib.rs`/module
+doc), so there's nothing real to correlate against; building that
+speculatively, ahead of a caller, was named explicitly in
+`siar_blob_manifest::events`'s own new doc comment as future work once
+one exists, not attempted here. One new rejection test per crate,
+matching `siar_messaging::events`'s own. 38/38 in `siar-blob-manifest`
+(1 new), 257/257 in `siar-identity-multidevice` (1 new), clippy clean
+in both, fmt clean in both (no diff on `--check` in either — both
+edits were already formatted correctly on the first pass), docs clean for blob-manifest; identity-multidevice shows
+3 pre-existing unrelated warnings in `directory.rs`/`recovery.rs`/
+`state_transport.rs` (none in `audit_log.rs`, none introduced this
+round). Checked both crates' real dependents: `siar-crypto` (68/68)
+and `siar-routing-policy` (285/285) for identity-multidevice;
+`siar-crash-recovery` (50/50) and `siar-dtn-bundle` (43/43) for
+blob-manifest — zero regressions anywhere. Also re-confirmed
+`siar-messaging`/`siar-event-log` themselves are unaffected (21+13/21+13
+and 27/27 respectively), since nothing in this round touched either.
+Hit the same disk-space wall as two rounds ago mid-session (`target/`
+had regrown past 15 GB across this long session's many separate crate
+builds) — this time a plain `rm -rf target/debug/incremental` wasn't
+enough, so a full `cargo clean` was needed, trading a slower first
+rebuild for headroom; nothing about any deliverable was affected.
+
+§9 "Versioned Event Schemas" is now consistently handled everywhere
+it applies in this workspace — all three domain event catalogs
+(messaging, files, identity) reject an unrecognized schema version
+instead of silently reinterpreting bytes. Real, named, still-open
+gaps, unchanged from before this round: §8 correlation/causation only
+exists in `siar-messaging` (the one crate with a real workflow to
+demonstrate it on); §14's cross-database atomicity gap; `stoolap_store`
+itself still has no schema-version column on its own SQL tables (a
+different, lower-level versioning question than §9's payload-level
+one, named back in the very first Phase 2 round and still open).
+
+**siar-event-log — durable checkpoint storage, 2026-09-19 (same
+session, Claude's own choice of the two options offered at the end of
+the previous round)**: new `stoolap_checkpoint_store.rs` —
+`StoolapCheckpointStore`, the durable counterpart to
+`projection::InMemoryCheckpointStore`, same `stoolap`-backed pattern
+`stoolap_store::StoolapEventStore` already established for
+`EventStore` itself (a `projection_checkpoints` table, `open`/
+`open_in_memory` constructors, `DELETE`+`INSERT` rather than leaning on
+`stoolap`'s own `UPDATE`/upsert support — same reasoning
+`stoolap_store::append`'s own stream-head handling already gives).
+Built ahead of any caller that actually needs it: every real
+`Projection` in this workspace so far
+(`siar_messaging::conversation_summary`) is itself in-memory, so
+nothing currently NEEDS a durable checkpoint — the module's own doc
+comment names why this was still worth building now rather than
+waiting: pairing a durable materialized view with an in-memory
+checkpoint would be actively wrong (a restart would resume "from where
+we left off" against state that's actually still thousands of events
+stale, silently skipping the gap rather than either replaying or
+genuinely resuming), so checkpoint durability needs to exist BEFORE the
+first durable projection is built, not after — this is that
+prerequisite, not a premature optimization. One real design note
+worth recording: `ProjectionId` wraps a `&'static str` (a deliberate
+Phase 4 choice — real projection ids are always compile-time
+constants, so no allocation needed for the in-memory case), which
+means `load` can't reconstruct a `ProjectionId` from the TEXT column
+it reads back without leaking memory for it — resolved by always
+constructing the returned `ProjectionCheckpoint` from the CALLER's own
+already-`'static` `projection_id` argument, using the column only to
+verify the row exists, never to manufacture a new id. 5 new tests
+(round trip, overwrite-not-duplicate — verified with a raw `COUNT(*)`
+against the table, not just trusting `load`'s own unique-indexed
+query, load of an unknown id, no cross-contamination between ids, and
+a real close-and-reopen-the-same-file durability test matching
+`stoolap_store`'s own) — 32/32 total in `siar-event-log`, clippy/fmt/
+docs clean. Re-verified zero regressions in every crate touching
+`siar-event-log` either directly or transitively:
+`siar-crash-recovery` (50/50), `siar-dtn-bundle` (43/43),
+`siar-identity-multidevice` (257/257), `siar-blob-manifest` (38/38),
+`siar-messaging` (34/34, 21 unit + 13 integration).
+
+Real, named, still-open gaps: no durable `Projection` implementation
+exists yet to actually pair with this new store (it remains untested
+against a real caller, only against direct unit tests of itself);
+`stoolap_checkpoint_store`'s own `CREATE TABLE IF NOT EXISTS` has the
+same no-schema-version-column gap `stoolap_store` already has, for the
+same reason (not attempted at either layer yet). Suggested next: Phase
+5 (revisit the `siar-storage`-outbox architectural question first,
+per every previous round's own note) is now the largest remaining
+piece of Phase 1-4-adjacent work; alternatively, a durable
+`ConversationSummaryProjection` backed by a real `stoolap` table would
+be the first real caller for this round's own new store, closing that
+gap concretely rather than leaving it proven only in isolation.
+
 
 | # | Crate | State |
 |---|---|---|
 | 01 | siar-protocol-ext | ✅ **108/108 — spec complete** (final round: §91-92 reconciled, §93-95 error codes/health/recovery, §96-99 scheduler contract/storage/metrics/capability isolation, §100-105 reconciled with notes, §106 honest 16-item Definition of Done self-audit — 4 genuine gaps named, §107-108 reconciled) |
 | 02 | siar-identity-multidevice | ✅ **204/204 — spec complete** (final round, 2026-09-05: §190-204 — algorithm agility/downgrade protection utilities kept deliberately minimal per spec's own "avoid needless abstraction" caution; a root-key backup envelope that structurally cannot carry plaintext key material; backup-import validation run before any local state is touched; identity-reset/account-deletion presentations with required disclaimer fields; a guarded organization-offboarding state machine that operates only on organization-scoped device ids, never a personal AccountId; multi-tenant-safe composite keys; migration-fixture round-trip tests (honestly incomplete pending §125); and an itemized 21-item Definition-of-Done self-audit — **19/21 fully done, 2 honestly `PartiallyDone`** (no-UI-shipped confirmation prompt; property/integration tests exist but no real fuzz harness). Also fixed a genuinely broken intra-doc link left over from an earlier round, dropping this crate's doc-warning count from 4 to 3. 6 new modules (`algorithm_agility.rs`, `root_key_backup.rs`, `identity_lifecycle.rs`, `migration_fixtures.rs`, `definition_of_done.rs`) plus a `namespace.rs` extension, 20 new tests, 251/251 total, clippy clean, zero regressions. Across all 11 rounds this session: 137 new tests written, zero regressions in siar-routing-policy/siar-crypto at any point, every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1. Real, named, still-open gaps carried forward into future work: §125 schema versioning absent from DeviceCertificate/DeviceDirectory; §164 no cargo-fuzz harness; §191 full cross-version migration tests blocked on §125; `storage::IdentityStore`/`transaction`/all four `client_api` traits have zero real call sites anywhere in this workspace yet; `RootTrustCacheEntry`/`VerifiedContact` overlap not consolidated; §107/§91 have no real BLE/Wi-Fi/NFC transport wiring.) |
 | 03 | siar-routing-policy | ✅ **200/200 — spec complete** (final round, 2026-09-15: §183-200 — §183-184 "Testing Matrix"/"Route Selection Golden Tests": all 5 of the spec's own worked examples transcribed as tests (1 caught a real bug in *this round's own test code* — a stale pre-mutation health snapshot in a stickiness test, fixed), plus 2 combos (BLE-only, Wi-Fi Direct+BLE) with no prior coverage under any framing; §185 "Property Tests" — 2 properties not yet covered under this broader framing (`allow_relay`/`allow_bluetooth` forbidden-transport, and *known* insufficient bandwidth as a genuine hard elimination, not just the existing unknown-bandwidth-isn't-penalized test); §186/§187 "Fuzzing"/"Benchmarking" — real, named gaps (no `cargo-fuzz`, no `criterion`), with 2 targeted NaN-safety tests as a partial substitute for the former; §188 "Scalability" needed zero code (operation-level routing, `RouteCache`, both already true); new `reevaluation.rs` for §189-191 (`quality_change_exceeds_threshold`/`should_reevaluate_file_route`; §191 needed zero code — already `RouteCache`/`RouteHint`); §192-197 "Architecture Reconciliation" added as new lib.rs documentation (module structure, no-UI-deps, `RoutingError`'s 6 variants mapped onto the spec's own suggested 7, no-anyhow, initial-scope/phases all honored); §198 "Definition of Done" — a full, honest self-audit (✅/⚠️/❌ per item, matching specs 01/02's own closing pattern); §199-200 closing documentation; **also found and fixed a real gap**: most of rounds 10-18's public types were never re-exported at the crate root, only rounds 1-9's — fixed with a full pass of `pub use` additions matching the established style. 18 new tests, 263/263 total, clippy/fmt/doc clean (7 broken intra-doc links fixed), zero regressions. Named, still-open gaps carried forward: no fuzz/benchmark harness, DTN delivery-probability computation (representation exists since round 16, computation needs real encounter history this crate has never had), §55 "Mesh Forwarding"'s richer candidate representation (named since round 2), `Destination::Group` resolution (named since round 18), a handful of individual adapter-reporting fields (Bluetooth proximity/paired state, Wi-Fi group/session, LAN interface name). Across all 18 rounds building this crate: round 18 covered §171-182, round 17 covered §160-170, round 16 covered §151-159, round 15 covered §140-150, round 14 covered §128-139, round 13 covered §121-127, round 12 covered §116-120, round 11 covered §108-115, round 10 covered §105-107, rounds 2-9 covered §43-104, round 1 covered §1-42 — every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1, zero regressions in any dependent crate at any point except one one-line fix in round 17) |
-| 04 | siar-event-log | 🟡 ~30/95 (Phases 1-4 complete — projections/checkpoints/read-your-writes real as of 2026-09-19, `conversation_summary` wired into `siar-messaging`; Phases 5-7 remain) |
+| 04 | siar-event-log | 🟡 ~35/95 (Phases 1-4 complete + durable `StoolapCheckpointStore` as of 2026-09-19, built ahead of a durable projection caller; Phase 5-7 remain) |
 | 05 | siar-blob-manifest | ✅ ~23/210 (+ metadata_encryption.rs) |
 | 06 | siar-dtn-bundle | ✅ ~50/192 |
 | 07 | siar-capability | ✅ ~19/164 |
@@ -1401,17 +1609,13 @@ Spec 01 (`siar-protocol-ext`) is complete (108/108). Spec 02
 (`siar-identity-multidevice`) is complete (204/204) as of 2026-09-05.
 Spec 03 (`siar-routing-policy`) is complete (200/200) as of 2026-09-15.
 Spec 04 (`siar-event-log`) is now the active crate in this project's
-explicit priority order — Phases 1-4 (types/trait/in-memory store, the
-real `stoolap`-backed durable store, all three named domains, and now
-projections/checkpoints/read-your-writes with a real
-`conversation_summary` projection wired into `siar-messaging`) are
-done as of 2026-09-19 (~30/95); continuing with a durable
-`ProjectionCheckpointStore` (closing the "restart loses the summary"
-gap) or Phase 5 (outbox/effects/retry/recovery — revisit the
-`siar-storage`-outbox architectural question named in an earlier
-round's gap list first) next. Identity's and files' own event catalogs
-still have no `append` caller or projection either, so wiring one of
-those remains a reasonable smaller next slice instead. Note there is a real, documented
+explicit priority order — Phases 1-4 are done, the §5-15 audit pass is
+closed, and a durable `StoolapCheckpointStore` now exists (~35/95),
+built ahead of any caller since every real projection so far is itself
+in-memory. Continuing with Phase 5 (revisit the `siar-storage`-outbox
+architectural question first — named in every round since it surfaced)
+or a durable `ConversationSummaryProjection` to give this round's new
+checkpoint store its first real caller. Note there is a real, documented
 unresolved reconciliation question between `siar-routing`
 (pre-existing, next.md-era) and `siar-routing-policy` (spec 03's own
 crate) — see that crate's own `lib.rs` for the current state of that

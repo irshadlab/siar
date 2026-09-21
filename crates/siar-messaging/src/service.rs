@@ -12,12 +12,15 @@ use siar_domain::{
     DeliveryState, DeviceId, MediaType, MessageContent, MessageId, MessageText,
 };
 use siar_event_log::projection::{InMemoryCheckpointStore, ProjectionRunner};
-use siar_event_log::{append_with_retry, EventOrigin, EventStore, DEFAULT_CATCH_UP_BATCH_SIZE};
+use siar_event_log::{
+    append_with_retry, CorrelationId, EventId, EventOrigin, EventStore, DEFAULT_CATCH_UP_BATCH_SIZE,
+};
 use siar_protocol::v1::{Envelope, EnvelopeKind, CURRENT_VERSION};
 use siar_protocol::{MailboxCheckIn, WireMessage};
 use siar_storage::{BlobRepository, MessageRepository, OutboxRepository, StoredMessage};
 use siar_transport::{PeerTransport, SiarEndpoint};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -95,6 +98,39 @@ pub struct MessageService {
     /// ([`Self::conversation_summary`]) reads just this one field.
     conversation_summary: Option<Arc<ConversationSummaryProjection>>,
     summary_checkpoints: Option<Arc<InMemoryCheckpointStore>>,
+    /// §8 "Correlation and Causation" — see [`MessageCorrelation`]'s
+    /// own doc comment for the real mechanism, and this field's own
+    /// initialization in [`Self::with_event_log`] for why it always
+    /// travels together with `event_log`.
+    correlations: Option<Arc<Mutex<HashMap<MessageId, MessageCorrelation>>>>,
+}
+
+/// §8's own real mechanism: one row per message, tracking the
+/// [`CorrelationId`] shared by every event in that message's own
+/// lifecycle (`MessageCreated` → `MessageQueued` → ... →
+/// `MessageDelivered`/`MessageRead`) and the [`EventId`] of whichever
+/// of those events was most recently recorded — so the next one's own
+/// `causation_id` can point to it. Keyed by [`MessageId`] because
+/// that's the only identifier a later, unrelated call
+/// (`handle_incoming`'s `DeliveryAck` branch, running long after
+/// `send_text` returned, possibly on a different code path entirely)
+/// actually carries; there is no `EventId` lying around to reference
+/// directly at that point without looking one up somehow, and this
+/// map IS that lookup.
+///
+/// In-memory only, same "not durable across a restart" status
+/// `ConversationSummaryProjection`'s own materialized state already
+/// has — a real, named consequence: if the process restarts between
+/// `send_text` (which starts a message's correlation chain) and a
+/// later `DeliveryAck` for that same message, the chain is lost and
+/// `MessageDelivered` gets recorded with `correlation_id`/
+/// `causation_id` both `None` rather than wrongly linked to nothing —
+/// see [`MessageService::continue_correlation`]'s own doc comment for
+/// exactly how that degrades.
+#[derive(Debug, Clone, Copy)]
+struct MessageCorrelation {
+    correlation_id: CorrelationId,
+    last_event_id: EventId,
 }
 
 impl MessageService {
@@ -116,6 +152,7 @@ impl MessageService {
             event_log: None,
             conversation_summary: None,
             summary_checkpoints: None,
+            correlations: None,
         }
     }
 
@@ -133,16 +170,77 @@ impl MessageService {
     /// to happen before that `Arc` is taken, not after.
     ///
     /// Also wires §16/§18's own `conversation_summary` projection
-    /// (`crate::projections`) automatically — a caller that wants the
-    /// event log at all gets a live, queryable summary view for free,
-    /// with no separate opt-in: see [`Self::conversation_summary`] for
-    /// the query side and `record_messaging_event`'s own doc comment
-    /// for how it stays caught up.
+    /// (`crate::projections`) and §8's own `MessageCorrelation`
+    /// registry automatically — a caller that wants the event log at
+    /// all gets a live, queryable summary view and real correlation/
+    /// causation tracking for free, with no separate opt-in: see
+    /// [`Self::conversation_summary`] for the query side and
+    /// `record_messaging_event`'s own doc comment for how both stay
+    /// caught up.
     pub fn with_event_log(mut self, event_log: Arc<dyn EventStore + Send + Sync>) -> Self {
         self.event_log = Some(event_log);
         self.conversation_summary = Some(Arc::new(ConversationSummaryProjection::new()));
         self.summary_checkpoints = Some(Arc::new(InMemoryCheckpointStore::new()));
+        self.correlations = Some(Arc::new(Mutex::new(HashMap::new())));
         self
+    }
+
+    /// Starts (or restarts) `message_id`'s own §8 correlation chain,
+    /// returning the fresh [`CorrelationId`] every later event in the
+    /// same lifecycle should reuse (via [`Self::continue_correlation`]).
+    /// Call this exactly once per message, at whichever event first
+    /// proves the message exists locally
+    /// (`MessageCreated`/`MessageReceived`). Returns `None` if
+    /// [`Self::with_event_log`] was never called — same "no-op when
+    /// there's no event log to correlate anything in" shape
+    /// `record_messaging_event` itself already has.
+    fn start_correlation(&self, message_id: MessageId, event_id: EventId) -> Option<CorrelationId> {
+        let registry = self.correlations.as_ref()?;
+        let correlation_id = CorrelationId::new();
+        registry
+            .lock()
+            .expect("correlation registry lock poisoned")
+            .insert(
+                message_id,
+                MessageCorrelation {
+                    correlation_id,
+                    last_event_id: event_id,
+                },
+            );
+        Some(correlation_id)
+    }
+
+    /// Looks up `message_id`'s already-started correlation chain and
+    /// advances its `last_event_id` to `event_id` for the next call —
+    /// use for every event in a message's lifecycle after the one that
+    /// called [`Self::start_correlation`]. Returns
+    /// `(correlation_id, causation_id)`, where `causation_id` is
+    /// whichever event was most recently recorded for this message
+    /// before this call. Both come back `None` — not an error, just an
+    /// absent correlation — if [`Self::with_event_log`] was never
+    /// called, OR if this message's chain was never started (a real
+    /// case, not just a hypothetical: a process restart between
+    /// `send_text` and a later `DeliveryAck` for the same message loses
+    /// the in-memory registry entirely — see [`MessageCorrelation`]'s
+    /// own doc comment).
+    fn continue_correlation(
+        &self,
+        message_id: MessageId,
+        event_id: EventId,
+    ) -> (Option<CorrelationId>, Option<EventId>) {
+        let Some(registry) = self.correlations.as_ref() else {
+            return (None, None);
+        };
+        let mut registry = registry.lock().expect("correlation registry lock poisoned");
+        match registry.get_mut(&message_id) {
+            Some(entry) => {
+                let correlation_id = Some(entry.correlation_id);
+                let causation_id = Some(entry.last_event_id);
+                entry.last_event_id = event_id;
+                (correlation_id, causation_id)
+            }
+            None => (None, None),
+        }
     }
 
     /// §18 "read-your-writes", queryable: reflects every real append
@@ -177,12 +275,25 @@ impl MessageService {
     /// write or a read-model refresh also landed. Making either
     /// authoritative enough that its own failure should fail the
     /// caller is Phase 5 territory, not this round's.
-    async fn record_messaging_event(&self, event: MessagingEvent, origin: EventOrigin) {
+    ///
+    /// `event_id`/`correlation_id`/`causation_id` are caller-supplied
+    /// (§8) — see [`Self::start_correlation`]/[`Self::
+    /// continue_correlation`]'s own doc comments for how a real call
+    /// site gets them; this method just threads them through to
+    /// [`MessagingEvent::into_new_event`] unchanged.
+    async fn record_messaging_event(
+        &self,
+        event: MessagingEvent,
+        event_id: EventId,
+        origin: EventOrigin,
+        correlation_id: Option<CorrelationId>,
+        causation_id: Option<EventId>,
+    ) {
         let Some(store) = self.event_log.as_deref() else {
             return;
         };
         let stream_id = event.stream_id();
-        let new_event = event.into_new_event(origin);
+        let new_event = event.into_new_event(event_id, origin, correlation_id, causation_id);
         match append_with_retry(store, stream_id, new_event, EVENT_LOG_APPEND_MAX_ATTEMPTS).await {
             Ok(_) => {
                 if let (Some(projection), Some(checkpoints)) =
@@ -286,6 +397,14 @@ impl MessageService {
         // persisted it — both true by the time we reach this line,
         // hence both recorded together rather than split across two
         // separate call sites that would just be adjacent anyway.
+        //
+        // §8: `MessageCreated` starts this message's own correlation
+        // chain (`start_correlation`); `MessageQueued` continues it
+        // (`continue_correlation`), so its own `causation_id` points
+        // back at `MessageCreated`'s real `EventId` and both share one
+        // `CorrelationId` for the whole send lifecycle.
+        let created_event_id = EventId::new();
+        let correlation_id = self.start_correlation(message_id, created_event_id);
         self.record_messaging_event(
             MessagingEvent::MessageCreated {
                 conversation_id: conversation,
@@ -294,15 +413,24 @@ impl MessageService {
                 sequence: stored.sequence,
                 ciphertext: stored.payload.clone(),
             },
+            created_event_id,
             EventOrigin::LocalDevice(self.device_id),
+            correlation_id,
+            None,
         )
         .await;
+        let queued_event_id = EventId::new();
+        let (queued_correlation, queued_causation) =
+            self.continue_correlation(message_id, queued_event_id);
         self.record_messaging_event(
             MessagingEvent::MessageQueued {
                 conversation_id: conversation,
                 message_id,
             },
+            queued_event_id,
             EventOrigin::LocalDevice(self.device_id),
+            queued_correlation,
+            queued_causation,
         )
         .await;
 
@@ -604,13 +732,26 @@ impl MessageService {
                     // inside the `is_new` branch). `envelope.sender` is
                     // the remote peer's own device — this event is
                     // theirs, not ours, hence `RemoteDevice`.
+                    //
+                    // §8: this is a fresh correlation chain for THIS
+                    // device's own receive-side lifecycle
+                    // (`start_correlation`, not `continue_correlation`)
+                    // — we didn't create this message, so there is no
+                    // earlier local event to continue from; `causation`
+                    // is `None` for the same reason.
+                    let received_event_id = EventId::new();
+                    let correlation_id =
+                        self.start_correlation(envelope.message_id, received_event_id);
                     self.record_messaging_event(
                         MessagingEvent::MessageReceived {
                             conversation_id: envelope.conversation_id,
                             message_id: envelope.message_id,
                             sender_device: envelope.sender,
                         },
+                        received_event_id,
                         EventOrigin::RemoteDevice(envelope.sender),
+                        correlation_id,
+                        None,
                     )
                     .await;
 
@@ -651,12 +792,26 @@ impl MessageService {
                 // the original message's own recipient), so this is
                 // their event to originate, not ours, even though it's
                 // our own outbound message being confirmed.
+                //
+                // §8: continues the SAME correlation chain `send_text`
+                // started for `acked_message` — `causation_id` points
+                // back at whichever of `MessageCreated`/`MessageQueued`
+                // was recorded last for it. Both come back `None`
+                // instead if that chain was never started here (see
+                // `continue_correlation`'s own doc comment on why
+                // that's a real, not hypothetical, case).
+                let delivered_event_id = EventId::new();
+                let (correlation_id, causation_id) =
+                    self.continue_correlation(acked_message, delivered_event_id);
                 self.record_messaging_event(
                     MessagingEvent::MessageDelivered {
                         conversation_id: envelope.conversation_id,
                         message_id: acked_message,
                     },
+                    delivered_event_id,
                     EventOrigin::RemoteDevice(envelope.sender),
+                    correlation_id,
+                    causation_id,
                 )
                 .await;
                 Ok(None)

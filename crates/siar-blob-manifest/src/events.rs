@@ -55,6 +55,7 @@ use serde::{Deserialize, Serialize};
 use siar_event_log::envelope::EventOrigin;
 use siar_event_log::ids::{EventId, EventTypeId, StreamId, Timestamp};
 use siar_event_log::store::NewEvent;
+use thiserror::Error;
 
 /// One stream per transfer — see this module's own doc comment.
 pub fn transfer_stream_id(transfer_id: TransferId) -> StreamId {
@@ -161,13 +162,24 @@ impl FileEvent {
     /// (receiving an offer), and nothing in a bare `FileEvent` payload
     /// says which — the caller, who dispatched or received the
     /// underlying protocol message, is the only one who knows.
+    ///
+    /// Unlike `siar_messaging::events::MessagingEvent::into_new_event`,
+    /// still generates its own `EventId` and still hardcodes
+    /// `correlation_id`/`causation_id` to `None` — this crate has no
+    /// real multi-event workflow calling it yet (no real
+    /// `EventStore::append` caller anywhere for this domain, per this
+    /// crate's own `lib.rs`), so there is nothing to correlate against
+    /// in practice; wiring §8 properly here, the way
+    /// `siar_messaging::service`'s `MessageCorrelation` registry does
+    /// for messaging, is real future work once a real caller exists,
+    /// not attempted speculatively.
     pub fn into_new_event(self, origin: EventOrigin) -> NewEvent {
         let event_type = self.event_type();
         let payload = postcard::to_allocvec(&self).expect("FileEvent always postcard-serializes");
         NewEvent {
             event_id: EventId::new(),
             event_type,
-            schema_version: 1,
+            schema_version: CURRENT_FILE_EVENT_SCHEMA_VERSION,
             created_at: Timestamp::now(),
             origin,
             correlation_id: None,
@@ -177,11 +189,49 @@ impl FileEvent {
     }
 }
 
+/// §9 "Versioned Event Schemas": the schema version [`NewEvent`]
+/// carries alongside the payload bytes, not a magic number repeated at
+/// every call site — same convention
+/// `siar_messaging::events::CURRENT_MESSAGING_EVENT_SCHEMA_VERSION`
+/// already established. Bump this, and add a real `V2` decode branch
+/// to [`decode_file_event`] below, the day any of this module's nine
+/// variants' fields actually change shape.
+pub const CURRENT_FILE_EVENT_SCHEMA_VERSION: u16 = 1;
+
+/// Same real bug `siar_messaging::events::MessagingEventDecodeError`'s
+/// own doc comment describes finding in the messaging equivalent of
+/// this function, found here too on the same audit pass: this function
+/// used to run `postcard::from_bytes` straight against the payload
+/// with no regard for the stored `schema_version` sitting right next
+/// to it — §9's own named anti-pattern ("do not silently reinterpret
+/// old bytes using changed Rust structs"), since postcard's enum
+/// encoding is positional/discriminant-based and would silently
+/// misdecode old rows as the wrong variant if `FileEvent`'s shape ever
+/// changed.
+#[derive(Debug, Error)]
+pub enum FileEventDecodeError {
+    #[error(
+        "unsupported file event schema version {0} (highest known: {CURRENT_FILE_EVENT_SCHEMA_VERSION})"
+    )]
+    UnsupportedVersion(u16),
+    #[error("payload did not decode as a valid file event: {0}")]
+    Malformed(#[from] postcard::Error),
+}
+
 /// Read-side counterpart to [`FileEvent::into_new_event`] — same role
 /// `siar_messaging::events::decode_messaging_event`/`audit_log::
-/// decode_audit_payload` play for their own domains.
-pub fn decode_file_event(payload: &[u8]) -> Result<FileEvent, postcard::Error> {
-    postcard::from_bytes(payload)
+/// decode_audit_payload` play for their own domains. `schema_version`
+/// should come from the same
+/// [`siar_event_log::envelope::EventEnvelope::schema_version`] the
+/// payload itself was read alongside.
+pub fn decode_file_event(
+    schema_version: u16,
+    payload: &[u8],
+) -> Result<FileEvent, FileEventDecodeError> {
+    match schema_version {
+        1 => Ok(postcard::from_bytes(payload)?),
+        other => Err(FileEventDecodeError::UnsupportedVersion(other)),
+    }
 }
 
 #[cfg(test)]
@@ -230,7 +280,7 @@ mod tests {
         assert_eq!(new_event.event_type, EVENT_TYPE_TRANSFER_CREATED);
         assert_eq!(new_event.origin, EventOrigin::LocalDevice(device));
 
-        let decoded = decode_file_event(&new_event.payload).unwrap();
+        let decoded = decode_file_event(new_event.schema_version, &new_event.payload).unwrap();
         assert_eq!(decoded, event);
     }
 
@@ -267,6 +317,25 @@ mod tests {
     }
 
     #[test]
+    fn decoding_rejects_an_unsupported_schema_version() {
+        let event = FileEvent::TransferAccepted {
+            transfer_id: TransferId::new(),
+        };
+        let new_event = event.into_new_event(EventOrigin::LocalDevice(DeviceId::new()));
+
+        // Same proof `siar_messaging::events`'s own equivalent test
+        // makes: the CURRENT `FileEvent` shape could decode this
+        // payload just fine — this asserts the version gate rejects
+        // it anyway when told it came from a schema version this
+        // module doesn't recognize.
+        let result = decode_file_event(99, &new_event.payload);
+        assert!(matches!(
+            result,
+            Err(FileEventDecodeError::UnsupportedVersion(99))
+        ));
+    }
+
+    #[test]
     fn every_variant_round_trips_and_reports_its_own_transfer_id() {
         let transfer_id = TransferId::new();
         let blob_id = BlobId::from_ciphertext(b"other ciphertext");
@@ -291,7 +360,7 @@ mod tests {
             let new_event = event
                 .clone()
                 .into_new_event(EventOrigin::LocalDevice(DeviceId::new()));
-            let decoded = decode_file_event(&new_event.payload).unwrap();
+            let decoded = decode_file_event(new_event.schema_version, &new_event.payload).unwrap();
             assert_eq!(decoded, event);
         }
     }

@@ -113,7 +113,7 @@ impl IdentityAuditPayload {
         NewEvent {
             event_id: EventId::new(),
             event_type,
-            schema_version: 1,
+            schema_version: CURRENT_IDENTITY_AUDIT_SCHEMA_VERSION,
             created_at: Timestamp::now(),
             origin,
             correlation_id: None,
@@ -219,12 +219,50 @@ pub fn fork_detected_event(generation: u64) -> NewEvent {
     IdentityAuditPayload::ForkDetected { generation }.into_new_event()
 }
 
+/// §9 "Versioned Event Schemas": the schema version [`NewEvent`]
+/// carries alongside the payload bytes, not a magic number repeated at
+/// every call site — same convention
+/// `siar_messaging::events::CURRENT_MESSAGING_EVENT_SCHEMA_VERSION`/
+/// `siar_blob_manifest::events::CURRENT_FILE_EVENT_SCHEMA_VERSION`
+/// already established for the other two domain event catalogs. Bump
+/// this, and add a real `V2` decode branch to [`decode_audit_payload`]
+/// below, the day any of this module's variants' fields actually
+/// change shape.
+const CURRENT_IDENTITY_AUDIT_SCHEMA_VERSION: u16 = 1;
+
+/// Same real bug `siar_messaging::events::MessagingEventDecodeError`'s
+/// own doc comment describes (found there first, then found here too,
+/// then in `siar_blob_manifest::events`, on the same audit pass): this
+/// function used to run `postcard::from_bytes` straight against the
+/// payload with no regard for the stored `schema_version` sitting
+/// right next to it — §9's own named anti-pattern.
+#[derive(Debug, thiserror::Error)]
+pub enum AuditPayloadDecodeError {
+    #[error(
+        "unsupported identity audit event schema version {0} (highest known: {CURRENT_IDENTITY_AUDIT_SCHEMA_VERSION})"
+    )]
+    UnsupportedVersion(u16),
+    #[error("payload did not decode as a valid identity audit event: {0}")]
+    Malformed(#[from] postcard::Error),
+}
+
 /// Reconstructs the audit payload from a [`siar_event_log::store::StoredEvent`]'s
 /// raw bytes — the read-side counterpart to the three constructors
 /// above, so a caller building an actual audit-trail view doesn't have
-/// to know the postcard encoding itself.
-pub fn decode_audit_payload(payload: &[u8]) -> Result<IdentityAuditPayload, postcard::Error> {
-    postcard::from_bytes(payload)
+/// to know the postcard encoding itself. `schema_version` should come
+/// from the same
+/// [`siar_event_log::envelope::EventEnvelope::schema_version`] the
+/// payload itself was read alongside — see
+/// [`AuditPayloadDecodeError`]'s own doc comment for why this isn't
+/// just `decode_audit_payload(payload)` anymore.
+pub fn decode_audit_payload(
+    schema_version: u16,
+    payload: &[u8],
+) -> Result<IdentityAuditPayload, AuditPayloadDecodeError> {
+    match schema_version {
+        1 => Ok(postcard::from_bytes(payload)?),
+        other => Err(AuditPayloadDecodeError::UnsupportedVersion(other)),
+    }
 }
 
 /// True if `status` is the kind of status transition this module
@@ -261,7 +299,7 @@ mod tests {
         let event = device_linked_event(device, 3);
         assert_eq!(event.event_type, EVENT_TYPE_DEVICE_LINKED);
 
-        let decoded = decode_audit_payload(&event.payload).unwrap();
+        let decoded = decode_audit_payload(event.schema_version, &event.payload).unwrap();
         assert_eq!(
             decoded,
             IdentityAuditPayload::DeviceLinked {
@@ -277,7 +315,7 @@ mod tests {
         let event = device_revoked_event(device, 5);
         assert_eq!(event.event_type, EVENT_TYPE_DEVICE_REVOKED);
 
-        let decoded = decode_audit_payload(&event.payload).unwrap();
+        let decoded = decode_audit_payload(event.schema_version, &event.payload).unwrap();
         assert_eq!(
             decoded,
             IdentityAuditPayload::DeviceRevoked {
@@ -293,7 +331,7 @@ mod tests {
         let event = revocation_verified_event(device, 5);
         assert_eq!(event.event_type, EVENT_TYPE_REVOCATION_VERIFIED);
 
-        let decoded = decode_audit_payload(&event.payload).unwrap();
+        let decoded = decode_audit_payload(event.schema_version, &event.payload).unwrap();
         assert_eq!(
             decoded,
             IdentityAuditPayload::RevocationVerified {
@@ -338,6 +376,23 @@ mod tests {
     }
 
     #[test]
+    fn decoding_rejects_an_unsupported_schema_version() {
+        let event = device_linked_event(DeviceId::new(), 1);
+
+        // Same proof `siar_messaging::events`/`siar_blob_manifest::
+        // events`'s own equivalent tests make: the CURRENT
+        // `IdentityAuditPayload` shape could decode this payload just
+        // fine — this asserts the version gate rejects it anyway when
+        // told it came from a schema version this module doesn't
+        // recognize.
+        let result = decode_audit_payload(99, &event.payload);
+        assert!(matches!(
+            result,
+            Err(AuditPayloadDecodeError::UnsupportedVersion(99))
+        ));
+    }
+
+    #[test]
     fn spec_111_the_five_new_event_constructors_round_trip_through_postcard() {
         let device = DeviceId::new();
         for event in [
@@ -347,7 +402,7 @@ mod tests {
             recovery_used_event(device, 4),
             fork_detected_event(5),
         ] {
-            let decoded = decode_audit_payload(&event.payload).unwrap();
+            let decoded = decode_audit_payload(event.schema_version, &event.payload).unwrap();
             assert_eq!(decoded.event_type(), event.event_type);
         }
     }

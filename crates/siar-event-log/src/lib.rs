@@ -85,6 +85,18 @@
 //!   right after `record_messaging_event`'s own `append` succeeds —
 //!   §18's concrete example ("SendMessage succeeds locally →
 //!   conversation immediately shows message"), made real.
+//! - [`stoolap_checkpoint_store`] — [`stoolap_checkpoint_store::
+//!   StoolapCheckpointStore`], the durable counterpart to
+//!   [`projection::InMemoryCheckpointStore`], same `stoolap`-backed
+//!   pattern [`stoolap_store::StoolapEventStore`] set for
+//!   [`store::EventStore`] itself. Built ahead of any caller that
+//!   needs it — every real `Projection` in this workspace so far is
+//!   itself in-memory, so nothing currently NEEDS a durable checkpoint
+//!   — on the reasoning that checkpoint durability is foundational
+//!   enough to get right before, not after, the first durable
+//!   projection exists; see that module's own doc comment for exactly
+//!   why pairing a durable projection with an in-memory checkpoint
+//!   would be actively wrong, not just less thorough.
 //!
 //! Every module above is covered by tests exercising real behavior —
 //! actual concurrent-writer rejection, actual duplicate-event
@@ -120,13 +132,13 @@
 //! module split (`codec.rs`/`registry.rs`/`retention.rs`/`replay.rs`/
 //! `diagnostics.rs`/`error.rs` as separate files — this crate keeps
 //! `store.rs`'s `EventStoreError` as the one error type rather than
-//! splitting it out yet), the schema-migration story `stoolap_store`
-//! doesn't have (its `CREATE TABLE IF NOT EXISTS` has no version column
-//! — a real gap for whoever makes the first breaking schema change),
-//! and a durable (`stoolap`-backed) [`projection::ProjectionCheckpointStore`]
-//! — [`projection::InMemoryCheckpointStore`] is the only one so far,
-//! matching that `siar_messaging::conversation_summary`'s own
-//! materialized state isn't durable either yet.
+//! splitting it out yet), and the schema-migration story
+//! `stoolap_store`/`stoolap_checkpoint_store` don't have (their
+//! `CREATE TABLE IF NOT EXISTS` has no version column — a real gap for
+//! whoever makes the first breaking schema change to either). A
+//! durable `Projection` implementation itself doesn't exist yet either
+//! — `stoolap_checkpoint_store` exists ahead of that caller, per that
+//! module's own doc comment on why.
 
 pub mod envelope;
 pub mod gap;
@@ -134,6 +146,7 @@ pub mod ids;
 pub mod memory_store;
 pub mod projection;
 pub mod retry;
+pub mod stoolap_checkpoint_store;
 pub mod stoolap_store;
 pub mod store;
 
@@ -146,5 +159,6 @@ pub use projection::{
     ProjectionError, ProjectionId, ProjectionRunner, DEFAULT_CATCH_UP_BATCH_SIZE,
 };
 pub use retry::append_with_retry;
+pub use stoolap_checkpoint_store::StoolapCheckpointStore;
 pub use stoolap_store::StoolapEventStore;
 pub use store::{AppendRequest, AppendResult, EventStore, EventStoreError, NewEvent, StoredEvent};

@@ -119,8 +119,9 @@ impl Projection for ConversationSummaryProjection {
             return Ok(());
         }
 
-        let messaging_event = decode_messaging_event(&event.envelope.payload)
-            .map_err(|e| ProjectionError::Projection(format!("undecodable §33 event: {e}")))?;
+        let messaging_event =
+            decode_messaging_event(event.envelope.schema_version, &event.envelope.payload)
+                .map_err(|e| ProjectionError::Projection(format!("undecodable §33 event: {e}")))?;
         let conversation_id = messaging_event.conversation_id();
 
         let mut summaries = self
@@ -165,6 +166,7 @@ mod tests {
     use crate::events::conversation_stream_id;
     use siar_domain::DeviceId;
     use siar_event_log::envelope::EventOrigin;
+    use siar_event_log::ids::EventId;
     use siar_event_log::memory_store::InMemoryEventStore;
     use siar_event_log::projection::{InMemoryCheckpointStore, ProjectionRunner};
     use siar_event_log::store::{AppendRequest, EventStore};
@@ -175,7 +177,12 @@ mod tests {
             .append(AppendRequest {
                 stream_id,
                 expected_version: 0,
-                events: vec![event.into_new_event(EventOrigin::LocalDevice(device))],
+                events: vec![event.into_new_event(
+                    EventId::new(),
+                    EventOrigin::LocalDevice(device),
+                    None,
+                    None,
+                )],
             })
             .await
             .unwrap();
@@ -250,7 +257,12 @@ mod tests {
                     conversation_id,
                     message_id,
                 }
-                .into_new_event(EventOrigin::RemoteDevice(device))],
+                .into_new_event(
+                    EventId::new(),
+                    EventOrigin::RemoteDevice(device),
+                    None,
+                    None,
+                )],
             })
             .await
             .unwrap();

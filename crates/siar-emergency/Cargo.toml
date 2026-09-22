@@ -9,6 +9,14 @@ rust-version.workspace = true
 siar-domain.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
+postcard.workspace = true
+# §37 "Emergency Events" (`events.rs`) — Phase 3 of
+# `04-offline-event-log-architecture.md`, the fifth and last domain in
+# the same pattern `siar-identity-multidevice`/`siar-messaging`/
+# `siar-blob-manifest`/`siar-dtn-bundle` already use for
+# §33/§34/§35/§36.
+siar-event-log.workspace = true
 # Deliberately no siar-crypto dependency: next.md §47's "private SOS
 # and public/local emergency alert as separate cryptographic concepts"
 # and §49's authority-alert signature verification are real crypto

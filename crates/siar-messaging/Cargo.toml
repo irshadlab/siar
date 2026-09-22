@@ -23,6 +23,11 @@ tracing.workspace = true
 postcard.workspace = true
 serde.workspace = true
 async-trait.workspace = true
+# Backing `stoolap_projections::StoolapConversationSummaryProjection` —
+# same crate, same feature set, `siar-event-log`'s own
+# `stoolap_store`/`stoolap_checkpoint_store` already use.
+stoolap = { version = "0.4", default-features = false, features = ["parallel"] }
+uuid.workspace = true
 x25519-dalek.workspace = true
 iroh.workspace = true
 # Added for send_text_anon's TokenMailboxEnvelope::payload_hash — the

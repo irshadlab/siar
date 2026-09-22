@@ -3,15 +3,20 @@
 //! multi-device fanout yet (plan.md §124's "Alice ↔ Bob text messaging").
 
 use crate::events::MessagingEvent;
-use crate::projections::ConversationSummary;
-use crate::projections::ConversationSummaryProjection;
+use crate::projections::{
+    ConversationSummary, ConversationSummaryProjection, ConversationSummaryQuery,
+};
+use crate::stoolap_projections::StoolapConversationSummaryProjection;
 use crate::PeerTicket;
 use siar_crypto::{DeviceIdentity, Session};
 use siar_domain::{
     backoff_millis, with_jitter, AttachmentReference, BlobSize, CallControlEvent, ConversationId,
     DeliveryState, DeviceId, MediaType, MessageContent, MessageId, MessageText,
 };
-use siar_event_log::projection::{InMemoryCheckpointStore, ProjectionRunner};
+use siar_event_log::projection::{
+    InMemoryCheckpointStore, ProjectionCheckpointStore, ProjectionRunner,
+};
+use siar_event_log::StoolapCheckpointStore;
 use siar_event_log::{
     append_with_retry, CorrelationId, EventId, EventOrigin, EventStore, DEFAULT_CATCH_UP_BATCH_SIZE,
 };
@@ -96,8 +101,13 @@ pub struct MessageService {
     /// or both `None`); kept as two separate `Option`s rather than one
     /// `Option<(..., ...)>` only because the query side
     /// ([`Self::conversation_summary`]) reads just this one field.
-    conversation_summary: Option<Arc<ConversationSummaryProjection>>,
-    summary_checkpoints: Option<Arc<InMemoryCheckpointStore>>,
+    /// Trait objects rather than a concrete type: [`Self::
+    /// with_event_log`] wires the in-memory backend by default, but
+    /// [`Self::with_durable_conversation_summary`] can swap both for
+    /// their `stoolap`-backed counterparts without changing either
+    /// field's own type.
+    conversation_summary: Option<Arc<dyn ConversationSummaryQuery>>,
+    summary_checkpoints: Option<Arc<dyn ProjectionCheckpointStore>>,
     /// §8 "Correlation and Causation" — see [`MessageCorrelation`]'s
     /// own doc comment for the real mechanism, and this field's own
     /// initialization in [`Self::with_event_log`] for why it always
@@ -177,11 +187,54 @@ impl MessageService {
     /// [`Self::conversation_summary`] for the query side and
     /// `record_messaging_event`'s own doc comment for how both stay
     /// caught up.
+    ///
+    /// Wires the IN-MEMORY `ConversationSummaryProjection`/
+    /// `InMemoryCheckpointStore` pair specifically — call
+    /// [`Self::with_durable_conversation_summary`] afterward to swap
+    /// both for their durable `stoolap`-backed counterparts instead.
     pub fn with_event_log(mut self, event_log: Arc<dyn EventStore + Send + Sync>) -> Self {
         self.event_log = Some(event_log);
-        self.conversation_summary = Some(Arc::new(ConversationSummaryProjection::new()));
-        self.summary_checkpoints = Some(Arc::new(InMemoryCheckpointStore::new()));
+        self.conversation_summary = Some(
+            Arc::new(ConversationSummaryProjection::new()) as Arc<dyn ConversationSummaryQuery>
+        );
+        self.summary_checkpoints =
+            Some(Arc::new(InMemoryCheckpointStore::new()) as Arc<dyn ProjectionCheckpointStore>);
         self.correlations = Some(Arc::new(Mutex::new(HashMap::new())));
+        self
+    }
+
+    /// Upgrades the `conversation_summary` projection wired by
+    /// [`Self::with_event_log`] (which defaults to the in-memory
+    /// backend) to the durable `stoolap`-backed
+    /// `StoolapConversationSummaryProjection`/`StoolapCheckpointStore`
+    /// pair instead — the first real caller either of those durable
+    /// types gets (see `stoolap_projections`'s own doc comment).
+    /// Meant to be called right after `with_event_log` in the same
+    /// builder chain; calling it without `with_event_log` first is
+    /// harmless, not unsafe — the projection this sets is simply never
+    /// consulted, since `record_messaging_event` checks `event_log`
+    /// first and returns immediately if that's `None` (same as
+    /// `with_durable_conversation_summary` never having been called at
+    /// all).
+    ///
+    /// `projection_db_path`/`checkpoint_db_path` are two SEPARATE
+    /// `stoolap::Database` files (or, if the caller passes a fresh
+    /// in-memory pair via [`StoolapConversationSummaryProjection::
+    /// open_in_memory`]/[`siar_event_log::StoolapCheckpointStore::
+    /// open_in_memory`] directly instead of this method, two separate
+    /// in-memory instances) — same "no cross-store atomicity" honesty
+    /// `siar_event_log::stoolap_store`'s own doc comment already
+    /// states for the relationship between the event log and
+    /// `siar-storage`'s tables; this projection and its checkpoint are
+    /// a third and fourth database in the same category, not
+    /// exempted from that limitation.
+    pub fn with_durable_conversation_summary(
+        mut self,
+        projection: Arc<StoolapConversationSummaryProjection>,
+        checkpoints: Arc<StoolapCheckpointStore>,
+    ) -> Self {
+        self.conversation_summary = Some(projection as Arc<dyn ConversationSummaryQuery>);
+        self.summary_checkpoints = Some(checkpoints as Arc<dyn ProjectionCheckpointStore>);
         self
     }
 
@@ -247,14 +300,24 @@ impl MessageService {
     /// `record_messaging_event` has made so far for this conversation,
     /// synchronously — no separate background catch-up loop to wait
     /// on. Returns `None` if [`Self::with_event_log`] was never
-    /// called, same as an unpopulated conversation would.
-    pub fn conversation_summary(
+    /// called, same as an unpopulated conversation would, OR if the
+    /// query itself failed (logged, not propagated — same best-effort
+    /// posture `record_messaging_event` itself already has; a real
+    /// failure mode only the durable backend
+    /// ([`Self::with_durable_conversation_summary`]) can actually hit,
+    /// since the in-memory one's own lookup can't fail).
+    pub async fn conversation_summary(
         &self,
         conversation_id: ConversationId,
     ) -> Option<ConversationSummary> {
-        self.conversation_summary
-            .as_ref()
-            .and_then(|projection| projection.get(conversation_id))
+        let projection = self.conversation_summary.as_ref()?;
+        match projection.get(conversation_id).await {
+            Ok(summary) => summary,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to query conversation_summary");
+                None
+            }
+        }
     }
 
     /// Records one of `crate::events::MessagingEvent`'s nine §33

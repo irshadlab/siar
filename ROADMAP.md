@@ -1469,13 +1469,164 @@ piece of Phase 1-4-adjacent work; alternatively, a durable
 be the first real caller for this round's own new store, closing that
 gap concretely rather than leaving it proven only in isolation.
 
+**siar-messaging — a real durable ConversationSummaryProjection,
+2026-09-19 (same session, the user's own explicit choice of the two
+options offered at the end of the previous round)**: new
+`stoolap_projections.rs` — `StoolapConversationSummaryProjection`, a
+genuine drop-in replacement for the in-memory
+`ConversationSummaryProjection`, backed by a real
+`conversation_summaries` table (same `stoolap` pattern
+`stoolap_store`/`stoolap_checkpoint_store` already established). This
+is also `StoolapCheckpointStore`'s own first real caller — exercised
+through an actual multi-event `send_text` workflow, not only its own
+isolated unit tests from the previous round.
+
+Making this a genuine drop-in required a real design change:
+`MessageService`'s `conversation_summary`/`summary_checkpoints` fields
+changed from concrete types (`Arc<ConversationSummaryProjection>`,
+`Arc<InMemoryCheckpointStore>`) to trait objects
+(`Arc<dyn ConversationSummaryQuery>`, `Arc<dyn
+ProjectionCheckpointStore>`), where `ConversationSummaryQuery:
+Projection` is a new supertrait relationship in `projections.rs` that
+both the in-memory and durable projections implement. Passing that one
+object to both `ProjectionRunner::catch_up` (which only knows the
+`Projection` half) and the query side (which needs the subtrait's own
+`get`) relies on Rust's trait-object upcasting coercion — stable since
+1.86, confirmed working here on the first try against this workspace's
+pinned 1.91 toolchain, so no manual workaround (storing the same
+projection behind two separate `Arc`s, or a hand-written enum dispatch)
+was needed. `conversation_summary`'s own query method is now `async`
+(previously synchronous, since the in-memory backend's lookup never
+did any real I/O) — a real, if small, breaking change to
+`MessageService`'s own public API, fixed at every call site in the
+same round. New `with_durable_conversation_summary(projection,
+checkpoints)` builder, meant to chain right after `with_event_log`,
+swaps both fields to their durable counterparts; calling it without
+`with_event_log` first is harmless (the projection just never gets
+consulted), documented as such rather than guarded against.
+
+**A real bug caught before it shipped, not after**: the first draft of
+`apply` fetched only `message_count` from the existing row before doing
+a `DELETE`+`INSERT`, which would have silently blanked
+`last_message_id` back to `NULL` on every event that isn't
+`MessageCreated`/`MessageReceived` (delivery, read, edit, delete,
+react) — a real correctness bug a manual delete-then-insert doesn't
+avoid for free the way the in-memory version's `HashMap::entry()`
+does. Caught while writing the code, before any test ran against it,
+by re-deriving the in-memory version's own "preserve what `apply`
+didn't touch" semantics explicitly; a dedicated regression test now
+exists specifically for this
+(`a_delivery_event_preserves_the_existing_last_message_id_and_does_not_
+double_count`).
+
+7 new tests total: 5 in `stoolap_projections.rs` itself (creation
+counts and sets `last_message_id`; the delivery-preserves-state
+regression test above; an out-of-range event type is silently skipped,
+matching the in-memory version's own identical test; `reset` clears
+everything; a real close-and-reopen-the-same-file durability test) and
+2 in `tests/end_to_end.rs` (a direct unit-level check plus
+`durable_conversation_summary_works_as_a_drop_in_replacement` — the
+same real send-over-QUIC flow `conversation_summary_reflects_sends_
+and_receipts_without_any_manual_catch_up` already covered for the
+in-memory backend, now proven for the durable one through the exact
+same `MessageService` public API, no special-casing). 40/40 total in
+`siar-messaging` (26 unit + 14 integration), clippy clean, fmt clean,
+docs clean (same one pre-existing unrelated warning, still untouched).
+Re-confirmed `siar-event-log` itself is unaffected (32/32) — nothing
+this round touched it; `siar-messaging` has no dependents anywhere in
+this workspace, so that's the complete regression surface for this
+change.
+
+Real, named, still-open gaps: `stoolap_projections`'s own `CREATE
+TABLE IF NOT EXISTS` has the same no-schema-version-column gap every
+other `stoolap`-backed table in this workspace already has; the
+durable projection and its durable checkpoint store are, like every
+other `stoolap`-backed piece in this workspace, a separate database
+from both `siar-storage`'s tables AND the event log's own store — no
+new cross-store atomicity was created or claimed by adding this.
+Suggested next: Phase 5 — and per every round since the gap first
+surfaced, the `siar-storage`-outbox-vs-event-log-outbox architectural
+question needs an actual decision (not a default) before building
+anything there, since it determines whether Phase 5 extends the
+existing outbox or builds a second one.
+
+**siar-dtn-bundle / siar-emergency — §36/§37, the last two Phase 3
+domain event catalogs, 2026-09-22 (same session, after the section
+tracker + Phase 5 decision notes were written)**: with Phase 5 itself
+deliberately deferred to notes (see the tracker/decision write-up at
+the very end of this document), this round picked the next piece that
+doesn't depend on that decision — closing out §92 Phase 3's two
+remaining named domains, DTN and Emergency, in the exact same shape
+every earlier domain module already established (`EventTypeId`
+constants, a typed enum, `into_new_event`/`decode_*` with §9
+schema-version checking built in from the start this time rather than
+retrofitted, "construct only, never append").
+
+`siar-dtn-bundle::events` (`EventTypeId` 300-308): nine events lining
+up with [`state::BundleState`]'s own 11 states minus `Eligible`
+(scheduling-internal, not durable history — §2) and minus `Rejected`
+(happens before a bundle is ever durably created, so there's no
+"existed, then was rejected" history distinct from never having
+created one). §79's own "keep peer-encounter telemetry mostly
+operational" is followed literally: `BundleForwarded` covers every
+hop with zero per-hop peer/relay fields, matching
+`BundleState`'s own collapse of repeated `Forward` transitions into
+one state rather than a distinct one per hop. Added a real missing
+piece found while wiring this: `BundleId` had no `Display` impl (its
+inner `Uuid` isn't `pub`), so nothing outside `types.rs` could turn one
+into a stream name — added, same accessor pattern every other new
+domain ID this session already needed. This crate has explicitly NO
+`siar_domain` dependency (its own `Cargo.toml` says so), so
+`into_new_event` takes `origin: EventOrigin` as a pure opaque type and
+never constructs a `DeviceId` itself — this module's own tests use
+`EventOrigin::System`/`Imported` specifically to avoid needing one,
+proving the boundary holds rather than quietly reaching around it.
+9 tests, 51/51 total in the crate (43 pre-existing + 8 new — one test
+covers two assertions worth counting separately), clippy/fmt/docs
+clean. Real dependent checked: `siar-testkit` (5/5, unaffected).
+
+`siar-emergency::events` (`EventTypeId` 400-405): six events —
+`ReportCreated` (§80's own "SOS is persisted before transmission, even
+with no network," made real), `TrustReclassified`, `ReportAcknowledged`,
+`ReportResolved`, `ReportCancelled`, `ReportExpired`. Two real gaps
+found and fixed while wiring this, both immediately necessary rather
+than optional: `EmergencyReport` had no identifier of its own at all —
+added a new `ReportId` (same UUID-newtype shape every other new domain
+ID this session needed) — and `AlertTrust` had no `Serialize`/
+`Deserialize` derive, needed the moment `TrustReclassified` tried to
+embed one in a payload. `TrustReclassified` records trust's own
+OUTCOME, never performs the signature verification that decides it —
+same "decide vs record" split `siar_blob_manifest::events`'s own doc
+comment already draws for `transfer_state.rs`, consistent with this
+crate's own explicit no-`siar-crypto`-dependency boundary. Deliberately
+did NOT add events for `DiscoveryMode` transitions (radio/power
+management, not a report's own durable history — named explicitly as
+an exclusion, not an oversight). 17/17 tests total in the crate (11
+pre-existing + 6 new — plus the 2 new `ReportId` tests already counted
+separately above make 8 new lines, 6 of them exercising the event
+catalog itself), clippy/fmt/docs clean. No crate in this workspace
+depends on `siar-emergency`, so no dependent regression check was
+needed or possible.
+
+§92 Phase 3 is now fully closed across all FIVE of its named domains
+(§33 messaging, §34 files, §35 identity, §36 DTN, §37 emergency) — not
+just the three from the original round. Real, named, still-open gaps,
+same shape as every other domain past messaging: neither DTN nor
+emergency has a real `EventStore::append` caller anywhere (construct-
+only, same as files/identity); neither has §8 correlation/causation
+wired beyond accepting the parameters (no real workflow to demonstrate
+it against yet, same reasoning already given for files/identity); the
+informal per-domain `EventTypeId` range convention now has FIVE blocks
+to keep straight by hand (1-8, 100-108, 200-208, 300-308, 400-405)
+with still nothing enforcing non-collision across any of them.
+
 
 | # | Crate | State |
 |---|---|---|
 | 01 | siar-protocol-ext | ✅ **108/108 — spec complete** (final round: §91-92 reconciled, §93-95 error codes/health/recovery, §96-99 scheduler contract/storage/metrics/capability isolation, §100-105 reconciled with notes, §106 honest 16-item Definition of Done self-audit — 4 genuine gaps named, §107-108 reconciled) |
 | 02 | siar-identity-multidevice | ✅ **204/204 — spec complete** (final round, 2026-09-05: §190-204 — algorithm agility/downgrade protection utilities kept deliberately minimal per spec's own "avoid needless abstraction" caution; a root-key backup envelope that structurally cannot carry plaintext key material; backup-import validation run before any local state is touched; identity-reset/account-deletion presentations with required disclaimer fields; a guarded organization-offboarding state machine that operates only on organization-scoped device ids, never a personal AccountId; multi-tenant-safe composite keys; migration-fixture round-trip tests (honestly incomplete pending §125); and an itemized 21-item Definition-of-Done self-audit — **19/21 fully done, 2 honestly `PartiallyDone`** (no-UI-shipped confirmation prompt; property/integration tests exist but no real fuzz harness). Also fixed a genuinely broken intra-doc link left over from an earlier round, dropping this crate's doc-warning count from 4 to 3. 6 new modules (`algorithm_agility.rs`, `root_key_backup.rs`, `identity_lifecycle.rs`, `migration_fixtures.rs`, `definition_of_done.rs`) plus a `namespace.rs` extension, 20 new tests, 251/251 total, clippy clean, zero regressions. Across all 11 rounds this session: 137 new tests written, zero regressions in siar-routing-policy/siar-crypto at any point, every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1. Real, named, still-open gaps carried forward into future work: §125 schema versioning absent from DeviceCertificate/DeviceDirectory; §164 no cargo-fuzz harness; §191 full cross-version migration tests blocked on §125; `storage::IdentityStore`/`transaction`/all four `client_api` traits have zero real call sites anywhere in this workspace yet; `RootTrustCacheEntry`/`VerifiedContact` overlap not consolidated; §107/§91 have no real BLE/Wi-Fi/NFC transport wiring.) |
 | 03 | siar-routing-policy | ✅ **200/200 — spec complete** (final round, 2026-09-15: §183-200 — §183-184 "Testing Matrix"/"Route Selection Golden Tests": all 5 of the spec's own worked examples transcribed as tests (1 caught a real bug in *this round's own test code* — a stale pre-mutation health snapshot in a stickiness test, fixed), plus 2 combos (BLE-only, Wi-Fi Direct+BLE) with no prior coverage under any framing; §185 "Property Tests" — 2 properties not yet covered under this broader framing (`allow_relay`/`allow_bluetooth` forbidden-transport, and *known* insufficient bandwidth as a genuine hard elimination, not just the existing unknown-bandwidth-isn't-penalized test); §186/§187 "Fuzzing"/"Benchmarking" — real, named gaps (no `cargo-fuzz`, no `criterion`), with 2 targeted NaN-safety tests as a partial substitute for the former; §188 "Scalability" needed zero code (operation-level routing, `RouteCache`, both already true); new `reevaluation.rs` for §189-191 (`quality_change_exceeds_threshold`/`should_reevaluate_file_route`; §191 needed zero code — already `RouteCache`/`RouteHint`); §192-197 "Architecture Reconciliation" added as new lib.rs documentation (module structure, no-UI-deps, `RoutingError`'s 6 variants mapped onto the spec's own suggested 7, no-anyhow, initial-scope/phases all honored); §198 "Definition of Done" — a full, honest self-audit (✅/⚠️/❌ per item, matching specs 01/02's own closing pattern); §199-200 closing documentation; **also found and fixed a real gap**: most of rounds 10-18's public types were never re-exported at the crate root, only rounds 1-9's — fixed with a full pass of `pub use` additions matching the established style. 18 new tests, 263/263 total, clippy/fmt/doc clean (7 broken intra-doc links fixed), zero regressions. Named, still-open gaps carried forward: no fuzz/benchmark harness, DTN delivery-probability computation (representation exists since round 16, computation needs real encounter history this crate has never had), §55 "Mesh Forwarding"'s richer candidate representation (named since round 2), `Destination::Group` resolution (named since round 18), a handful of individual adapter-reporting fields (Bluetooth proximity/paired state, Wi-Fi group/session, LAN interface name). Across all 18 rounds building this crate: round 18 covered §171-182, round 17 covered §160-170, round 16 covered §151-159, round 15 covered §140-150, round 14 covered §128-139, round 13 covered §121-127, round 12 covered §116-120, round 11 covered §108-115, round 10 covered §105-107, rounds 2-9 covered §43-104, round 1 covered §1-42 — every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1, zero regressions in any dependent crate at any point except one one-line fix in round 17) |
-| 04 | siar-event-log | 🟡 ~35/95 (Phases 1-4 complete + durable `StoolapCheckpointStore` as of 2026-09-19, built ahead of a durable projection caller; Phase 5-7 remain) |
+| 04 | siar-event-log | 🟡 §92 Phase 3 fully closed (all 5 domains: +DTN/+Emergency 2026-09-22); Phase 5 deliberately deferred to notes — see full tracker + decision write-up at the very end of this document |
 | 05 | siar-blob-manifest | ✅ ~23/210 (+ metadata_encryption.rs) |
 | 06 | siar-dtn-bundle | ✅ ~50/192 |
 | 07 | siar-capability | ✅ ~19/164 |
@@ -1610,12 +1761,22 @@ Spec 01 (`siar-protocol-ext`) is complete (108/108). Spec 02
 Spec 03 (`siar-routing-policy`) is complete (200/200) as of 2026-09-15.
 Spec 04 (`siar-event-log`) is now the active crate in this project's
 explicit priority order — Phases 1-4 are done, the §5-15 audit pass is
-closed, and a durable `StoolapCheckpointStore` now exists (~35/95),
-built ahead of any caller since every real projection so far is itself
-in-memory. Continuing with Phase 5 (revisit the `siar-storage`-outbox
-architectural question first — named in every round since it surfaced)
-or a durable `ConversationSummaryProjection` to give this round's new
-checkpoint store its first real caller. Note there is a real, documented
+closed, and `StoolapCheckpointStore` now has a real caller: a durable
+`StoolapConversationSummaryProjection` in `siar-messaging`, a genuine
+drop-in for the in-memory version via a new `ConversationSummaryQuery`
+trait and Rust's stable trait-object upcasting. A full per-section
+tracker (26 done, 23 partial, 37 not started, 9 conceptual, of 95 as
+of 2026-09-22 — DTN/emergency moved from not-started to partial this
+round),
+the §93 Definition-of-Done self-audit, and the Phase 5 outbox decision
+are all recorded at the very end of this document now, at the user's
+own explicit request — the decision itself is deliberately NOT made:
+does Phase 5's outbox/effects/retry/recovery machinery extend
+`siar-storage`'s existing messaging outbox, or build a second one
+against the event log? That note is written to be acted on later,
+when either a real development need forces the question or there's
+time to weigh it properly — not decided by momentum in the meantime.
+Note there is a real, documented
 unresolved reconciliation question between `siar-routing`
 (pre-existing, next.md-era) and `siar-routing-policy` (spec 03's own
 crate) — see that crate's own `lib.rs` for the current state of that
@@ -1648,3 +1809,229 @@ Original list, resumes once Tier 0 is done:
 7. **The four Part 28 subsystems** (ratchet, groups/MLS, test harness,
    crate split) — each needs its own dedicated, scoped effort rather
    than sharing a round with anything else.
+
+---
+
+## Spec 04 (`siar-event-log`) — full section-by-section tracker
+
+Built 2026-09-22, at the user's own explicit request ("track section in
+04 offline event log specs, along update it how much section in which
+specs completed"), after Phases 1-4 were already done by round. This
+is the granular counterpart to that crate's own `~37/95` running count
+in the table above — every one of the spec's 95 numbered sections,
+checked against what's actually in the crate/its domain callers, not
+assumed from which Phase it nominally belongs to. Re-read every
+section not already covered by an earlier round's own notes before
+writing this, rather than inferring status from memory.
+
+**Legend**: ✅ done and real (code exists, is tested, matches the
+section) · 🟡 partial (something real exists but doesn't fully satisfy
+the section — see the note) · ⬜ not started · ◇ conceptual/guidance
+section with no code artifact of its own (informs design elsewhere;
+"done" doesn't apply to it the way it does to a type or a table).
+
+| § | Title | Status | Note |
+|---|---|---|---|
+| 1 | Purpose | ◇ | Informs everything; no artifact of its own. |
+| 2 | Do Not Event-Source Everything | ◇ | Followed: only 3 domains (messaging/files/identity) have catalogs, not "everything." |
+| 3 | Command vs Event | ◇ | Conceptual distinction; reflected in `NewEvent` vs domain command handling, not a type. |
+| 4 | Core Event Envelope | ✅ | `EventEnvelope` (Phase 1). |
+| 5 | Streams | ✅ | `StreamId`, per-stream version (Phase 1/2). |
+| 6 | Local Global Offset | ✅ | `LocalLogOffset` (Phase 1/2). |
+| 7 | Event Origin | ✅ | `EventOrigin` (Phase 1). |
+| 8 | Correlation and Causation | 🟡 | Real end-to-end in `siar-messaging` (`MessageCorrelation` registry). Identity/files still always `None` — no real workflow to correlate yet. |
+| 9 | Versioned Event Schemas | ✅ | `schema_version`-checked decode in all 3 domain catalogs; rejects unrecognized versions instead of blind-decoding. |
+| 10 | Append-Only Semantics | ✅ | No update/delete API on stored events, by construction. |
+| 11 | Atomic Append | ✅ | `stoolap` transaction + process mutex (Phase 2). |
+| 12 | Optimistic Concurrency | ✅ | Version check + `ConcurrencyConflict` + `append_with_retry` (Phase 2). |
+| 13 | Local-First Command Flow | ✅ | `send_text`'s existing persist→record→network-send ordering already matched this; confirmed and named in comments. |
+| 14 | Transactional Outbox | 🟡 | Resilience test proves a broken event log doesn't break the real outbox. True cross-store atomicity, and the "extend vs build a second outbox" decision, both still open — **see the Phase 5 decision notes below.** |
+| 15 | Event Log Is Not a Job Queue | ✅ | Outbox retry logic uses its own `due()`, never scans the event log. |
+| 16 | Projection Architecture | ✅ | `Projection` trait + `ProjectionRunner` (Phase 4). |
+| 17 | Projection Checkpoints | ✅ | `ProjectionCheckpoint` + in-memory AND durable (`StoolapCheckpointStore`) backends. |
+| 18 | Read-Your-Writes | ✅ | Real, via synchronous catch-up after append — honestly documented as "sync-after," not "same transaction" (a real, smaller guarantee than the section's own ideal). |
+| 19 | Event Store Backend | ✅ | `StoolapEventStore` (Phase 2). |
+| 20 | Event Store Trait | ✅ | `EventStore` (Phase 1). |
+| 21 | Batch Append | ✅ | `AppendRequest.events: Vec<NewEvent>`, all-or-nothing (Phase 1/2). |
+| 22 | Integrity | ✅ | blake3 checksum per row, verified on read (Phase 2). |
+| 23 | Remote Event Ingestion | ⬜ | No dependency on identity/protocol crates for validation; only `detect_gap` (§26) serves this path at all. |
+| 24 | Idempotency | ✅ | Duplicate `event_id` is a no-op, tested (Phase 1/2). |
+| 25 | Out-of-Order Events | 🟡 | `detect_gap` reports a gap; nothing holds or reorders — reporting only, no remediation. |
+| 26 | Gap Detection | ✅ | `detect_gap` (Phase 1), tested against the spec's own worked example. |
+| 27 | Logical Clocks | 🟡 | `stream_version` provides real per-stream ordering; no hybrid logical clock beyond that. |
+| 28 | Offline IDs | ✅ | `EventId`/`CorrelationId` are locally-generated `Uuid` v4 — collision-resistant, offline, stable across retries (verified by `append_with_retry`'s own reuse of the same id). Not time-sortable (not v7) — the section calls this an optional locality improvement, not a correctness requirement. |
+| 29 | Pure Decision Functions | ⬜ | No `decide(state, command) -> Result<Vec<DomainEvent>, DomainError>` pattern provided or enforced anywhere. |
+| 30 | Effect Processing | 🟡 | `record_messaging_event`'s catch-up call is effect-adjacent but ad hoc — no formal effect-processing pattern/type exists. |
+| 31 | Exactly-Once Is Not the Goal | ◇ | Reflected in §24's own idempotent-no-op design; no artifact of its own. |
+| 32 | Retry Event Granularity | ◇ | Reflected in `append_with_retry`'s own per-event retry design; no artifact of its own. |
+| 33 | Messaging Events | ✅ | Full: catalog, real `append` caller (3 call sites), real correlation, real durable projection. The most complete domain by far. |
+| 34 | File Events | 🟡 | Catalog real and tested, §9 schema-version fix applied. No real `EventStore::append` caller anywhere — construct-only. |
+| 35 | Identity Events | 🟡 | Same shape as files: catalog real and tested, §9 fixed, no real caller. |
+| 36 | DTN Events | 🟡 | `siar-dtn-bundle::events` (2026-09-22): 9 events, `EventTypeId` 300-308, tested. Construct-only — no real `append` caller yet, same as §34/§35. |
+| 37 | Emergency Events | 🟡 | `siar-emergency::events` (2026-09-22): 6 events, `EventTypeId` 400-405, tested; new `ReportId` added (the report type had none). Construct-only — no real `append` caller yet. |
+| 38 | Snapshotting | ⬜ | Phase 7, not started. |
+| 39 | Snapshot Structure | ⬜ | Phase 7, not started. |
+| 40 | Compaction | ⬜ | Not started. |
+| 41 | Privacy and Deletion | ⬜ | Not started. |
+| 42 | Event Encryption | 🟡 | Messaging's own `ciphertext` field is already application-encrypted upstream (by `siar-crypto`, before it ever reaches this crate). No local-database-at-rest encryption exists — the `stoolap` files this crate writes are plain, unencrypted files. |
+| 43 | Blob References | ✅ | File events reference `BlobId`/`ManifestId`, never raw bytes. Messaging embeds small ciphertext directly by design (text content, not "large binary data" — attachments go through the separate blob subsystem, not through `MessagingEvent`). |
+| 44 | Search as Projection | ⬜ | No FTS projection exists. |
+| 45 | Replay Must Not Re-run Side Effects | 🟡 | True by construction today — the only real `Projection` (`ConversationSummaryProjection`) has zero side effects, so replay is safe. Never stress-tested against a side-effecting projection, since none exists yet. |
+| 46 | Replay Modes | ⬜ | No `ReplayMode` enum; `catch_up` has one implicit mode. |
+| 47 | Startup Recovery | ⬜ | No orchestrated startup sequence exists anywhere in what's been built. |
+| 48 | Work Queue Reconciliation | ⬜ | Not started. |
+| 49 | Replication Scope | ⬜ | No `ReplicationScope` enum. |
+| 50 | Own-Device Sync | ⬜ | Not started. |
+| 51 | Peer and Group Sync | ⬜ | Not started. |
+| 52 | Local Storage Envelope vs Network Envelope | ⬜ | `StoredEvent` is used directly wherever a wire form would be needed — no separate `ReplicationEventV1` transform layer exists yet (moot until real replication exists). |
+| 53 | Sync Cursors | ⬜ | No `SyncCursor` type. |
+| 54 | Conflicts Are Domain-Specific | ◇ | Correctly not building one generic resolver — but nothing exists yet to point to as "done" either, since no real conflicts have arisen. |
+| 55 | Event Size Limits | ⬜ | `append` enforces no maximum size per event type. |
+| 56 | Durability Classes | ⬜ | No `DurabilityClass` enum; nothing distinguishes Critical/Durable/BestEffort. |
+| 57 | SQL Schema | ✅ | `events`/`stream_heads` (Phase 2) plus `projection_checkpoints`/`conversation_summaries` (Phase 4). |
+| 58 | Indexes | ✅ | Unique indexes on offset/event_id/(stream,version) plus each new table's own (Phase 2/4). |
+| 59 | Memory Discipline | ✅ | `ProjectionRunner::catch_up` reads bounded batches (`batch_size`), discards between them — matches the section's own diagram exactly. |
+| 60 | Projection Isolation | 🟡 | A broken event log doesn't stop already-succeeded appends (tested); a projection catch-up failure is logged and swallowed, not fatal. Cross-projection isolation (one broken projection not blocking another) isn't demonstrated — only one real projection exists. |
+| 61 | Internal Event Notifications | ⬜ | No wake/notify mechanism — `record_messaging_event` calls `catch_up` synchronously in the same call stack instead, which works for the one caller that exists today but isn't the decoupled notification pattern this section describes. |
+| 62 | Unknown Events | 🟡 | "Optional unknown → store/ignore safely" is real and tested (`ConversationSummaryProjection` skips foreign event-type ranges). "Required semantic unknown → block stream until upgrade" doesn't exist. |
+| 63 | Namespaced Custom Events | ⬜ | No real registry — only the informal, undocumented-to-each-other per-domain numeric range convention (identity 1-8, messaging 100-108, files 200-208, DTN 300-308, emergency 400-405 — all five domains now have a block), already named repeatedly as a stopgap, not a fix. |
+| 64 | Multi-Tenant Isolation | ⬜ | No `TenantId` concept anywhere. |
+| 65 | Multiple Identities | ⬜ | No isolation between personal/work identities on one device. |
+| 66 | Security | 🟡 | Local corruption (§22 checksum) and duplicate/replay (§24) are covered. Malformed-imported-event, rollback, oversized-payload, and unauthorized-remote-event are all moot until §23 (remote ingestion) exists at all. |
+| 67 | Event Store Errors | 🟡 | `EventStoreError` has `ConcurrencyConflict`/`Backend`/`Corrupt`/`StreamNotFound` — deliberately minimal (only what's been needed), not the spec's full suggested set (`DuplicateEvent`/`StorageFull`/`ReadOnly`/`MigrationRequired`/`Io`/`Serialization`). |
+| 68 | Storage Full Behavior | ⬜ | Not specifically handled or tested. |
+| 69 | Read-Only Recovery Mode | ⬜ | A `Corrupt` error just returns `Err`; no read-only fallback mode. |
+| 70 | Backup | ⬜ | `read_log(from_offset, ...)` gives exactly the primitive §70 asks for, but no backup tooling is built on top of it. |
+| 71 | Restore Safety | ⬜ | Not started. |
+| 72 | Analytics Separation | ◇ | No analytics pipeline exists yet to separate anything from. |
+| 73 | Dioxus Boundary | ⬜ | No UI crate in this workspace's uploaded scope to assess against. |
+| 74 | Kotlin / iOS Boundary | ⬜ | No mobile platform code in this workspace's uploaded scope. |
+| 75 | Daemon Compatibility | ⬜ | Not assessed — no daemon architecture seen in the uploaded crates. |
+| 76 | Headless Compatibility | 🟡 | Satisfied by omission — nothing built so far couples to a UI — but never explicitly declared or tested as a requirement. |
+| 77 | Routing Integration | ⬜ | No wiring between `siar-routing-policy` and `MessageQueued`/the event log. |
+| 78 | File Integration | ✅ | `FileEvent`'s catalog is transfer-level only — no per-chunk event exists — matching this section's own "semantic transfer events, not one event per chunk" exactly, by design, from when §34 was first built. |
+| 79 | DTN Integration | ⬜ | Not started. |
+| 80 | Emergency Integration | ⬜ | Not started. |
+| 81 | Diagnostics | ⬜ | Not started. |
+| 82 | Metrics | ⬜ | Not started. |
+| 83 | Property Tests | 🟡 | Several of the section's own listed invariants ARE covered — but only by targeted example tests (one specific scenario each), never by a property/fuzz framework generating arbitrary cases. |
+| 84 | Crash Injection Tests | 🟡 | Close-and-reopen-the-same-file tests exist for `stoolap_store`/`stoolap_checkpoint_store`/`stoolap_projections` — a real but narrow proxy for "after commit, process restart." Not true injection at arbitrary points (before append, mid-transaction, after projection before network effect, etc.). |
+| 85 | Fuzzing | ⬜ | Not started. |
+| 86 | Golden Event Tests | ⬜ | No fixed-byte-encoding tests for any event schema. |
+| 87 | Recovery Acceptance Test | ⬜ | The exact composed scenario (kill→restart→projection restored→outbox reconstructed→route found→same MessageId resent→recipient dedupes→MessageDelivered committed) doesn't exist as one test, though several of its pieces are covered separately by other tests. |
+| 88 | Multi-Device Offline Test | ⬜ | Not started. |
+| 89 | Suggested Crate Structure | 🟡 | Deliberately deviated, and said so from the first Phase 2 round onward: kept one `EventStoreError` rather than splitting into the suggested `codec.rs`/`registry.rs`/`retention.rs`/`replay.rs`/`diagnostics.rs`/`error.rs`. |
+| 90 | Public API | 🟡 | `EventStore`/`ProjectionRunner` match the suggested short list; no separate `EventAppender`/`EventReader`/`SnapshotStore` types — `EventStore` covers append+read in one trait instead. |
+| 91 | Initial Production Scope | 🟡 | Of the 11 "implement first" items: 9 done (SQLite store, stream versioning, global offset, unique IDs, batch append, projection checkpoints, replay, schema versioning, and — partially — critical projections). Outbox integration and basic snapshots are the two genuinely missing. |
+| 92 | Implementation Phases | 🟡 | This section IS the master phase structure the rest of this document tracks by. Phases 1-4 done; 5 (outbox/effects/retry/recovery), 6 (replication), 7 (snapshots/compaction/crash/fuzz/bench) remain. |
+| 93 | Definition of Done | 🟡 | Self-audited against all 21 items — see the dedicated subsection immediately below rather than one cell here; roughly 7 done, 9 partial, 5 not started. |
+| 94 | Relationship to Other Parts | ◇ | Cross-references to other specs — see the Phase 5 decision notes below for the one place this actually mattered so far (Part 03/`siar-routing-policy`, and `siar-storage`'s own pre-existing outbox). |
+| 95 | Final Principle | ◇ | The one-sentence guarantee ("if the app says a durable operation was accepted, that intent survives network loss and process termination") this whole spec exists to make true. Partially true today: real for messaging's own send path (proven by the crash-adjacent durability tests + the broken-event-log resilience test); not yet extended to files, identity, DTN, or emergency, none of which have a real caller. |
+
+### §93 Definition of Done — full 21-item self-audit
+
+Reading the section's own bullets literally, in order, rather than
+summarizing:
+
+1. accepted local commands survive process death — ✅ (real file
+   close/reopen durability tests, three different `stoolap`-backed
+   stores)
+2. operations can be accepted without Internet — ✅ (local-first by
+   construction; `append` has no network dependency)
+3. IDs require no central server — ✅ (`Uuid` v4, generated locally)
+4. stream versions provide deterministic ordering — ✅
+5. duplicate remote events are idempotent — ✅ (tested)
+6. projections rebuild deterministically — 🟡 (mechanism is real and
+   tested; determinism depends on each `Projection`'s own `apply`
+   being pure, which isn't generally enforced)
+7. checkpoints recover after crashes — ✅ (durable checkpoint store,
+   tested)
+8. UI reads optimized projections — ⬜ (no UI layer in scope here to
+   wire this to)
+9. large data is referenced via blobs — ✅ (file events; message text
+   ciphertext is small content, not "large data," by design)
+10. message outbox survives restart — ✅ (`siar-storage`'s own outbox,
+    pre-existing, confirmed still working)
+11. file semantic state survives restart — 🟡 (the event catalog
+    exists and could be persisted durably; no real caller wires
+    `transfer_state.rs`'s own transitions to it yet)
+12. device lifecycle remains auditable — 🟡 (same shape as #11 — real
+    catalog, no real caller)
+13. SOS is persisted before transmission — ⬜ (no emergency event
+    wiring at all)
+14. DTN lifecycle is durable — ⬜ (no DTN event wiring at all)
+15. replication scope is explicit — ⬜ (§49 not built)
+16. event schemas are versioned — ✅ (§9, all three domains)
+17. replay never accidentally re-runs external effects — 🟡 (true by
+    construction today, since the one real projection has no side
+    effects; never stress-tested against one that does)
+18. storage-full is handled safely — ⬜ (not specifically tested)
+19. no external side effect occurs before durable commit — ✅ (mostly
+    confirmed for messaging's own send path — persist, then record,
+    then network send, in that order, per §13 — not exhaustively
+    audited across every other code path)
+20. crash/property/fuzz tests exist — 🟡 (crash-ADJACENT tests exist;
+    no property tests; no fuzz tests)
+21. the subsystem works outside the messenger — 🟡 (the CORE crate,
+    `siar-event-log` itself, has zero dependency on any domain crate —
+    proven structurally by identity and files each building their own
+    independent catalog against the same trait — but the only domain
+    with real END-TO-END usage, an actual `append` caller, is
+    messaging)
+
+Honest overall read: roughly a third of this checklist is genuinely
+done, a third is real-but-partial, and a third hasn't been started —
+which lines up with the ~37/95 running section count above being
+closer to "40% of the letter of the spec" than "40% of a production-
+ready subsystem," since the sections most concentrated in the ⬜
+column (remote ingestion, replication, snapshots, most of the test-
+harness sections) are disproportionately hard relative to their count.
+
+### Phase 5 decision — deliberately deferred, not decided
+
+Recorded here rather than acted on, per the user's own explicit
+instruction this round: build the note, not the code, so this is
+ready to act on "when [there's] a better time or a development which
+requires writing the code."
+
+**The question**: does §14's transactional-outbox/effects/retry
+machinery (Phase 5) extend `siar-storage`'s existing messaging outbox
+(`OutboxRepository`, already real, already tested, already what
+`send_text`/`retry_due` use today), or build a second,
+event-log-native outbox alongside it?
+
+**Why it's a real fork, not a default**:
+- *Extend the existing one*: less duplication, one source of truth for
+  "what needs retrying." But couples `siar-event-log`'s own retry
+  story to a table `siar-storage` owns, and `siar-storage`'s outbox
+  currently only knows about messaging — files/identity/DTN/emergency
+  would need either their own outbox tables (repeating the pattern
+  per-domain, same as the event catalogs already do) or a shared
+  generic one that doesn't exist yet either way.
+- *Build a second one on the event log*: matches the event-sourcing
+  pattern Phases 1-4 have followed throughout (domain-agnostic core,
+  domain-specific usage) and could plausibly become the ONE outbox
+  every domain uses, not just messaging. But now two systems both
+  think they own "pending work" for messaging specifically
+  (`siar-storage`'s outbox AND whatever Phase 5 builds), which is
+  exactly the kind of split-brain two-sources-of-truth situation that
+  causes real bugs later if they ever disagree about a message's
+  state.
+
+**What's already true, and doesn't disappear whichever way this
+goes**: `siar-storage`'s outbox works today, is tested, and
+`send_text`'s own real resilience test
+(`send_text_survives_a_completely_broken_event_log`) already proves
+messaging's actual delivery doesn't depend on the event log at all —
+so there is no urgency pressure to resolve this from a "something is
+broken" angle. This is purely a forward design choice about where
+Phase 5's OWN new work should live, not a fix for anything currently
+failing.
+
+**What would make this decision easier later**: whichever domain gets
+a real `append` caller next (see §34/§35's own "no real caller" gaps
+above) will surface the actual shape of the problem — if files or
+identity end up needing their own retry/outbox logic too, that's real
+evidence for "build it once on the event log," rather than a
+hypothetical argument. Revisit this note the next time Phase 5, or a
+second domain's outbox need, actually comes up — not before.

@@ -7240,9 +7240,12 @@ dependencies = [
 name = "siar-emergency"
 version = "0.1.0"
 dependencies = [
+ "postcard",
  "serde",
  "siar-domain",
+ "siar-event-log",
  "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]

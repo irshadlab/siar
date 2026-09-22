@@ -12,10 +12,10 @@ use siar_domain::{
     CallControlEvent, ConversationId, DeliveryState, DeviceId, MediaType, MessageContent,
     MessageText,
 };
-use siar_event_log::{EventStore, InMemoryEventStore};
+use siar_event_log::{EventStore, InMemoryEventStore, StoolapCheckpointStore};
 use siar_messaging::{
     conversation_stream_id, decode_messaging_event, IncomingEvent, MessageService, MessagingEvent,
-    PeerTicket, StorageBlobStore,
+    PeerTicket, StoolapConversationSummaryProjection, StorageBlobStore,
 };
 use siar_storage::{
     open_in_memory, BlobRepository, MessageRepository, OutboxRepository, StoolapBlobRepository,
@@ -338,7 +338,11 @@ async fn conversation_summary_reflects_sends_and_receipts_without_any_manual_cat
     let conversation = ConversationId::new();
 
     assert!(
-        alice.service.conversation_summary(conversation).is_none(),
+        alice
+            .service
+            .conversation_summary(conversation)
+            .await
+            .is_none(),
         "nothing sent yet"
     );
 
@@ -353,13 +357,18 @@ async fn conversation_summary_reflects_sends_and_receipts_without_any_manual_cat
     let alice_summary = alice
         .service
         .conversation_summary(conversation)
+        .await
         .expect("send_text must leave the summary populated, synchronously");
     assert_eq!(alice_summary.message_count, 1);
     assert_eq!(alice_summary.last_message_id, Some(sent_id));
 
     // Bob's own summary is independent — nothing arrives for him until
     // he actually receives the frame.
-    assert!(bob.service.conversation_summary(conversation).is_none());
+    assert!(bob
+        .service
+        .conversation_summary(conversation)
+        .await
+        .is_none());
     let envelope = bob.recv_envelope().await;
     bob.service
         .handle_incoming(&alice_ticket, envelope)
@@ -368,6 +377,7 @@ async fn conversation_summary_reflects_sends_and_receipts_without_any_manual_cat
     let bob_summary = bob
         .service
         .conversation_summary(conversation)
+        .await
         .expect("handle_incoming must leave the summary populated, synchronously");
     assert_eq!(bob_summary.message_count, 1);
     assert_eq!(bob_summary.last_message_id, Some(sent_id));
@@ -383,6 +393,7 @@ async fn conversation_summary_reflects_sends_and_receipts_without_any_manual_cat
     let alice_summary_after_ack = alice
         .service
         .conversation_summary(conversation)
+        .await
         .expect("still populated");
     assert_eq!(alice_summary_after_ack.message_count, 1);
     assert!(alice_summary_after_ack.last_activity_at >= alice_summary.last_activity_at);
@@ -805,7 +816,64 @@ async fn send_text_survives_a_completely_broken_event_log() {
     // allowed to be missing here — it lives entirely inside the event
     // log this service was built to fail.
     assert!(
-        broken_service.conversation_summary(conversation).is_none(),
+        broken_service
+            .conversation_summary(conversation)
+            .await
+            .is_none(),
         "no summary can exist when every append to back it failed"
     );
+}
+
+/// The durable counterpart to `conversation_summary_reflects_sends_
+/// and_receipts_without_any_manual_catch_up`: same real send→receive
+/// flow through the actual `MessageService` API, but with
+/// `with_durable_conversation_summary` swapped in — proving the
+/// `stoolap`-backed projection really is a drop-in replacement for the
+/// in-memory one from `MessageService`'s own caller's point of view,
+/// not just correct in `stoolap_projections`'s own isolated unit
+/// tests. Also closes the loop `StoolapCheckpointStore`'s own doc
+/// comment named as still-open: this is that store's first real
+/// caller, exercised through an actual multi-event workflow rather
+/// than only direct unit tests of the checkpoint store by itself.
+#[tokio::test]
+async fn durable_conversation_summary_works_as_a_drop_in_replacement() {
+    let alice = Node::spawn().await;
+    let bob = Node::spawn().await;
+    let bob_ticket = bob.ticket();
+    let conversation = ConversationId::new();
+
+    let event_log: Arc<dyn EventStore + Send + Sync> = Arc::new(InMemoryEventStore::new());
+    let projection = Arc::new(StoolapConversationSummaryProjection::open_in_memory().unwrap());
+    let checkpoints = Arc::new(StoolapCheckpointStore::open_in_memory().unwrap());
+    let blobs: Arc<dyn BlobRepository + Send + Sync> = Arc::new(StoolapBlobRepository::new(
+        open_in_memory().expect("in-memory db opens"),
+    ));
+
+    let durable_service = MessageService::new(
+        alice.device_id,
+        alice.identity.try_clone().expect("identity clones"),
+        Arc::clone(&alice.endpoint),
+        Arc::clone(&alice.messages),
+        Arc::clone(&alice.outbox),
+        blobs,
+    )
+    .with_event_log(event_log)
+    .with_durable_conversation_summary(projection, checkpoints);
+
+    assert!(durable_service
+        .conversation_summary(conversation)
+        .await
+        .is_none());
+
+    let message_id = durable_service
+        .send_text(conversation, &bob_ticket, text("durable read your writes"))
+        .await
+        .expect("send_text succeeds");
+
+    let summary = durable_service
+        .conversation_summary(conversation)
+        .await
+        .expect("send_text must leave the DURABLE summary populated too, synchronously");
+    assert_eq!(summary.message_count, 1);
+    assert_eq!(summary.last_message_id, Some(message_id));
 }

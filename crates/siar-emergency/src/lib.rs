@@ -26,8 +26,27 @@
 //! infra-free crate deliberately doesn't reach into, same boundary
 //! `siar_domain::attachment`'s own doc comment already draws for itself
 //! ("the actual hashing/encryption lives in `siar-crypto`").
+//!
+//! `events.rs`/`ids.rs` are a separate matter — not this crate's own
+//! next.md numbering above, but
+//! `04-offline-event-log-architecture.md`'s §37 "Emergency Events"/§80
+//! "Emergency Integration" (that spec's own Phase 3, the fifth and
+//! last domain event catalog after identity/messaging/files/DTN — see
+//! that module's own doc comment for the full picture, including the
+//! new [`ids::ReportId`] it needed and [`report::EmergencyReport`]
+//! didn't have).
 
+pub mod events;
+pub mod ids;
 pub mod kind;
 pub mod mode;
 pub mod report;
 pub mod trust;
+
+pub use events::{
+    decode_emergency_event, report_stream_id, EmergencyEvent, EmergencyEventDecodeError,
+    CURRENT_EMERGENCY_EVENT_SCHEMA_VERSION, EVENT_TYPE_REPORT_ACKNOWLEDGED,
+    EVENT_TYPE_REPORT_CANCELLED, EVENT_TYPE_REPORT_CREATED, EVENT_TYPE_REPORT_EXPIRED,
+    EVENT_TYPE_REPORT_RESOLVED, EVENT_TYPE_TRUST_RECLASSIFIED,
+};
+pub use ids::ReportId;

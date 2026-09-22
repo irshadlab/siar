@@ -15,7 +15,9 @@
 //! crate's types even has a field a caller could mistakenly wire up to
 //! that check in the first place.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AlertTrust {
     /// Signature chains to a configured authority key (§49).
     VerifiedAuthority,

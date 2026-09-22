@@ -15,6 +15,7 @@ mod group_service;
 mod key_package_directory;
 pub mod projections;
 mod service;
+pub mod stoolap_projections;
 mod ticket;
 
 pub use blob_bridge::StorageBlobStore;
@@ -24,8 +25,11 @@ pub use events::{
     EVENT_TYPE_MESSAGE_QUEUED, EVENT_TYPE_MESSAGE_READ, EVENT_TYPE_MESSAGE_RECEIVED,
     EVENT_TYPE_REACTION_ADDED, EVENT_TYPE_REACTION_REMOVED,
 };
-pub use projections::{ConversationSummary, ConversationSummaryProjection};
+pub use projections::{
+    ConversationSummary, ConversationSummaryProjection, ConversationSummaryQuery,
+};
 pub use service::{IncomingEvent, MessageService};
+pub use stoolap_projections::StoolapConversationSummaryProjection;
 pub use ticket::PeerTicket;
 // `InMemoryDeviceDirectory` added to this re-export list — a real,
 // pre-existing gap found while wiring the desktop group UI: the type

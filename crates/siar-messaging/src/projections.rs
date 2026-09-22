@@ -70,6 +70,36 @@ pub struct ConversationSummary {
     pub last_activity_at: Option<Timestamp>,
 }
 
+/// The read side both the in-memory [`ConversationSummaryProjection`]
+/// and the durable `siar_messaging::stoolap_projections::
+/// StoolapConversationSummaryProjection` implement — a supertrait of
+/// [`Projection`] (not a separate, unrelated trait) so
+/// `MessageService` can hold either backend as one
+/// `Arc<dyn ConversationSummaryQuery>` and pass the SAME value to both
+/// `ProjectionRunner::catch_up` (which only needs the `Projection`
+/// half) and its own query method (which needs this trait's own
+/// `get`), via Rust's trait-object upcasting (stable since 1.86 — this
+/// workspace already pins a newer toolchain, see the root
+/// `rust-toolchain.toml`) rather than storing the same projection
+/// behind two separate `Arc`s that would have to be kept in sync by
+/// construction alone.
+///
+/// Async even for the in-memory implementation, where the underlying
+/// lookup is a synchronous `Mutex` lock with no real I/O — matching
+/// the durable implementation's own real query, which IS a `stoolap`
+/// read (a `Result`, since that one really can fail). One shared
+/// signature both backends actually satisfy, rather than a sync
+/// signature that would have to lie about the durable backend's real
+/// failure modes, or two different signatures `MessageService` would
+/// have to match on by backend.
+#[async_trait]
+pub trait ConversationSummaryQuery: Projection {
+    async fn get(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<Option<ConversationSummary>, ProjectionError>;
+}
+
 /// See this module's own doc comment.
 #[derive(Default)]
 pub struct ConversationSummaryProjection {
@@ -81,17 +111,32 @@ impl ConversationSummaryProjection {
         Self::default()
     }
 
-    /// The query side — `None` means "no activity recorded for this
+    /// The synchronous, infallible query — kept as a plain inherent
+    /// method (not just the [`ConversationSummaryQuery`] trait's own
+    /// `async fn get`, which this type also implements) since this
+    /// backend's own lookup genuinely can't fail and genuinely doesn't
+    /// need to be `.await`ed; this module's own unit tests use this
+    /// form directly. `None` means "no activity recorded for this
     /// conversation yet" (either genuinely none, or this projection
     /// simply hasn't been asked to catch up since it happened; see
     /// this module's own doc comment on how `MessageService` keeps the
     /// two in sync in practice).
-    pub fn get(&self, conversation_id: ConversationId) -> Option<ConversationSummary> {
+    pub fn get_sync(&self, conversation_id: ConversationId) -> Option<ConversationSummary> {
         self.summaries
             .lock()
             .expect("ConversationSummaryProjection lock poisoned")
             .get(&conversation_id)
             .copied()
+    }
+}
+
+#[async_trait]
+impl ConversationSummaryQuery for ConversationSummaryProjection {
+    async fn get(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<Option<ConversationSummary>, ProjectionError> {
+        Ok(self.get_sync(conversation_id))
     }
 }
 
@@ -213,7 +258,7 @@ mod tests {
         let runner = ProjectionRunner::new(&store, &checkpoints);
         runner.catch_up(&projection, 200).await.unwrap();
 
-        let summary = projection.get(conversation_id).unwrap();
+        let summary = projection.get_sync(conversation_id).unwrap();
         assert_eq!(summary.message_count, 1);
         assert_eq!(summary.last_message_id, Some(message_id));
     }
@@ -247,7 +292,7 @@ mod tests {
         .await;
         let runner = ProjectionRunner::new(&store, &checkpoints);
         runner.catch_up(&projection, 200).await.unwrap();
-        let after_created = projection.get(conversation_id).unwrap();
+        let after_created = projection.get_sync(conversation_id).unwrap();
 
         store
             .append(AppendRequest {
@@ -268,7 +313,7 @@ mod tests {
             .unwrap();
         runner.catch_up(&projection, 200).await.unwrap();
 
-        let after_delivered = projection.get(conversation_id).unwrap();
+        let after_delivered = projection.get_sync(conversation_id).unwrap();
         assert_eq!(
             after_delivered.message_count, after_created.message_count,
             "MessageDelivered must not double-count the message"
@@ -334,9 +379,9 @@ mod tests {
         .await;
         let runner = ProjectionRunner::new(&store, &checkpoints);
         runner.catch_up(&projection, 200).await.unwrap();
-        assert!(projection.get(conversation_id).is_some());
+        assert!(projection.get_sync(conversation_id).is_some());
 
         projection.reset().await.unwrap();
-        assert!(projection.get(conversation_id).is_none());
+        assert!(projection.get_sync(conversation_id).is_none());
     }
 }

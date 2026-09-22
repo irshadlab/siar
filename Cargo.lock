@@ -7353,9 +7353,11 @@ dependencies = [
  "siar-protocol",
  "siar-storage",
  "siar-transport",
+ "stoolap",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "uuid",
  "x25519-dalek 2.0.1",
 ]
 

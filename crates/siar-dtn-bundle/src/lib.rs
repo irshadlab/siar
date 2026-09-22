@@ -101,9 +101,18 @@
 //!   "social routing, predictive routing"), and everything from
 //!   roughly §46 onward** — a genuinely small slice of a 190-section
 //!   document.
+//!
+//! `events.rs` is a separate matter — not this crate's own §1-190
+//! numbering above, but `04-offline-event-log-architecture.md`'s §36
+//! "DTN Events"/§79 "DTN Integration" (that spec's own Phase 3, the
+//! fourth domain event catalog after identity/messaging/files — see
+//! that module's own doc comment for the full picture, including why
+//! it has no `siar_domain` dependency despite `EventOrigin` needing
+//! one).
 
 pub mod bundle;
 pub mod dedup;
+pub mod events;
 pub mod forwarding;
 pub mod payload;
 pub mod routing_bridge;
@@ -114,6 +123,13 @@ pub mod types;
 
 pub use bundle::{BundleIntegrity, DtnBundle};
 pub use dedup::SeenBundles;
+pub use events::{
+    bundle_stream_id, decode_dtn_event, DtnEvent, DtnEventDecodeError,
+    CURRENT_DTN_EVENT_SCHEMA_VERSION, EVENT_TYPE_BUNDLE_ACKNOWLEDGED, EVENT_TYPE_BUNDLE_CANCELLED,
+    EVENT_TYPE_BUNDLE_COMPLETED, EVENT_TYPE_BUNDLE_CREATED, EVENT_TYPE_BUNDLE_DESTINATION_REACHED,
+    EVENT_TYPE_BUNDLE_EVICTED, EVENT_TYPE_BUNDLE_EXPIRED, EVENT_TYPE_BUNDLE_FORWARDED,
+    EVENT_TYPE_BUNDLE_STORED,
+};
 pub use forwarding::{decide_forwarding, EncounteredPeer, ForwardingDecision};
 pub use payload::{InlinePayloadTooLarge, PayloadReference, MAX_INLINE_PAYLOAD_BYTES};
 pub use routing_bridge::{select_dtn_bundle_policy, DtnBundlePolicy, DEFAULT_BUNDLE_TTL_MILLIS};

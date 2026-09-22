@@ -26,6 +26,12 @@ impl Default for BundleId {
     }
 }
 
+impl std::fmt::Display for BundleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// §11: "opaque, short-lived where possible, difficult to correlate
 /// long-term... Permanent account IDs should not be advertised
 /// unnecessarily in public BLE beacons or relay headers." Raw bytes,
@@ -82,9 +88,12 @@ pub enum StorageClass {
     DeliveryReceipt,
 }
 
-/// §36's own field name (`DtnPriority`) — spec-defined priority tiers
-/// specifically for DTN bundle store-carry-forward scheduling and
-/// spray allocation (see §22).
+/// §36's own field name (`DtnPriority`) — deliberately a distinct type
+/// from `siar_domain::MessagePriority` (which `siar-dtn`'s existing
+/// `MeshBundle` already uses), rather than reusing it, since this
+/// crate's whole `DtnBundle` type is itself a parallel, not-yet-
+/// reconciled model to `siar-dtn`'s `MeshBundle` — see this crate's own
+/// top doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DtnPriority {
     Low,

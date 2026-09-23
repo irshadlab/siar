@@ -8,6 +8,7 @@ members = [
     "crates/siar-event-log",
     "crates/siar-event-registry",
     "crates/siar-blob-manifest",
+    "crates/siar-file-transfer-service",
     "crates/siar-dtn-bundle",
     "crates/siar-resource-limits",
     "crates/siar-crash-recovery",
@@ -64,6 +65,7 @@ siar-routing-policy = { path = "crates/siar-routing-policy" }
 siar-event-log = { path = "crates/siar-event-log" }
 siar-event-registry = { path = "crates/siar-event-registry" }
 siar-blob-manifest = { path = "crates/siar-blob-manifest" }
+siar-file-transfer-service = { path = "crates/siar-file-transfer-service" }
 siar-dtn-bundle = { path = "crates/siar-dtn-bundle" }
 siar-resource-limits = { path = "crates/siar-resource-limits" }
 siar-crash-recovery = { path = "crates/siar-crash-recovery" }

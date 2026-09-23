@@ -6,6 +6,7 @@ members = [
     "crates/siar-identity-multidevice",
     "crates/siar-routing-policy",
     "crates/siar-event-log",
+    "crates/siar-event-registry",
     "crates/siar-blob-manifest",
     "crates/siar-dtn-bundle",
     "crates/siar-resource-limits",
@@ -61,6 +62,7 @@ siar-domain = { path = "crates/siar-domain" }
 siar-identity-multidevice = { path = "crates/siar-identity-multidevice" }
 siar-routing-policy = { path = "crates/siar-routing-policy" }
 siar-event-log = { path = "crates/siar-event-log" }
+siar-event-registry = { path = "crates/siar-event-registry" }
 siar-blob-manifest = { path = "crates/siar-blob-manifest" }
 siar-dtn-bundle = { path = "crates/siar-dtn-bundle" }
 siar-resource-limits = { path = "crates/siar-resource-limits" }
@@ -78,6 +80,7 @@ siar-media-core = { path = "crates/siar-media-core" }
 siar-connectivity = { path = "crates/siar-connectivity" }
 siar-transport-ble = { path = "crates/siar-transport-ble" }
 siar-media-image = { path = "crates/siar-media-image" }
+siar-emergency = { path = "crates/siar-emergency" }
 
 # --- pure-Rust, zero-overhead-first choices ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }

@@ -14,7 +14,9 @@ use std::sync::Mutex;
 
 use crate::envelope::EventEnvelope;
 use crate::ids::{EventId, LocalLogOffset, StreamId};
-use crate::store::{AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent};
+use crate::store::{
+    validate_payload_size, AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent,
+};
 
 #[derive(Default)]
 struct Inner {
@@ -42,6 +44,13 @@ impl EventStore for InMemoryEventStore {
     /// transaction here instead), so a concurrent `append` from
     /// another task never observes a half-applied batch.
     async fn append(&self, request: AppendRequest) -> Result<AppendResult, EventStoreError> {
+        // §55: checked before touching any state at all — a whole
+        // batch containing one oversized event is rejected outright,
+        // never partially applied.
+        for new_event in &request.events {
+            validate_payload_size(new_event.event_type, new_event.payload.len())?;
+        }
+
         let mut inner = self.inner.lock().expect("InMemoryEventStore lock poisoned");
 
         let current_version = inner
@@ -303,5 +312,53 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].envelope.stream_id, stream_a);
         assert_eq!(events[1].envelope.stream_id, stream_b);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_payload_is_rejected_before_touching_any_state() {
+        let store = InMemoryEventStore::new();
+        let stream = StreamId::from_name("conversation/abc");
+        let mut oversized = new_event(EventId::new());
+        oversized.payload = vec![0u8; crate::store::DEFAULT_MAX_EVENT_PAYLOAD_BYTES + 1];
+
+        let result = store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                events: vec![oversized],
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(EventStoreError::PayloadTooLarge { .. })
+        ));
+
+        // Nothing was appended — a batch that fails validation must
+        // leave the stream exactly as it was before the attempt.
+        let events = store.read_stream(stream, 0, 10).await.unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_oversized_event_anywhere_in_a_batch_rejects_the_whole_batch() {
+        let store = InMemoryEventStore::new();
+        let stream = StreamId::from_name("conversation/abc");
+        let mut oversized = new_event(EventId::new());
+        oversized.payload = vec![0u8; crate::store::DEFAULT_MAX_EVENT_PAYLOAD_BYTES + 1];
+
+        let result = store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                // A normal-sized event first, then the oversized one —
+                // §11's own atomicity means even the normal one must
+                // not land.
+                events: vec![new_event(EventId::new()), oversized],
+            })
+            .await;
+        assert!(result.is_err());
+
+        let events = store.read_stream(stream, 0, 10).await.unwrap();
+        assert!(events.is_empty());
     }
 }

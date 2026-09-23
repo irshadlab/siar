@@ -7284,6 +7284,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-event-registry"
+version = "0.1.0"
+dependencies = [
+ "siar-blob-manifest",
+ "siar-dtn-bundle",
+ "siar-emergency",
+ "siar-event-log",
+ "siar-identity-multidevice",
+ "siar-messaging",
+]
+
+[[package]]
 name = "siar-identity-multidevice"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,27 @@
+Root Cargo.toml changes needed for `siar-event-registry`
+==========================================================
+
+This is a brand-new crate, so it needs two small additions to your
+real repo's root `Cargo.toml` (not included in the crate tarball,
+since that only contains `crates/siar-event-registry/`).
+
+1. In `[workspace] members = [...]`, add (anywhere in the list; placed
+   next to `siar-event-log` in this round's own working copy):
+
+    "crates/siar-event-registry",
+
+2. In `[workspace.dependencies]`, add:
+
+    siar-event-registry = { path = "crates/siar-event-registry" }
+
+3. One more thing this round found and fixed, unrelated to the new
+   crate itself but needed for it to build: `siar-emergency` had NEVER
+   been added to `[workspace.dependencies]` (only to `members`) —
+   nothing before this round depended on it via the `.workspace = true`
+   short form. Add, next to the other `siar-*` entries:
+
+    siar-emergency = { path = "crates/siar-emergency" }
+
+After these three lines are in place, `cargo build -p siar-event-registry`
+and `cargo test -p siar-event-registry` should work against your real
+repo the same way they did in this sandbox.

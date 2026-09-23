@@ -19,8 +19,13 @@
 //! - [`store`] — §20 `EventStore` trait, verbatim signatures (via
 //!   `async-trait`, already a real workspace dependency for exactly
 //!   this — see that module's own doc comment), plus §21's batch
-//!   `AppendRequest`/`AppendResult` and §12's `expected_version`
-//!   optimistic-concurrency guard.
+//!   `AppendRequest`/`AppendResult`, §12's `expected_version`
+//!   optimistic-concurrency guard, and §55's own
+//!   [`store::validate_payload_size`] — one uniform size ceiling
+//!   (§55 itself invites a per-event-type registry; none exists yet
+//!   anywhere in this workspace, so this is a real, if simple, first
+//!   cut — see that function's own doc comment), enforced by every
+//!   real backend before a write is even attempted.
 //! - [`memory_store`] — [`memory_store::InMemoryEventStore`], a real,
 //!   fully-tested implementation of the trait above: §11 atomic batch
 //!   append (all-or-nothing under one lock), §12 concurrency-conflict
@@ -119,13 +124,10 @@
 //! gap; it doesn't hold or reorder anything), §27 hybrid logical clocks
 //! beyond what `stream_version` already provides, §29-32 pure decision
 //! functions/effect processing conventions (a pattern this crate's
-//! trait supports but doesn't enforce or provide a type for), §36-37
-//! the two of Phase 3's five domain-specific event catalogs with no
-//! real crate home yet (DTN/emergency — `siar-dtn-bundle`/
-//! `siar-emergency` exist in this workspace but neither has an
-//! `events.rs` yet), §38-39 snapshotting (Phase 7), §40-41 compaction/
-//! retention/deletion, §49-54 replication scope/sync cursors, §55
-//! per-event-type size limits, §56 durability classes as an actual type,
+//! trait supports but doesn't enforce or provide a type for), §38-39
+//! snapshotting (Phase 7), §40-41 compaction/
+//! retention/deletion, §49-54 replication scope/sync cursors, §56
+//! durability classes as an actual type,
 //! §62-65 unknown-event handling/namespacing/multi-tenant isolation,
 //! §70-71 backup/restore, §81-88 diagnostics/metrics/property-fuzz-
 //! crash-injection test harnesses, §89's own suggested finer-grained
@@ -161,4 +163,7 @@ pub use projection::{
 pub use retry::append_with_retry;
 pub use stoolap_checkpoint_store::StoolapCheckpointStore;
 pub use stoolap_store::StoolapEventStore;
-pub use store::{AppendRequest, AppendResult, EventStore, EventStoreError, NewEvent, StoredEvent};
+pub use store::{
+    validate_payload_size, AppendRequest, AppendResult, EventStore, EventStoreError, NewEvent,
+    StoredEvent, DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
+};

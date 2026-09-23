@@ -19,3 +19,4 @@ postcard.workspace = true
 # pattern `siar-identity-multidevice`/`siar-messaging` already use for
 # §35/§33.
 siar-event-log.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

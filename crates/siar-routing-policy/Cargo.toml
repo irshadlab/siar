@@ -20,3 +20,4 @@ siar-protocol-ext = { path = "../siar-protocol-ext" }
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

@@ -20,6 +20,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 siar-domain.workspace = true
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # jni 0.21, matching every other jni_bridge.rs in this workspace

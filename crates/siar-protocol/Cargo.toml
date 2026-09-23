@@ -19,3 +19,4 @@ bytes.workspace = true
 # is a plain downward dependency, not a cycle.
 siar-crypto.workspace = true
 ed25519-dalek.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

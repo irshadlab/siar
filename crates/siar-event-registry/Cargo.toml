@@ -20,3 +20,4 @@ siar-messaging.workspace = true
 siar-blob-manifest.workspace = true
 siar-dtn-bundle.workspace = true
 siar-emergency.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

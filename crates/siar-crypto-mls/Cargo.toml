@@ -59,3 +59,4 @@ openmls_sqlite_storage = "0.3.0-rc.1"
 # `serde_json` as a second serialization format for one crate.
 postcard = { workspace = true }
 serde = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

@@ -14,3 +14,6 @@ result
 result-*
 .direnv/
 
+#agents
+.agents/*.md
+.agents/*.json

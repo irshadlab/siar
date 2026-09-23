@@ -24,3 +24,6 @@ siar-transport-ble.workspace = true
 # `extern "system" fn Java_...(env: JNIEnv<'local>, ...)`), not written
 # from memory independently.
 jni = "0.21"
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

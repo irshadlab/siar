@@ -9,6 +9,7 @@ rust-version.workspace = true
 serde.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 # Domain must stay platform/infra-free: no dioxus, no stoolap, no iroh here.
 

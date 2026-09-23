@@ -22,6 +22,7 @@ thiserror.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
 postcard.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tokio.workspace = true

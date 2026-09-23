@@ -24,6 +24,9 @@ crate-type = ["cdylib", "rlib"]
 # usage, not written from memory independently.
 jni = "0.21"
 
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
 # On non-Android targets this crate has no cfg-gated content at all —
 # lib.rs is Android-only, so there's nothing here for it to depend on.
 # The crate still needs to exist and build (as an empty crate) on

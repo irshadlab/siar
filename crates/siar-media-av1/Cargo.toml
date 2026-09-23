@@ -26,3 +26,4 @@ rav1e = { version = "0.8", default-features = false }
 # Homebrew) ahead of time avoids that fallback build entirely.
 dav1d-sys = "0.8"
 libc = "0.2"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

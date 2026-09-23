@@ -17,6 +17,7 @@ postcard.workspace = true
 # `siar-blob-manifest`/`siar-dtn-bundle` already use for
 # §33/§34/§35/§36.
 siar-event-log.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Deliberately no siar-crypto dependency: next.md §47's "private SOS
 # and public/local emergency alert as separate cryptographic concepts"
 # and §49's authority-alert signature verification are real crypto

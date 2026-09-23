@@ -11,6 +11,7 @@ siar-media-core.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 # Deliberately NOT a dependency on siar-media-av1 or siar-media-audio:
 # pipeline.rs's spawn_* functions take an already-constructed

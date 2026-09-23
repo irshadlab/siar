@@ -14,6 +14,7 @@ siar-routing-policy.workspace = true
 # `siar_routing_policy::PathCandidate`'s `endpoint` bytes and
 # `DeviceRoutes`'s join — see `device_routes.rs`'s doc comment).
 iroh.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 siar-transport-wifi-direct = { path = "../siar-transport-wifi-direct" }

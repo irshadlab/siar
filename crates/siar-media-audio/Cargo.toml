@@ -21,3 +21,4 @@ opus = "0.3"
 # any of our target platforms.
 cpal = "0.18"
 tracing.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

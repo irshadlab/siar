@@ -11,5 +11,6 @@ thiserror.workspace = true
 blake3.workspace = true
 postcard.workspace = true
 rand_core.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]

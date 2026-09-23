@@ -39,3 +39,4 @@ iroh.workspace = true
 # those wire types compute themselves — this crate, as the one actually
 # constructing a `TokenMailboxEnvelope`, is that caller.
 blake3.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

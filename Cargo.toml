@@ -47,6 +47,7 @@ members = [
     "apps/emergency-node",
     "apps/android/rust-jni-glue",
     "apps/android/messaging-jni",
+    "workspace-hack",
 ]
 
 [workspace.package]
@@ -83,6 +84,12 @@ siar-connectivity = { path = "crates/siar-connectivity" }
 siar-transport-ble = { path = "crates/siar-transport-ble" }
 siar-media-image = { path = "crates/siar-media-image" }
 siar-emergency = { path = "crates/siar-emergency" }
+
+# --- dev/analysis tooling ---
+# Cargo dependency graph analysis — tracks/queries workspace dependency
+# relationships, identifies transitive deps, and powers cargo-hakari for
+# build optimisation. Dev-only, never compiled into release binaries.
+guppy = "0.17"
 
 # --- pure-Rust, zero-overhead-first choices ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }

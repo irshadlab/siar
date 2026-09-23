@@ -24,6 +24,7 @@ iroh-mdns-address-lookup = "0.4"
 # than assuming `futures_util`'s equivalent (also in the dependency
 # tree transitively) behaves identically here.
 n0-future = "0.3"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

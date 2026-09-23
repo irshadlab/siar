@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Deliberately nothing else. This crate is the trait/negotiation layer
 # calls.rs's doc comment describes: "the calls crate should know about
 # VideoEncoder/VideoDecoder/VideoCapabilities but not whether the

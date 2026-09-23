@@ -7047,6 +7047,7 @@ version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
  "siar-domain",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7067,6 +7068,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7082,6 +7084,7 @@ dependencies = [
  "siar-event-log",
  "thiserror 2.0.19",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7094,6 +7097,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7105,6 +7109,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "thiserror 2.0.19",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7127,6 +7132,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7138,6 +7144,7 @@ dependencies = [
  "siar-routing-policy",
  "siar-transport",
  "siar-transport-wifi-direct",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7150,6 +7157,7 @@ dependencies = [
  "siar-event-log",
  "thiserror 2.0.19",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7166,6 +7174,7 @@ dependencies = [
  "siar-domain",
  "siar-identity-multidevice",
  "thiserror 2.0.19",
+ "workspace-hack",
  "x25519-dalek 2.0.1",
  "zeroize",
 ]
@@ -7184,6 +7193,7 @@ dependencies = [
  "siar-domain",
  "thiserror 2.0.19",
  "tls_codec",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7209,6 +7219,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7219,6 +7230,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.19",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7234,6 +7246,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7246,6 +7259,7 @@ dependencies = [
  "siar-event-log",
  "thiserror 2.0.19",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7266,6 +7280,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7281,6 +7296,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7293,6 +7309,7 @@ dependencies = [
  "siar-event-log",
  "siar-identity-multidevice",
  "siar-messaging",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7305,6 +7322,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7319,6 +7337,7 @@ dependencies = [
  "siar-domain",
  "siar-event-log",
  "thiserror 2.0.19",
+ "workspace-hack",
  "x25519-dalek 2.0.1",
  "zeroize",
 ]
@@ -7330,6 +7349,7 @@ dependencies = [
  "jni 0.21.1",
  "siar-media-core",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7340,6 +7360,7 @@ dependencies = [
  "opus",
  "siar-media-core",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7350,11 +7371,15 @@ dependencies = [
  "libc",
  "rav1e",
  "siar-media-core",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "siar-media-core"
 version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
 
 [[package]]
 name = "siar-media-image"
@@ -7363,6 +7388,7 @@ dependencies = [
  "image",
  "siar-domain",
  "thiserror 2.0.19",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7386,6 +7412,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
  "x25519-dalek 2.0.1",
 ]
 
@@ -7400,6 +7427,7 @@ dependencies = [
  "siar-crypto",
  "siar-domain",
  "thiserror 2.0.19",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7409,6 +7437,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.19",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7418,6 +7447,7 @@ dependencies = [
  "serde",
  "siar-domain",
  "siar-protocol-ext",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7430,6 +7460,7 @@ dependencies = [
  "siar-protocol-ext",
  "thiserror 2.0.19",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7441,6 +7472,7 @@ dependencies = [
  "stoolap",
  "thiserror 2.0.19",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7450,6 +7482,7 @@ dependencies = [
  "futures-executor",
  "siar-domain",
  "siar-dtn-bundle",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7465,6 +7498,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7472,6 +7506,7 @@ name = "siar-transport-ble"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.19",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7480,6 +7515,7 @@ version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
  "siar-transport-ble",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7488,6 +7524,7 @@ version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
  "thiserror 2.0.19",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7495,6 +7532,7 @@ name = "siar-transport-wifi-aware"
 version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7502,6 +7540,7 @@ name = "siar-transport-wifi-direct"
 version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7511,6 +7550,7 @@ dependencies = [
  "async-trait",
  "siar-domain",
  "tokio",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -9584,6 +9624,81 @@ dependencies = [
  "thiserror 2.0.19",
  "windows 0.62.2",
  "windows-core 0.62.2",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "aead",
+ "aes-gcm",
+ "arrayvec",
+ "bitflags 2.13.1",
+ "bytemuck",
+ "byteorder",
+ "bytes",
+ "chacha20poly1305",
+ "const-oid 0.10.2",
+ "crossbeam-channel",
+ "crypto-common 0.1.7",
+ "crypto-common 0.2.2",
+ "curve25519-dalek 5.0.0",
+ "data-encoding",
+ "der 0.8.1",
+ "deranged",
+ "digest 0.10.7",
+ "digest 0.11.3",
+ "ed25519 2.2.3",
+ "ed25519-dalek 2.2.0",
+ "either",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
+ "generic-array",
+ "hashbrown 0.17.1",
+ "hybrid-array",
+ "image",
+ "libsqlite3-sys",
+ "log",
+ "manganis-core",
+ "maybe-rayon",
+ "memchr",
+ "num-traits",
+ "once_cell",
+ "percent-encoding",
+ "pkcs8 0.11.0",
+ "portable-atomic",
+ "postcard",
+ "proc-macro2",
+ "rand 0.10.2",
+ "rav1e",
+ "refinery-core",
+ "regex-automata",
+ "rusqlite",
+ "serde",
+ "serde_core",
+ "serde_spanned 1.1.1",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "signature 2.2.0",
+ "signature 3.0.0",
+ "slab",
+ "smallvec",
+ "spki 0.8.0",
+ "subtle",
+ "syn 2.0.119",
+ "syn 3.0.3",
+ "time",
+ "tokio",
+ "toml 1.1.4+spec-1.1.0",
+ "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_parser",
+ "tracing-core",
+ "typenum",
+ "url",
+ "winnow 1.0.4",
+ "zerocopy",
+ "zeroize",
 ]
 
 [[package]]

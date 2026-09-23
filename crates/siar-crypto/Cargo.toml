@@ -17,6 +17,7 @@ zeroize.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 bytes.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 postcard.workspace = true

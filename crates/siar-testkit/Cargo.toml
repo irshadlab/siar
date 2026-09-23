@@ -9,6 +9,7 @@ rust-version.workspace = true
 siar-domain.workspace = true
 siar-dtn-bundle.workspace = true
 futures-executor.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Deliberately nothing else, same as the original: this is a pure
 # in-memory simulation over siar-dtn-bundle's own types, not a real
 # network — next.md §113-116's topology/partition/mobility/chaos tests

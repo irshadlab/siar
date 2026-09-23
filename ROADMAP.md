@@ -1963,7 +1963,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 32 | Retry Event Granularity | ◇ | Reflected in `append_with_retry`'s own per-event retry design; no artifact of its own. |
 | 33 | Messaging Events | ✅ | Full: catalog, real `append` caller (3 call sites), real correlation, real durable projection. The most complete domain by far. |
 | 34 | File Events | 🟡 | Catalog real and tested, §9 schema-version fix applied. New `siar-file-transfer-service` crate provides real `FileTransferService` caller wiring `TransferState` transitions to `EventStore::append` via `append_with_retry`. |
-| 35 | Identity Events | 🟡 | Same shape as files: catalog real and tested, §9 fixed, no real caller. |
+| 35 | Identity Events | 🟡 | Catalog real and tested, §9 fixed. New `siar-identity-audit-recorder` crate provides real `IdentityAuditRecorder` caller wiring `audit_log` event construction to `EventStore::append` via `append_with_retry`. |
 | 36 | DTN Events | 🟡 | `siar-dtn-bundle::events` (2026-09-22): 9 events, `EventTypeId` 300-308, tested. Construct-only — no real `append` caller yet, same as §34/§35. |
 | 37 | Emergency Events | 🟡 | `siar-emergency::events` (2026-09-22): 6 events, `EventTypeId` 400-405, tested; new `ReportId` added (the report type had none). Construct-only — no real `append` caller yet. |
 | 38 | Snapshotting | ⬜ | Phase 7, not started. |
@@ -2053,8 +2053,10 @@ summarizing:
     wires `transfer_state.rs` transitions to durable `FileEvent`s via
     `EventStore::append_with_retry`; live caller in `apps/*` driving
     chunk transfer through service remaining)
-12. device lifecycle remains auditable — 🟡 (same shape as #11 — real
-    catalog, no real caller)
+12. device lifecycle remains auditable — 🟡 (`siar-identity-audit-recorder`
+    wires `audit_log` constructors to durable event append via
+    `EventStore::append_with_retry`; live caller in `apps/*` or
+    `siar-identity-multidevice` flows remaining)
 13. SOS is persisted before transmission — ⬜ (no emergency event
     wiring at all)
 14. DTN lifecycle is durable — ⬜ (no DTN event wiring at all)

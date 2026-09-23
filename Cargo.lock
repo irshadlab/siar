@@ -7296,6 +7296,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-file-transfer-service"
+version = "0.1.0"
+dependencies = [
+ "siar-blob-manifest",
+ "siar-domain",
+ "siar-event-log",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "siar-identity-multidevice"
 version = "0.1.0"
 dependencies = [

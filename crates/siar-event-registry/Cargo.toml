@@ -1,0 +1,22 @@
+[package]
+name = "siar-event-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# §63 "Namespaced Custom Events" (`04-offline-event-log-architecture.md`)
+# made real: this crate's ENTIRE reason to exist is to depend on
+# `siar-event-log` plus every domain crate that defines its own
+# `EventTypeId` catalog, and check none of them collide. It defines no
+# events of its own and is not a dependency of any of them — the
+# dependency direction only ever points this crate AT the domains,
+# never back, so adding this crate changes nothing about any existing
+# crate's own dependency graph or compile time.
+[dependencies]
+siar-event-log.workspace = true
+siar-identity-multidevice.workspace = true
+siar-messaging.workspace = true
+siar-blob-manifest.workspace = true
+siar-dtn-bundle.workspace = true
+siar-emergency.workspace = true

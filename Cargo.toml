@@ -4,6 +4,7 @@ exclude = ["fuzz"]
 members = [
     "crates/siar-domain",
     "crates/siar-identity-multidevice",
+    "crates/siar-identity-audit-recorder",
     "crates/siar-routing-policy",
     "crates/siar-event-log",
     "crates/siar-event-registry",
@@ -62,6 +63,7 @@ name = "siar-workspace"
 [workspace.dependencies]
 siar-domain = { path = "crates/siar-domain" }
 siar-identity-multidevice = { path = "crates/siar-identity-multidevice" }
+siar-identity-audit-recorder = { path = "crates/siar-identity-audit-recorder" }
 siar-routing-policy = { path = "crates/siar-routing-policy" }
 siar-event-log = { path = "crates/siar-event-log" }
 siar-event-registry = { path = "crates/siar-event-registry" }

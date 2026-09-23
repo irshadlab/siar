@@ -1962,7 +1962,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 31 | Exactly-Once Is Not the Goal | ◇ | Reflected in §24's own idempotent-no-op design; no artifact of its own. |
 | 32 | Retry Event Granularity | ◇ | Reflected in `append_with_retry`'s own per-event retry design; no artifact of its own. |
 | 33 | Messaging Events | ✅ | Full: catalog, real `append` caller (3 call sites), real correlation, real durable projection. The most complete domain by far. |
-| 34 | File Events | 🟡 | Catalog real and tested, §9 schema-version fix applied. No real `EventStore::append` caller anywhere — construct-only. |
+| 34 | File Events | 🟡 | Catalog real and tested, §9 schema-version fix applied. New `siar-file-transfer-service` crate provides real `FileTransferService` caller wiring `TransferState` transitions to `EventStore::append` via `append_with_retry`. |
 | 35 | Identity Events | 🟡 | Same shape as files: catalog real and tested, §9 fixed, no real caller. |
 | 36 | DTN Events | 🟡 | `siar-dtn-bundle::events` (2026-09-22): 9 events, `EventTypeId` 300-308, tested. Construct-only — no real `append` caller yet, same as §34/§35. |
 | 37 | Emergency Events | 🟡 | `siar-emergency::events` (2026-09-22): 6 events, `EventTypeId` 400-405, tested; new `ReportId` added (the report type had none). Construct-only — no real `append` caller yet. |
@@ -2049,9 +2049,10 @@ summarizing:
    ciphertext is small content, not "large data," by design)
 10. message outbox survives restart — ✅ (`siar-storage`'s own outbox,
     pre-existing, confirmed still working)
-11. file semantic state survives restart — 🟡 (the event catalog
-    exists and could be persisted durably; no real caller wires
-    `transfer_state.rs`'s own transitions to it yet)
+11. file semantic state survives restart — 🟡 (`siar-file-transfer-service`
+    wires `transfer_state.rs` transitions to durable `FileEvent`s via
+    `EventStore::append_with_retry`; live caller in `apps/*` driving
+    chunk transfer through service remaining)
 12. device lifecycle remains auditable — 🟡 (same shape as #11 — real
     catalog, no real caller)
 13. SOS is persisted before transmission — ⬜ (no emergency event

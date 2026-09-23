@@ -1,0 +1,20 @@
+[package]
+name = "siar-file-transfer-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+siar-domain.workspace = true
+# §26 `TransferState`/`TransferEvent` (decide) and §34 `FileEvent`
+# (record) both live here — this crate is the real caller for both,
+# see lib.rs's own doc comment for why that caller can't live inside
+# siar-blob-manifest itself.
+siar-blob-manifest.workspace = true
+siar-event-log.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

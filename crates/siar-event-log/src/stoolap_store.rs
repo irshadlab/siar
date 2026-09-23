@@ -98,7 +98,9 @@ use stoolap::Database;
 
 use crate::envelope::{EventEnvelope, EventOrigin};
 use crate::ids::{CorrelationId, EventId, EventTypeId, LocalLogOffset, StreamId, Timestamp};
-use crate::store::{AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent};
+use crate::store::{
+    validate_payload_size, AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent,
+};
 use async_trait::async_trait;
 use siar_domain::DeviceId;
 use uuid::Uuid;
@@ -365,6 +367,13 @@ impl EventStore for StoolapEventStore {
     /// for why the `Mutex` is here alongside `stoolap`'s own
     /// transaction.
     async fn append(&self, request: AppendRequest) -> Result<AppendResult, EventStoreError> {
+        // §55: checked before acquiring the lock or opening a
+        // transaction at all — no reason to touch the database for a
+        // batch that's going to be rejected regardless.
+        for new_event in &request.events {
+            validate_payload_size(new_event.event_type, new_event.payload.len())?;
+        }
+
         let _guard = self
             .append_lock
             .lock()
@@ -803,5 +812,28 @@ mod tests {
 
         let result = store.read_stream(stream, 0, 10).await;
         assert!(matches!(result, Err(EventStoreError::Corrupt(_))));
+    }
+
+    #[tokio::test]
+    async fn an_oversized_payload_is_rejected_without_touching_the_database() {
+        let store = StoolapEventStore::open_in_memory().unwrap();
+        let stream = StreamId::from_name("conversation/abc");
+        let mut oversized = new_event(EventId::new());
+        oversized.payload = vec![0u8; crate::store::DEFAULT_MAX_EVENT_PAYLOAD_BYTES + 1];
+
+        let result = store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                events: vec![oversized],
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(EventStoreError::PayloadTooLarge { .. })
+        ));
+
+        let events = store.read_stream(stream, 0, 10).await.unwrap();
+        assert!(events.is_empty());
     }
 }

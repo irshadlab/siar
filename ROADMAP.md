@@ -1620,13 +1620,109 @@ informal per-domain `EventTypeId` range convention now has FIVE blocks
 to keep straight by hand (1-8, 100-108, 200-208, 300-308, 400-405)
 with still nothing enforcing non-collision across any of them.
 
+**siar-event-log — §55 Event Size Limits, 2026-09-22 (same session)**:
+back in the CORE crate for the first time in several rounds (all the
+recent work had been in domain crates layered on top of it) — a
+self-contained piece from the tracker that, unlike Phase 5, needed no
+architectural decision first. New `store::validate_payload_size` +
+`DEFAULT_MAX_EVENT_PAYLOAD_BYTES` (256 KiB), enforced by BOTH real
+backends (`InMemoryEventStore`/`StoolapEventStore`) before touching any
+state — a batch with one oversized event anywhere in it is rejected
+whole, per §11's own atomicity, not partially applied. New
+`EventStoreError::PayloadTooLarge` variant. Named honestly, in the new
+function's own doc comment: §55's text ("every event type must have a
+maximum size") reads as inviting a PER-TYPE registry, which doesn't
+exist anywhere in this workspace (there's still no central place all
+five domains' `EventTypeId` ranges are even listed together — the same
+gap named at the end of the previous round) — one uniform ceiling is a
+real, deliberate first cut, not the section's fuller ask. 3 new tests
+(oversized payload rejected before touching any state, in both
+backends; a batch with a normal event AND an oversized one rejects the
+whole batch, not just the bad one). Also fixed two stale doc-comment
+claims found while touching `lib.rs` for this: the crate's own
+top-level doc still said DTN/emergency had "no real crate home yet"
+for their event catalogs, false since the previous round built both;
+corrected. 35/35 tests in `siar-event-log` (3 new), clippy/fmt/docs
+clean. Because this is the core crate, re-verified every real
+dependent, not just the newest ones: `siar-blob-manifest` (38/38,
+unaffected by this round's change), `siar-crash-
+recovery` (50/50), `siar-dtn-bundle` (51/51), `siar-emergency` (17/17),
+`siar-identity-multidevice` (257/257), `siar-messaging` (40/40, 26
+unit + 14 integration) — zero regressions across all six.
+
+Real, named, still-open gaps: the 256 KiB limit is uniform, not
+per-`EventTypeId` — a real future refinement, not attempted; nothing
+enforces it at the `NewEvent` construction site in any domain crate,
+only at `append` time (a caller building an oversized `NewEvent` only
+finds out when it tries to persist it, not earlier) — acceptable for
+now since append is always the very next step in every real call site
+built so far, but worth knowing if that ever stops being true.
+
+**siar-event-registry — §63 Namespaced Custom Events, 2026-09-22 (same
+session, the user's own explicit choice: complete a partial section
+rather than start a fresh Phase)**: a brand new crate — the first new
+crate added by any round in this whole session — because no EXISTING
+crate could do this without creating a dependency cycle or a new,
+pointless coupling between two domains: `siar-event-log` itself has no
+dependency on any domain (by design), and no domain depending on
+another domain just to compare `EventTypeId` constants would be a real
+new coupling for no other reason. The only shape that works is a new
+crate that depends on all five domain catalogs and is depended on by
+none of them — `siar-event-registry` is exactly that, and nothing
+else: it defines no events, decides nothing, and changes no existing
+crate's own dependency graph.
+
+`ALL_REGISTERED_EVENT_TYPES` lists all 41 real `EventTypeId` constants
+across all five domains (8 identity + 9 messaging + 9 files + 9 DTN +
+6 emergency), and `find_collisions` is a real, tested O(n²) pairwise
+comparison — proven not just to pass on the real roster but to
+actually FAIL when it should: deliberately introduced a fake collision
+(pointed one messaging constant at an identity one) to watch the test
+fail with a real panic and stack trace, then reverted it, rather than
+trusting the passing test alone to mean the check works. A second
+test checks every entry falls inside its own domain's documented
+numeric block (1-8/100-108/200-208/300-308/400-405) — catching a
+future misassignment even before it collides with anything. Named
+honestly, in the crate's own top doc comment, in the most prominent
+position it could occupy: this roster is MANUALLY maintained — nothing
+automatically adds a new domain's constant here, so the guarantee this
+crate provides is real but conditional on whoever adds a sixth domain,
+or a new event to an existing one, also remembering to add a line
+here. A registry immune to that would need `inventory`/`linkme`-style
+compile-time cross-crate registration — genuinely new dependencies,
+not attempted this round.
+
+Real infrastructure note: this is the first NEW crate added this
+session, so it needed real workspace-level plumbing most rounds
+haven't touched — added to `members` in both the real root `Cargo.toml`
+and this sandbox's own trimmed scratch copy, plus a new `[workspace.
+dependencies]` entry for `siar-event-registry` itself. Also found and
+fixed a real, separate gap while wiring this: `siar-emergency` had
+NEVER been added to `[workspace.dependencies]` at all (only to
+`members`) — nothing before this round needed to depend on it via the
+workspace-alias short form, so the gap went unnoticed; added now,
+benefiting any future crate that wants `siar-emergency.workspace =
+true` instead of a bare path dependency. 5/5 tests, clippy clean, fmt
+clean, docs clean. Zero regressions confirmed in all five domain
+crates this new crate depends on (38/38, 51/51, 17/17, 257/257,
+26+14/26+14) — expected, since this crate only reads their public
+constants and changes nothing about them, but checked anyway rather
+than assumed.
+
+Real, named, still-open gaps: the manual-maintenance risk named above,
+unavoidable in this architecture without new dependencies; this crate
+has no CI/build-time hook forcing it to run on every change to any of
+the five domains' event catalogs — it's a real test that exists, but
+nothing currently guarantees anyone runs it before merging a change
+that would need it.
+
 
 | # | Crate | State |
 |---|---|---|
 | 01 | siar-protocol-ext | ✅ **108/108 — spec complete** (final round: §91-92 reconciled, §93-95 error codes/health/recovery, §96-99 scheduler contract/storage/metrics/capability isolation, §100-105 reconciled with notes, §106 honest 16-item Definition of Done self-audit — 4 genuine gaps named, §107-108 reconciled) |
 | 02 | siar-identity-multidevice | ✅ **204/204 — spec complete** (final round, 2026-09-05: §190-204 — algorithm agility/downgrade protection utilities kept deliberately minimal per spec's own "avoid needless abstraction" caution; a root-key backup envelope that structurally cannot carry plaintext key material; backup-import validation run before any local state is touched; identity-reset/account-deletion presentations with required disclaimer fields; a guarded organization-offboarding state machine that operates only on organization-scoped device ids, never a personal AccountId; multi-tenant-safe composite keys; migration-fixture round-trip tests (honestly incomplete pending §125); and an itemized 21-item Definition-of-Done self-audit — **19/21 fully done, 2 honestly `PartiallyDone`** (no-UI-shipped confirmation prompt; property/integration tests exist but no real fuzz harness). Also fixed a genuinely broken intra-doc link left over from an earlier round, dropping this crate's doc-warning count from 4 to 3. 6 new modules (`algorithm_agility.rs`, `root_key_backup.rs`, `identity_lifecycle.rs`, `migration_fixtures.rs`, `definition_of_done.rs`) plus a `namespace.rs` extension, 20 new tests, 251/251 total, clippy clean, zero regressions. Across all 11 rounds this session: 137 new tests written, zero regressions in siar-routing-policy/siar-crypto at any point, every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1. Real, named, still-open gaps carried forward into future work: §125 schema versioning absent from DeviceCertificate/DeviceDirectory; §164 no cargo-fuzz harness; §191 full cross-version migration tests blocked on §125; `storage::IdentityStore`/`transaction`/all four `client_api` traits have zero real call sites anywhere in this workspace yet; `RootTrustCacheEntry`/`VerifiedContact` overlap not consolidated; §107/§91 have no real BLE/Wi-Fi/NFC transport wiring.) |
 | 03 | siar-routing-policy | ✅ **200/200 — spec complete** (final round, 2026-09-15: §183-200 — §183-184 "Testing Matrix"/"Route Selection Golden Tests": all 5 of the spec's own worked examples transcribed as tests (1 caught a real bug in *this round's own test code* — a stale pre-mutation health snapshot in a stickiness test, fixed), plus 2 combos (BLE-only, Wi-Fi Direct+BLE) with no prior coverage under any framing; §185 "Property Tests" — 2 properties not yet covered under this broader framing (`allow_relay`/`allow_bluetooth` forbidden-transport, and *known* insufficient bandwidth as a genuine hard elimination, not just the existing unknown-bandwidth-isn't-penalized test); §186/§187 "Fuzzing"/"Benchmarking" — real, named gaps (no `cargo-fuzz`, no `criterion`), with 2 targeted NaN-safety tests as a partial substitute for the former; §188 "Scalability" needed zero code (operation-level routing, `RouteCache`, both already true); new `reevaluation.rs` for §189-191 (`quality_change_exceeds_threshold`/`should_reevaluate_file_route`; §191 needed zero code — already `RouteCache`/`RouteHint`); §192-197 "Architecture Reconciliation" added as new lib.rs documentation (module structure, no-UI-deps, `RoutingError`'s 6 variants mapped onto the spec's own suggested 7, no-anyhow, initial-scope/phases all honored); §198 "Definition of Done" — a full, honest self-audit (✅/⚠️/❌ per item, matching specs 01/02's own closing pattern); §199-200 closing documentation; **also found and fixed a real gap**: most of rounds 10-18's public types were never re-exported at the crate root, only rounds 1-9's — fixed with a full pass of `pub use` additions matching the established style. 18 new tests, 263/263 total, clippy/fmt/doc clean (7 broken intra-doc links fixed), zero regressions. Named, still-open gaps carried forward: no fuzz/benchmark harness, DTN delivery-probability computation (representation exists since round 16, computation needs real encounter history this crate has never had), §55 "Mesh Forwarding"'s richer candidate representation (named since round 2), `Destination::Group` resolution (named since round 18), a handful of individual adapter-reporting fields (Bluetooth proximity/paired state, Wi-Fi group/session, LAN interface name). Across all 18 rounds building this crate: round 18 covered §171-182, round 17 covered §160-170, round 16 covered §151-159, round 15 covered §140-150, round 14 covered §128-139, round 13 covered §121-127, round 12 covered §116-120, round 11 covered §108-115, round 10 covered §105-107, rounds 2-9 covered §43-104, round 1 covered §1-42 — every round compiled+tested+clippy+fmt+doc-checked for real against the actual uploaded Cargo.lock with rustc 1.91.1, zero regressions in any dependent crate at any point except one one-line fix in round 17) |
-| 04 | siar-event-log | 🟡 §92 Phase 3 fully closed (all 5 domains: +DTN/+Emergency 2026-09-22); Phase 5 deliberately deferred to notes — see full tracker + decision write-up at the very end of this document |
+| 04 | siar-event-log | 🟡 27✅/24🟡/35⬜/9◇ of 95 (new `siar-event-registry` crate closes §63 Namespaced Custom Events 2026-09-22 — first new crate this session); §92 Phase 3 fully closed; Phase 5 deliberately deferred to notes — see full tracker + decision write-up at the very end of this document |
 | 05 | siar-blob-manifest | ✅ ~23/210 (+ metadata_encryption.rs) |
 | 06 | siar-dtn-bundle | ✅ ~50/192 |
 | 07 | siar-capability | ✅ ~19/164 |
@@ -1765,9 +1861,10 @@ closed, and `StoolapCheckpointStore` now has a real caller: a durable
 `StoolapConversationSummaryProjection` in `siar-messaging`, a genuine
 drop-in for the in-memory version via a new `ConversationSummaryQuery`
 trait and Rust's stable trait-object upcasting. A full per-section
-tracker (26 done, 23 partial, 37 not started, 9 conceptual, of 95 as
-of 2026-09-22 — DTN/emergency moved from not-started to partial this
-round),
+tracker (27 done, 24 partial, 35 not started, 9 conceptual, of 95 as
+of 2026-09-22 — §63 Namespaced Custom Events closed this round via a
+new `siar-event-registry` crate, this session's first entirely new
+crate),
 the §93 Definition-of-Done self-audit, and the Phase 5 outbox decision
 are all recorded at the very end of this document now, at the user's
 own explicit request — the decision itself is deliberately NOT made:
@@ -1886,7 +1983,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 52 | Local Storage Envelope vs Network Envelope | ⬜ | `StoredEvent` is used directly wherever a wire form would be needed — no separate `ReplicationEventV1` transform layer exists yet (moot until real replication exists). |
 | 53 | Sync Cursors | ⬜ | No `SyncCursor` type. |
 | 54 | Conflicts Are Domain-Specific | ◇ | Correctly not building one generic resolver — but nothing exists yet to point to as "done" either, since no real conflicts have arisen. |
-| 55 | Event Size Limits | ⬜ | `append` enforces no maximum size per event type. |
+| 55 | Event Size Limits | ✅ | `validate_payload_size`/`DEFAULT_MAX_EVENT_PAYLOAD_BYTES` (2026-09-22), enforced by both real backends before any write. One uniform 256 KiB ceiling, not yet the per-event-type registry the section's own text invites — see that function's own doc comment for why that's a deliberate, named first cut. |
 | 56 | Durability Classes | ⬜ | No `DurabilityClass` enum; nothing distinguishes Critical/Durable/BestEffort. |
 | 57 | SQL Schema | ✅ | `events`/`stream_heads` (Phase 2) plus `projection_checkpoints`/`conversation_summaries` (Phase 4). |
 | 58 | Indexes | ✅ | Unique indexes on offset/event_id/(stream,version) plus each new table's own (Phase 2/4). |
@@ -1894,7 +1991,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 60 | Projection Isolation | 🟡 | A broken event log doesn't stop already-succeeded appends (tested); a projection catch-up failure is logged and swallowed, not fatal. Cross-projection isolation (one broken projection not blocking another) isn't demonstrated — only one real projection exists. |
 | 61 | Internal Event Notifications | ⬜ | No wake/notify mechanism — `record_messaging_event` calls `catch_up` synchronously in the same call stack instead, which works for the one caller that exists today but isn't the decoupled notification pattern this section describes. |
 | 62 | Unknown Events | 🟡 | "Optional unknown → store/ignore safely" is real and tested (`ConversationSummaryProjection` skips foreign event-type ranges). "Required semantic unknown → block stream until upgrade" doesn't exist. |
-| 63 | Namespaced Custom Events | ⬜ | No real registry — only the informal, undocumented-to-each-other per-domain numeric range convention (identity 1-8, messaging 100-108, files 200-208, DTN 300-308, emergency 400-405 — all five domains now have a block), already named repeatedly as a stopgap, not a fix. |
+| 63 | Namespaced Custom Events | 🟡 | New `siar-event-registry` crate (2026-09-22): a real, running, tested cross-domain collision check over all 41 `EventTypeId` constants across all five domains — proven to actually fail on a real collision, not just pass vacuously. Still manually maintained (nothing auto-adds a new domain's constant to the roster) — a real registry immune to that would need `inventory`/`linkme`-style compile-time registration, not attempted. |
 | 64 | Multi-Tenant Isolation | ⬜ | No `TenantId` concept anywhere. |
 | 65 | Multiple Identities | ⬜ | No isolation between personal/work identities on one device. |
 | 66 | Security | 🟡 | Local corruption (§22 checksum) and duplicate/replay (§24) are covered. Malformed-imported-event, rollback, oversized-payload, and unauthorized-remote-event are all moot until §23 (remote ingestion) exists at all. |

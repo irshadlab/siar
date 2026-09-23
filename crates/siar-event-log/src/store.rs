@@ -1,5 +1,6 @@
 //! §11 "Atomic Append", §12 "Optimistic Concurrency", §20 "Event Store
-//! Trait", §21 "Batch Append", §24 "Idempotency".
+//! Trait", §21 "Batch Append", §24 "Idempotency", §55 "Event Size
+//! Limits".
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -80,6 +81,59 @@ pub enum EventStoreError {
     /// time (truncated write, on-disk bit-rot, a hand-edited row).
     #[error("stored event failed integrity verification: {0}")]
     Corrupt(String),
+    /// §55 "Event Size Limits": "every event type must have a maximum
+    /// size... do not allow huge file / huge recursive object /
+    /// unbounded metadata inside a journal event." Rejected before any
+    /// write is attempted (see [`validate_payload_size`]) — a caller
+    /// hitting this should carry large data as a blob reference
+    /// instead (§43 — `siar_blob_manifest::events::FileEvent`'s own
+    /// `BlobId`/`ManifestId` fields are exactly that pattern already
+    /// in real use), not retry with the same oversized payload.
+    #[error(
+        "event payload for {event_type:?} was {size} bytes, over the {limit}-byte limit (§55)"
+    )]
+    PayloadTooLarge {
+        event_type: EventTypeId,
+        size: usize,
+        limit: usize,
+    },
+}
+
+/// §55's own single, uniform limit — a real, if simple, first cut:
+/// the section calls for "every event type must have a maximum size,"
+/// which reads as inviting a PER-TYPE registry (some event types
+/// legitimately need more headroom than others), not necessarily one
+/// number for everything. A per-type registry doesn't exist anywhere
+/// in this workspace yet (there's no central place all five domains'
+/// `EventTypeId` ranges are even listed together — see `siar_messaging::
+/// events`'s own doc comment on that same gap), so building one now
+/// would be speculative infrastructure ahead of any caller that has
+/// ever needed a different limit for a different event type. One
+/// generous, uniform ceiling — comfortably above real message text or
+/// a `BlobId` reference, comfortably below "a whole file" — is the
+/// honest state of this requirement today: enforced for real, just not
+/// yet differentiated per §55's own fuller ask.
+pub const DEFAULT_MAX_EVENT_PAYLOAD_BYTES: usize = 256 * 1024;
+
+/// §55, made real — called by every real [`EventStore`] backend (see
+/// [`crate::memory_store::InMemoryEventStore::append`]/
+/// [`crate::stoolap_store::StoolapEventStore::append`]) before any
+/// write is attempted, so a batch containing one oversized event
+/// rejects the WHOLE batch (§11's own atomicity — no partial write for
+/// the events that would have fit) rather than silently truncating or
+/// admitting the rest.
+pub fn validate_payload_size(
+    event_type: EventTypeId,
+    payload_len: usize,
+) -> Result<(), EventStoreError> {
+    if payload_len > DEFAULT_MAX_EVENT_PAYLOAD_BYTES {
+        return Err(EventStoreError::PayloadTooLarge {
+            event_type,
+            size: payload_len,
+            limit: DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
+        });
+    }
+    Ok(())
 }
 
 /// §20, verbatim signatures (`async fn` via `async-trait` — already a

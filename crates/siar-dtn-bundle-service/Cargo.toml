@@ -1,0 +1,21 @@
+[package]
+name = "siar-dtn-bundle-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Deliberately no siar-domain — same reason siar-dtn-bundle itself has
+# none (see that crate's own top doc comment): a BundleId/DtnDestination
+# is opaque by design, and this service's tests use
+# EventOrigin::System/Imported rather than a real DeviceId, matching
+# siar_dtn_bundle::events's own tests for the same reason.
+siar-dtn-bundle.workspace = true
+siar-event-log.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tokio.workspace = true

@@ -1,0 +1,28 @@
+Root Cargo.toml changes needed for `siar-dtn-bundle-service`
+=============================================================
+
+This is a brand-new crate, so it needs two additions to your root
+`Cargo.toml`:
+
+1. In `[workspace] members = [...]`, add (placed next to
+   `siar-dtn-bundle`):
+
+    "crates/siar-dtn-bundle-service",
+
+2. In `[workspace.dependencies]`, add:
+
+    siar-dtn-bundle-service = { path = "crates/siar-dtn-bundle-service" }
+
+Note on `workspace-hack`:
+This workspace uses `cargo-hakari` via the `workspace-hack` crate.
+`crates/siar-dtn-bundle-service/Cargo.toml` includes:
+
+    workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+After these additions are in place:
+- `cargo check -p siar-dtn-bundle-service`
+- `cargo test -p siar-dtn-bundle-service`
+- `cargo clippy -p siar-dtn-bundle-service -- -D warnings`
+- `cargo hakari verify`
+
+all succeed cleanly.

@@ -7250,6 +7250,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-dtn-bundle-service"
+version = "0.1.0"
+dependencies = [
+ "siar-dtn-bundle",
+ "siar-event-log",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "siar-emergency"
 version = "0.1.0"
 dependencies = [

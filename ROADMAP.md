@@ -1995,9 +1995,9 @@ section with no code artifact of its own (informs design elsewhere;
 | 64 | Multi-Tenant Isolation | ⬜ | No `TenantId` concept anywhere. |
 | 65 | Multiple Identities | ⬜ | No isolation between personal/work identities on one device. |
 | 66 | Security | 🟡 | Local corruption (§22 checksum) and duplicate/replay (§24) are covered. Malformed-imported-event, rollback, oversized-payload, and unauthorized-remote-event are all moot until §23 (remote ingestion) exists at all. |
-| 67 | Event Store Errors | 🟡 | `EventStoreError` has `ConcurrencyConflict`/`Backend`/`Corrupt`/`StreamNotFound` — deliberately minimal (only what's been needed), not the spec's full suggested set (`DuplicateEvent`/`StorageFull`/`ReadOnly`/`MigrationRequired`/`Io`/`Serialization`). |
-| 68 | Storage Full Behavior | ⬜ | Not specifically handled or tested. |
-| 69 | Read-Only Recovery Mode | ⬜ | A `Corrupt` error just returns `Err`; no read-only fallback mode. |
+| 67 | Event Store Errors | 🟡 | `EventStoreError` includes `ConcurrencyConflict`/`Backend`/`Corrupt`/`StreamNotFound` plus `StorageFull` (§68) and `ReadOnly` (§69). |
+| 68 | Storage Full Behavior | 🟡 | `EventStoreError::StorageFull` implemented; `InMemoryEventStore::with_capacity(max)` simulates storage exhaustion and rejects appends crossing capacity before state mutation, tested. |
+| 69 | Read-Only Recovery Mode | 🟡 | `ReadOnlyEventStore<S>` wrapper implemented in `siar-event-log` (2026-09-25) — blocks `append` with `EventStoreError::ReadOnly` while allowing unrestricted `read_stream`/`read_log` for viewing/export/diagnostics, tested. |
 | 70 | Backup | ⬜ | `read_log(from_offset, ...)` gives exactly the primitive §70 asks for, but no backup tooling is built on top of it. |
 | 71 | Restore Safety | ⬜ | Not started. |
 | 72 | Analytics Separation | ◇ | No analytics pipeline exists yet to separate anything from. |
@@ -2069,7 +2069,7 @@ summarizing:
 17. replay never accidentally re-runs external effects — 🟡 (true by
     construction today, since the one real projection has no side
     effects; never stress-tested against one that does)
-18. storage-full is handled safely — ⬜ (not specifically tested)
+18. storage-full is handled safely — 🟡 (simulated via `InMemoryEventStore::with_capacity` rejecting appends crossing capacity before state mutation with `EventStoreError::StorageFull`; live disk-full handling remains dependent on OS/filesystem backend)
 19. no external side effect occurs before durable commit — ✅ (mostly
     confirmed for messaging's own send path — persist, then record,
     then network send, in that order, per §13 — not exhaustively

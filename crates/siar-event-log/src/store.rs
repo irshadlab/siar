@@ -97,6 +97,29 @@ pub enum EventStoreError {
         size: usize,
         limit: usize,
     },
+    /// §67/§68 "Storage Full Behavior," verbatim: "if storage is full,
+    /// do not report 'queued' unless the durable append succeeded."
+    /// This variant is what makes that a checkable contract rather
+    /// than a guideline — a caller that gets this back has a real,
+    /// typed signal to NOT report success on, rather than having to
+    /// guess from a generic `Backend(String)`. See
+    /// [`crate::memory_store::InMemoryEventStore::with_capacity`] for
+    /// a real (in-memory-simulated) source of this error a caller can
+    /// test against without an actually full disk, and
+    /// [`crate::read_only::ReadOnlyEventStore`] for the recovery path
+    /// §69 describes once storage (or anything else) has failed.
+    #[error("storage is full — the append did not durably succeed (§68)")]
+    StorageFull,
+    /// §67/§69 "Read-Only Recovery Mode," verbatim: "if the database is
+    /// damaged, read-only mode may allow viewing/export/diagnostics...
+    /// without risking additional corruption." Returned by every
+    /// `append` call once a store is wrapped in
+    /// [`crate::read_only::ReadOnlyEventStore`] — reads keep working
+    /// unaffected; see that module's own doc comment.
+    #[error(
+        "this event store is in read-only recovery mode — no further appends are accepted (§69)"
+    )]
+    ReadOnly,
 }
 
 /// §55's own single, uniform limit — a real, if simple, first cut:

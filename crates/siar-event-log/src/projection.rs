@@ -195,6 +195,63 @@ impl ProjectionCheckpointStore for InMemoryCheckpointStore {
     }
 }
 
+/// §46 "Replay Modes," the spec's own three variants verbatim, plus
+/// its one stated rule: "only recovery/live mode may schedule external
+/// work according to durable pending state." Before this,
+/// [`ProjectionRunner::catch_up`] had exactly one implicit mode — see
+/// `ROADMAP.md`'s own §46 row.
+///
+/// ## What this does and doesn't change about replay itself
+///
+/// Honestly: nothing, yet. [`Projection::apply`]'s own signature is
+/// unchanged, and the one real `Projection` in this workspace
+/// (`siar_messaging`'s `ConversationSummaryProjection`) has zero side
+/// effects (see this module's own top doc comment) — there is no
+/// existing "external work" for any mode to gate at the point where
+/// `apply` runs. What this DOES give a real caller: a checkable
+/// answer to the spec's one stated rule, via
+/// [`CatchUpOutcome::may_schedule_external_work`] on
+/// [`ProjectionRunner::catch_up_with_mode`] — §47 "Startup Recovery"
+/// (`⬜` in the tracker) or §48 "Work Queue Reconciliation" (`⬜`),
+/// whichever eventually orchestrates a real replay, is the caller
+/// meant to consult it, deciding whether to proceed to scheduling real
+/// pending work AFTER replay finishes, rather than this module
+/// enforcing anything mid-replay itself. The day a real `Projection`
+/// implementation DOES need to schedule work as a side effect of
+/// `apply` and needs to know the mode from inside that call, `apply`'s
+/// own signature will need to grow a `mode: ReplayMode` parameter —
+/// deliberately not done here ahead of a real implementor that needs
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReplayMode {
+    /// Rebuild materialized state only. Correct for a maintenance
+    /// rebuild, an offline replay/export tool, or a test — anywhere
+    /// scheduling real external work as a side effect of replay would
+    /// be actively wrong (re-sending a message on every projection
+    /// rebuild, say).
+    ProjectionOnly,
+    /// Startup recovery (§47): real, durable pending state (an outbox
+    /// row, a stalled transfer) may legitimately need real work
+    /// scheduled as a consequence of this replay.
+    Recovery,
+    /// Normal steady-state operation — the mode `siar_messaging::
+    /// service`'s own synchronous post-append `catch_up` call already
+    /// implicitly runs under today, made explicit and nameable.
+    #[default]
+    Live,
+}
+
+/// [`ProjectionRunner::catch_up_with_mode`]'s own return type — same
+/// `applied` [`ProjectionRunner::catch_up`] already returns, plus the
+/// one real thing [`ReplayMode`] currently decides. See
+/// [`ReplayMode`]'s own doc comment for what this flag does and
+/// doesn't gate today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatchUpOutcome {
+    pub applied: u64,
+    pub may_schedule_external_work: bool,
+}
+
 /// §16's "Projection Runner" arrow — see this module's own doc comment
 /// for the full picture, including what §18 "read-your-writes" does
 /// and doesn't mean here.
@@ -283,6 +340,25 @@ impl<'a> ProjectionRunner<'a> {
             }
         }
         Ok(applied)
+    }
+
+    /// Same replay [`Self::catch_up`] already does — this delegates to
+    /// it outright, not a second implementation to keep in sync — plus
+    /// [`ReplayMode`]'s own one real rule, computed and handed back
+    /// rather than enforced here. See [`ReplayMode`]'s own doc comment
+    /// for exactly what that means (and doesn't yet) about `apply`
+    /// itself.
+    pub async fn catch_up_with_mode(
+        &self,
+        projection: &dyn Projection,
+        batch_size: usize,
+        mode: ReplayMode,
+    ) -> Result<CatchUpOutcome, ProjectionError> {
+        let applied = self.catch_up(projection, batch_size).await?;
+        Ok(CatchUpOutcome {
+            applied,
+            may_schedule_external_work: matches!(mode, ReplayMode::Recovery | ReplayMode::Live),
+        })
     }
 }
 
@@ -480,6 +556,64 @@ mod tests {
             "version bump must trigger a full replay, not just the new events"
         );
         assert_eq!(projection_v2.count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn catch_up_with_mode_delegates_the_same_applied_count_as_catch_up() {
+        let store = InMemoryEventStore::new();
+        let checkpoints = InMemoryCheckpointStore::new();
+        let stream = StreamId::from_name("s");
+        store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                events: vec![event(), event(), event()],
+            })
+            .await
+            .unwrap();
+
+        let projection = CountingProjection::new(1);
+        let runner = ProjectionRunner::new(&store, &checkpoints);
+        let outcome = runner
+            .catch_up_with_mode(&projection, 200, ReplayMode::Live)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.applied, 3);
+        assert_eq!(projection.count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn only_recovery_and_live_mode_may_schedule_external_work() {
+        let store = InMemoryEventStore::new();
+        let checkpoints = InMemoryCheckpointStore::new();
+        let runner = ProjectionRunner::new(&store, &checkpoints);
+
+        let projection_only = CountingProjection::new(1);
+        let outcome = runner
+            .catch_up_with_mode(&projection_only, 200, ReplayMode::ProjectionOnly)
+            .await
+            .unwrap();
+        assert!(!outcome.may_schedule_external_work);
+
+        let recovery_projection = CountingProjection::new(1);
+        let outcome = runner
+            .catch_up_with_mode(&recovery_projection, 200, ReplayMode::Recovery)
+            .await
+            .unwrap();
+        assert!(outcome.may_schedule_external_work);
+
+        let live_projection = CountingProjection::new(1);
+        let outcome = runner
+            .catch_up_with_mode(&live_projection, 200, ReplayMode::Live)
+            .await
+            .unwrap();
+        assert!(outcome.may_schedule_external_work);
+    }
+
+    #[test]
+    fn replay_mode_defaults_to_live_the_implicit_mode_catch_up_already_ran_under() {
+        assert_eq!(ReplayMode::default(), ReplayMode::Live);
     }
 
     #[tokio::test]

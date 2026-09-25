@@ -255,7 +255,7 @@ mod tests {
     use siar_emergency::report::GeoPoint;
     use siar_event_log::InMemoryEventStore;
 
-    fn sample_sos(sender: AccountId) -> (EmergencyMessageKind, LocationSharing, Option<u16>, Option<String>) {
+    fn sample_sos() -> (EmergencyMessageKind, LocationSharing, Option<u16>, Option<String>) {
         (
             EmergencyMessageKind::Sos,
             LocationSharing::Approximate(GeoPoint {
@@ -273,7 +273,7 @@ mod tests {
         let service = EmergencyReportService::new().with_event_log(store.clone());
         let report_id = ReportId::new();
         let sender = AccountId::new();
-        let (kind, location, people, note) = sample_sos(sender);
+        let (kind, location, people, note) = sample_sos();
 
         let status = service
             .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
@@ -310,7 +310,7 @@ mod tests {
         let service = EmergencyReportService::new();
         let report_id = ReportId::new();
         let sender = AccountId::new();
-        let (kind, location, people, note) = sample_sos(sender);
+        let (kind, location, people, note) = sample_sos();
         service
             .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
             .await
@@ -339,7 +339,7 @@ mod tests {
         let service = EmergencyReportService::new().with_event_log(store.clone());
         let report_id = ReportId::new();
         let sender = AccountId::new();
-        let (kind, location, people, note) = sample_sos(sender);
+        let (kind, location, people, note) = sample_sos();
         service
             .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
             .await
@@ -398,7 +398,7 @@ mod tests {
         let service = EmergencyReportService::new();
         let report_id = ReportId::new();
         let sender = AccountId::new();
-        let (kind, location, people, note) = sample_sos(sender);
+        let (kind, location, people, note) = sample_sos();
         service
             .create_report(
                 report_id,

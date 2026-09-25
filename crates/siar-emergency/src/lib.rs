@@ -35,12 +35,19 @@
 //! that module's own doc comment for the full picture, including the
 //! new [`ids::ReportId`] it needed and [`report::EmergencyReport`]
 //! didn't have).
+//!
+//! [`report_status`] is newer still than either of those: a real gap
+//! found while wiring a real `EventStore::append` caller for this
+//! crate's events in the sibling `siar-emergency-service` crate — see
+//! that module's own doc comment for why `EmergencyEvent`'s six
+//! variants had no decide layer of their own before this.
 
 pub mod events;
 pub mod ids;
 pub mod kind;
 pub mod mode;
 pub mod report;
+pub mod report_status;
 pub mod trust;
 
 pub use events::{
@@ -50,3 +57,4 @@ pub use events::{
     EVENT_TYPE_REPORT_RESOLVED, EVENT_TYPE_TRUST_RECLASSIFIED,
 };
 pub use ids::ReportId;
+pub use report_status::{InvalidReportTransition, ReportEvent, ReportStatus};

@@ -118,6 +118,30 @@ pub enum EmergencyEvent {
 }
 
 impl EmergencyEvent {
+    /// §56 "Durability Classes" — see `siar_event_log::durability`'s
+    /// own doc comment for the rule. `ReportCreated` is `Critical`:
+    /// this IS the SOS itself, the one variant in this domain where
+    /// this rule's own bar — losing the event lets something unsafe
+    /// happen — is met directly (a real emergency silently never
+    /// recorded). Every other variant here describes what happened
+    /// AFTER a report already exists, and in the safe direction on
+    /// loss (a lost `ReportResolved` just means the report is
+    /// over-cautiously treated as still open, not the reverse) — all
+    /// `Durable`, matching `siar_emergency::events`'s own reasoning
+    /// for why `TrustReclassified`/`ReportAcknowledged` can arrive at
+    /// any point in a report's life.
+    pub fn durability_class(&self) -> siar_event_log::DurabilityClass {
+        use siar_event_log::DurabilityClass as D;
+        match self {
+            Self::ReportCreated { .. } => D::Critical,
+            Self::TrustReclassified { .. } => D::Durable,
+            Self::ReportAcknowledged { .. } => D::Durable,
+            Self::ReportResolved { .. } => D::Durable,
+            Self::ReportCancelled { .. } => D::Durable,
+            Self::ReportExpired { .. } => D::Durable,
+        }
+    }
+
     pub fn event_type(&self) -> EventTypeId {
         match self {
             Self::ReportCreated { .. } => EVENT_TYPE_REPORT_CREATED,
@@ -222,6 +246,28 @@ mod tests {
             people: Some(2),
             note: Some("trapped, third floor".to_string()),
         }
+    }
+
+    #[test]
+    fn report_created_is_critical_the_sos_itself_everything_after_is_durable() {
+        use siar_event_log::DurabilityClass;
+        let report_id = ReportId::new();
+        assert_eq!(
+            sample_created(report_id).durability_class(),
+            DurabilityClass::Critical
+        );
+        assert_eq!(
+            EmergencyEvent::ReportResolved { report_id }.durability_class(),
+            DurabilityClass::Durable
+        );
+        assert_eq!(
+            EmergencyEvent::ReportAcknowledged {
+                report_id,
+                acknowledging_account: AccountId::new(),
+            }
+            .durability_class(),
+            DurabilityClass::Durable
+        );
     }
 
     #[test]

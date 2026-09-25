@@ -7,6 +7,7 @@ members = [
     "crates/siar-identity-audit-recorder",
     "crates/siar-routing-policy",
     "crates/siar-event-log",
+    "crates/siar-event-notify",
     "crates/siar-event-registry",
     "crates/siar-blob-manifest",
     "crates/siar-file-transfer-service",
@@ -68,6 +69,7 @@ siar-identity-multidevice = { path = "crates/siar-identity-multidevice" }
 siar-identity-audit-recorder = { path = "crates/siar-identity-audit-recorder" }
 siar-routing-policy = { path = "crates/siar-routing-policy" }
 siar-event-log = { path = "crates/siar-event-log" }
+siar-event-notify = { path = "crates/siar-event-notify" }
 siar-event-registry = { path = "crates/siar-event-registry" }
 siar-blob-manifest = { path = "crates/siar-blob-manifest" }
 siar-file-transfer-service = { path = "crates/siar-file-transfer-service" }

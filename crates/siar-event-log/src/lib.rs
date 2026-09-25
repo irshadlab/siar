@@ -157,8 +157,9 @@ pub use gap::{detect_gap, StreamGap};
 pub use ids::{CorrelationId, EventId, EventTypeId, LocalLogOffset, StreamId, Timestamp};
 pub use memory_store::InMemoryEventStore;
 pub use projection::{
-    InMemoryCheckpointStore, Projection, ProjectionCheckpoint, ProjectionCheckpointStore,
-    ProjectionError, ProjectionId, ProjectionRunner, DEFAULT_CATCH_UP_BATCH_SIZE,
+    CatchUpOutcome, InMemoryCheckpointStore, Projection, ProjectionCheckpoint,
+    ProjectionCheckpointStore, ProjectionError, ProjectionId, ProjectionRunner, ReplayMode,
+    DEFAULT_CATCH_UP_BATCH_SIZE,
 };
 pub use retry::append_with_retry;
 pub use stoolap_checkpoint_store::StoolapCheckpointStore;

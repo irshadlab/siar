@@ -224,12 +224,7 @@ impl EmergencyReportService {
     }
 
     fn require_known(&self, report_id: ReportId) -> Result<(), EmergencyReportError> {
-        if self
-            .statuses
-            .lock()
-            .expect("status lock")
-            .contains_key(&report_id)
-        {
+        if self.statuses.lock().expect("status lock").contains_key(&report_id) {
             Ok(())
         } else {
             Err(EmergencyReportError::UnknownReport(report_id))
@@ -256,18 +251,11 @@ impl EmergencyReportService {
 mod tests {
     use super::*;
     use siar_emergency::events::decode_emergency_event;
-    use siar_emergency::report::GeoPoint;
     use siar_emergency::report_stream_id;
+    use siar_emergency::report::GeoPoint;
     use siar_event_log::InMemoryEventStore;
 
-    fn sample_sos(
-        sender: AccountId,
-    ) -> (
-        EmergencyMessageKind,
-        LocationSharing,
-        Option<u16>,
-        Option<String>,
-    ) {
+    fn sample_sos(sender: AccountId) -> (EmergencyMessageKind, LocationSharing, Option<u16>, Option<String>) {
         (
             EmergencyMessageKind::Sos,
             LocationSharing::Approximate(GeoPoint {
@@ -288,15 +276,7 @@ mod tests {
         let (kind, location, people, note) = sample_sos(sender);
 
         let status = service
-            .create_report(
-                report_id,
-                kind,
-                sender,
-                location,
-                people,
-                note,
-                EventOrigin::System,
-            )
+            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
             .await
             .unwrap();
         assert_eq!(status, ReportStatus::Active);
@@ -314,19 +294,13 @@ mod tests {
             .unwrap();
         assert_eq!(stream.len(), 2);
         assert!(matches!(
-            decode_emergency_event(
-                stream[0].envelope.schema_version,
-                &stream[0].envelope.payload
-            )
-            .unwrap(),
+            decode_emergency_event(stream[0].envelope.schema_version, &stream[0].envelope.payload)
+                .unwrap(),
             EmergencyEvent::ReportCreated { .. }
         ));
         assert!(matches!(
-            decode_emergency_event(
-                stream[1].envelope.schema_version,
-                &stream[1].envelope.payload
-            )
-            .unwrap(),
+            decode_emergency_event(stream[1].envelope.schema_version, &stream[1].envelope.payload)
+                .unwrap(),
             EmergencyEvent::ReportResolved { .. }
         ));
     }
@@ -338,15 +312,7 @@ mod tests {
         let sender = AccountId::new();
         let (kind, location, people, note) = sample_sos(sender);
         service
-            .create_report(
-                report_id,
-                kind,
-                sender,
-                location,
-                people,
-                note,
-                EventOrigin::System,
-            )
+            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
             .await
             .unwrap();
         service
@@ -375,15 +341,7 @@ mod tests {
         let sender = AccountId::new();
         let (kind, location, people, note) = sample_sos(sender);
         service
-            .create_report(
-                report_id,
-                kind,
-                sender,
-                location,
-                people,
-                note,
-                EventOrigin::System,
-            )
+            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
             .await
             .unwrap();
         service
@@ -454,15 +412,7 @@ mod tests {
             .await
             .unwrap();
         let result = service
-            .create_report(
-                report_id,
-                kind,
-                sender,
-                location,
-                people,
-                note,
-                EventOrigin::System,
-            )
+            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
             .await;
         assert_eq!(
             result,

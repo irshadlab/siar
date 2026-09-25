@@ -1,0 +1,28 @@
+Root Cargo.toml changes needed for `siar-event-notify`
+=========================================================
+
+This is a brand-new crate, so it needs two additions to your root
+`Cargo.toml`:
+
+1. In `[workspace] members = [...]`, add (placed next to
+   `siar-event-log`):
+
+    "crates/siar-event-notify",
+
+2. In `[workspace.dependencies]`, add:
+
+    siar-event-notify = { path = "crates/siar-event-notify" }
+
+Note on `workspace-hack`:
+This workspace uses `cargo-hakari` via the `workspace-hack` crate.
+`crates/siar-event-notify/Cargo.toml` includes:
+
+    workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+After these additions are in place:
+- `cargo check -p siar-event-notify`
+- `cargo test -p siar-event-notify`
+- `cargo clippy -p siar-event-notify -- -D warnings`
+- `cargo hakari verify`
+
+all succeed cleanly.

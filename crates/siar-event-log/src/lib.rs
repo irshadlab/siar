@@ -142,6 +142,7 @@
 //! — `stoolap_checkpoint_store` exists ahead of that caller, per that
 //! module's own doc comment on why.
 
+pub mod durability;
 pub mod envelope;
 pub mod gap;
 pub mod ids;
@@ -152,6 +153,7 @@ pub mod stoolap_checkpoint_store;
 pub mod stoolap_store;
 pub mod store;
 
+pub use durability::DurabilityClass;
 pub use envelope::{EventEnvelope, EventOrigin};
 pub use gap::{detect_gap, StreamGap};
 pub use ids::{CorrelationId, EventId, EventTypeId, LocalLogOffset, StreamId, Timestamp};

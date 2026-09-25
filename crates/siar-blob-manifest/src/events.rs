@@ -118,6 +118,34 @@ pub enum FileEvent {
 }
 
 impl FileEvent {
+    /// §56 "Durability Classes" — see `siar_event_log::durability`'s
+    /// own doc comment for the rule. None of this domain's nine
+    /// variants are `Critical`: a blob's chunks and its manifest are
+    /// both still on disk, content-addressed, independent of this
+    /// event log — every one of these events is re-derivable by
+    /// re-checking real state on disk, so losing one never causes an
+    /// UNSAFE inversion (per that rule's own definition), only extra,
+    /// safe, recoverable work. `TransferStarted`/`TransferPaused`/
+    /// `TransferResumed` are `BestEffort` — pure progress/UX signals a
+    /// resumable transfer doesn't actually need to survive a crash to
+    /// stay correct (`siar_blob_manifest::resume::ResumeBitmap`, not
+    /// this event log, is what real resume already depends on). The
+    /// rest are `Durable`.
+    pub fn durability_class(&self) -> siar_event_log::DurabilityClass {
+        use siar_event_log::DurabilityClass as D;
+        match self {
+            Self::TransferCreated { .. } => D::Durable,
+            Self::TransferAccepted { .. } => D::Durable,
+            Self::TransferStarted { .. } => D::BestEffort,
+            Self::TransferPaused { .. } => D::BestEffort,
+            Self::TransferResumed { .. } => D::BestEffort,
+            Self::TransferCompleted { .. } => D::Durable,
+            Self::TransferCancelled { .. } => D::Durable,
+            Self::TransferFailed { .. } => D::Durable,
+            Self::BlobVerified { .. } => D::Durable,
+        }
+    }
+
     pub fn event_type(&self) -> EventTypeId {
         match self {
             Self::TransferCreated { .. } => EVENT_TYPE_TRANSFER_CREATED,
@@ -248,6 +276,32 @@ mod tests {
             total_size_bytes: 4096,
             chunk_count: 4,
         }
+    }
+
+    #[test]
+    fn no_file_event_is_critical_everything_here_is_recoverable_from_disk() {
+        use siar_event_log::DurabilityClass;
+        let transfer_id = TransferId::new();
+        assert_eq!(
+            sample_created(transfer_id).durability_class(),
+            DurabilityClass::Durable
+        );
+        assert_eq!(
+            FileEvent::BlobVerified {
+                transfer_id,
+                blob_id: BlobId::from_ciphertext(b"x"),
+            }
+            .durability_class(),
+            DurabilityClass::Durable
+        );
+        assert_eq!(
+            FileEvent::TransferPaused { transfer_id }.durability_class(),
+            DurabilityClass::BestEffort
+        );
+        assert_ne!(
+            FileEvent::TransferPaused { transfer_id }.durability_class(),
+            DurabilityClass::Critical
+        );
     }
 
     #[test]

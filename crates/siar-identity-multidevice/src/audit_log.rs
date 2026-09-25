@@ -92,6 +92,33 @@ pub enum IdentityAuditPayload {
 }
 
 impl IdentityAuditPayload {
+    /// §56 "Durability Classes" — see `siar_event_log::durability`'s
+    /// own doc comment for the rule, and its own worked example:
+    /// `DeviceRevoked` → `Critical` is this crate's own event, named
+    /// in the spec itself. The same reasoning extends to every
+    /// sibling security-state variant here — `RevocationVerified`/
+    /// `DeviceSuspended`/`DeviceRotated`/`RootRotated`/`RecoveryUsed`/
+    /// `ForkDetected` all describe a change to WHO is trusted; losing
+    /// any of them risks the same kind of unsafe inversion
+    /// `DeviceRevoked` does (an old key, or a kicked-off device,
+    /// silently still trusted) — all `Critical`. Only `DeviceLinked`
+    /// is `Durable`: losing it fails CLOSED (a real device looks
+    /// unrecognized until it re-links), not open, so it doesn't meet
+    /// this rule's own bar for `Critical`.
+    pub fn durability_class(&self) -> siar_event_log::DurabilityClass {
+        use siar_event_log::DurabilityClass as D;
+        match self {
+            Self::DeviceLinked { .. } => D::Durable,
+            Self::DeviceRevoked { .. } => D::Critical,
+            Self::RevocationVerified { .. } => D::Critical,
+            Self::DeviceSuspended { .. } => D::Critical,
+            Self::DeviceRotated { .. } => D::Critical,
+            Self::RootRotated { .. } => D::Critical,
+            Self::RecoveryUsed { .. } => D::Critical,
+            Self::ForkDetected { .. } => D::Critical,
+        }
+    }
+
     fn event_type(&self) -> EventTypeId {
         match self {
             Self::DeviceLinked { .. } => EVENT_TYPE_DEVICE_LINKED,
@@ -278,6 +305,32 @@ pub fn is_audited_status(status: DeviceStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_revoked_is_critical_the_spec_own_worked_example_device_linked_is_not() {
+        use siar_event_log::DurabilityClass;
+        let device = DeviceId::new();
+        assert_eq!(
+            IdentityAuditPayload::DeviceRevoked {
+                device_id: device,
+                generation: 2,
+            }
+            .durability_class(),
+            DurabilityClass::Critical
+        );
+        assert_eq!(
+            IdentityAuditPayload::DeviceLinked {
+                device_id: device,
+                generation: 1,
+            }
+            .durability_class(),
+            DurabilityClass::Durable
+        );
+        assert_eq!(
+            IdentityAuditPayload::ForkDetected { generation: 3 }.durability_class(),
+            DurabilityClass::Critical
+        );
+    }
 
     #[test]
     fn same_account_always_derives_the_same_stream_id() {

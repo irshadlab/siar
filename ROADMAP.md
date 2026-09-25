@@ -1965,7 +1965,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 34 | File Events | 🟡 | Catalog real and tested, §9 schema-version fix applied. New `siar-file-transfer-service` crate provides real `FileTransferService` caller wiring `TransferState` transitions to `EventStore::append` via `append_with_retry`. |
 | 35 | Identity Events | 🟡 | Catalog real and tested, §9 fixed. New `siar-identity-audit-recorder` crate provides real `IdentityAuditRecorder` caller wiring `audit_log` event construction to `EventStore::append` via `append_with_retry`. |
 | 36 | DTN Events | 🟡 | `siar-dtn-bundle::events` (2026-09-22): 9 events, `EventTypeId` 300-308, tested. New `siar-dtn-bundle-service` crate provides real `DtnBundleService` caller wiring `BundleState` transitions to `EventStore::append` via `append_with_retry`. |
-| 37 | Emergency Events | 🟡 | `siar-emergency::events` (2026-09-22): 6 events, `EventTypeId` 400-405, tested; new `ReportId` added (the report type had none). Construct-only — no real `append` caller yet. |
+| 37 | Emergency Events | 🟡 | `siar-emergency::events` (2026-09-22): 6 events, `EventTypeId` 400-405, tested; new `ReportId` added. New `siar-emergency-service` crate provides real `EmergencyReportService` caller wiring `ReportStatus` transitions to `EventStore::append` via `append_with_retry`. |
 | 38 | Snapshotting | ⬜ | Phase 7, not started. |
 | 39 | Snapshot Structure | ⬜ | Phase 7, not started. |
 | 40 | Compaction | ⬜ | Not started. |
@@ -2057,8 +2057,10 @@ summarizing:
     wires `audit_log` constructors to durable event append via
     `EventStore::append_with_retry`; live caller in `apps/*` or
     `siar-identity-multidevice` flows remaining)
-13. SOS is persisted before transmission — ⬜ (no emergency event
-    wiring at all)
+13. SOS is persisted before transmission — 🟡 (`siar-emergency-service`
+    provides `EmergencyReportService` persisting report/SOS lifecycle via
+    `EventStore::append_with_retry` before network transmission; live
+    caller in `apps/*` remaining)
 14. DTN lifecycle is durable — 🟡 (`siar-dtn-bundle-service`
     wires `BundleState` transitions to durable event append via
     `EventStore::append_with_retry`; live caller in `apps/*` remaining)

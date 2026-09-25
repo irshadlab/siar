@@ -147,6 +147,7 @@ pub mod envelope;
 pub mod gap;
 pub mod ids;
 pub mod memory_store;
+pub mod metrics;
 pub mod projection;
 pub mod read_only;
 pub mod retry;
@@ -159,6 +160,7 @@ pub use envelope::{EventEnvelope, EventOrigin};
 pub use gap::{detect_gap, StreamGap};
 pub use ids::{CorrelationId, EventId, EventTypeId, LocalLogOffset, StreamId, Timestamp};
 pub use memory_store::InMemoryEventStore;
+pub use metrics::{MetricsEventStore, MetricsSnapshot};
 pub use projection::{
     CatchUpOutcome, InMemoryCheckpointStore, Projection, ProjectionCheckpoint,
     ProjectionCheckpointStore, ProjectionError, ProjectionId, ProjectionRunner, ReplayMode,

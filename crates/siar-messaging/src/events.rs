@@ -135,6 +135,36 @@ pub enum MessagingEvent {
 }
 
 impl MessagingEvent {
+    /// §56 "Durability Classes" — see `siar_event_log::durability`'s
+    /// own doc comment for the rule this follows. `MessageQueued` is
+    /// the spec's own worked example (`Durable`); the rest follow the
+    /// same rule applied to this crate's own nine variants:
+    /// `MessageCreated`/`MessageEdited`/`MessageDeleted` are `Critical`
+    /// — this event log is the real sync mechanism between this
+    /// device and every other device on the account (see this
+    /// module's own top doc comment on streams), so losing one of
+    /// these three isn't just local staleness, it's another device
+    /// never learning a message existed/changed/was deleted at all.
+    /// `MessageRead`/`ReactionAdded`/`ReactionRemoved` are
+    /// `BestEffort` — the same "presence-like social signal" class as
+    /// the spec's own `typing` example; losing a read receipt or a
+    /// reaction is invisible in practice and arguably these shouldn't
+    /// be journaled at all, same as `typing` itself isn't.
+    pub fn durability_class(&self) -> siar_event_log::DurabilityClass {
+        use siar_event_log::DurabilityClass as D;
+        match self {
+            Self::MessageCreated { .. } => D::Critical,
+            Self::MessageQueued { .. } => D::Durable,
+            Self::MessageReceived { .. } => D::Durable,
+            Self::MessageDelivered { .. } => D::Durable,
+            Self::MessageRead { .. } => D::BestEffort,
+            Self::MessageEdited { .. } => D::Critical,
+            Self::MessageDeleted { .. } => D::Critical,
+            Self::ReactionAdded { .. } => D::BestEffort,
+            Self::ReactionRemoved { .. } => D::BestEffort,
+        }
+    }
+
     pub fn event_type(&self) -> EventTypeId {
         match self {
             Self::MessageCreated { .. } => EVENT_TYPE_MESSAGE_CREATED,
@@ -285,6 +315,64 @@ mod tests {
 
     fn ids() -> (ConversationId, MessageId, DeviceId) {
         (ConversationId::new(), MessageId::new(), DeviceId::new())
+    }
+
+    #[test]
+    fn message_queued_is_durable_the_spec_own_worked_example() {
+        use siar_event_log::DurabilityClass;
+        let (conversation_id, message_id, _) = ids();
+        assert_eq!(
+            MessagingEvent::MessageQueued {
+                conversation_id,
+                message_id,
+            }
+            .durability_class(),
+            DurabilityClass::Durable
+        );
+    }
+
+    #[test]
+    fn content_changing_events_are_critical_read_and_reaction_signals_are_not() {
+        use siar_event_log::DurabilityClass;
+        let (conversation_id, message_id, device) = ids();
+        assert_eq!(
+            MessagingEvent::MessageCreated {
+                conversation_id,
+                message_id,
+                sender_device: device,
+                sequence: 0,
+                ciphertext: vec![],
+            }
+            .durability_class(),
+            DurabilityClass::Critical
+        );
+        assert_eq!(
+            MessagingEvent::MessageDeleted {
+                conversation_id,
+                message_id,
+            }
+            .durability_class(),
+            DurabilityClass::Critical
+        );
+        assert_eq!(
+            MessagingEvent::MessageRead {
+                conversation_id,
+                message_id,
+                reader_device: device,
+            }
+            .durability_class(),
+            DurabilityClass::BestEffort
+        );
+        assert_eq!(
+            MessagingEvent::ReactionAdded {
+                conversation_id,
+                message_id,
+                reactor_device: device,
+                emoji: "👍".to_string(),
+            }
+            .durability_class(),
+            DurabilityClass::BestEffort
+        );
     }
 
     #[test]

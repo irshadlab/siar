@@ -148,6 +148,7 @@ pub mod gap;
 pub mod ids;
 pub mod memory_store;
 pub mod projection;
+pub mod read_only;
 pub mod retry;
 pub mod stoolap_checkpoint_store;
 pub mod stoolap_store;
@@ -163,6 +164,7 @@ pub use projection::{
     ProjectionCheckpointStore, ProjectionError, ProjectionId, ProjectionRunner, ReplayMode,
     DEFAULT_CATCH_UP_BATCH_SIZE,
 };
+pub use read_only::ReadOnlyEventStore;
 pub use retry::append_with_retry;
 pub use stoolap_checkpoint_store::StoolapCheckpointStore;
 pub use stoolap_store::StoolapEventStore;

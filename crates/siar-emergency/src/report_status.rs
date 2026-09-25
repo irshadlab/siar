@@ -60,7 +60,12 @@ impl ReportStatus {
             (S::Active, E::Resolve) => S::ReportResolved,
             (S::Active, E::Cancel) => S::ReportCancelled,
             (S::Active, E::Expire) => S::ReportExpired,
-            _ => return Err(InvalidReportTransition { state: self, event }),
+            _ => {
+                return Err(InvalidReportTransition {
+                    state: self,
+                    event,
+                })
+            }
         };
         Ok(next)
     }
@@ -80,21 +85,15 @@ mod tests {
     #[test]
     fn a_report_can_be_resolved_cancelled_or_expired_from_active() {
         assert_eq!(
-            ReportStatus::Active
-                .transition(ReportEvent::Resolve)
-                .unwrap(),
+            ReportStatus::Active.transition(ReportEvent::Resolve).unwrap(),
             ReportStatus::ReportResolved
         );
         assert_eq!(
-            ReportStatus::Active
-                .transition(ReportEvent::Cancel)
-                .unwrap(),
+            ReportStatus::Active.transition(ReportEvent::Cancel).unwrap(),
             ReportStatus::ReportCancelled
         );
         assert_eq!(
-            ReportStatus::Active
-                .transition(ReportEvent::Expire)
-                .unwrap(),
+            ReportStatus::Active.transition(ReportEvent::Expire).unwrap(),
             ReportStatus::ReportExpired
         );
     }
@@ -107,11 +106,7 @@ mod tests {
             ReportStatus::ReportExpired,
         ] {
             assert!(status.is_terminal());
-            for event in [
-                ReportEvent::Resolve,
-                ReportEvent::Cancel,
-                ReportEvent::Expire,
-            ] {
+            for event in [ReportEvent::Resolve, ReportEvent::Cancel, ReportEvent::Expire] {
                 assert!(status.transition(event).is_err());
             }
         }

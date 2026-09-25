@@ -1984,7 +1984,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 53 | Sync Cursors | ⬜ | No `SyncCursor` type. |
 | 54 | Conflicts Are Domain-Specific | ◇ | Correctly not building one generic resolver — but nothing exists yet to point to as "done" either, since no real conflicts have arisen. |
 | 55 | Event Size Limits | ✅ | `validate_payload_size`/`DEFAULT_MAX_EVENT_PAYLOAD_BYTES` (2026-09-22), enforced by both real backends before any write. One uniform 256 KiB ceiling, not yet the per-event-type registry the section's own text invites — see that function's own doc comment for why that's a deliberate, named first cut. |
-| 56 | Durability Classes | ⬜ | No `DurabilityClass` enum; nothing distinguishes Critical/Durable/BestEffort. |
+| 56 | Durability Classes | 🟡 | `DurabilityClass` enum (`Critical`, `Durable`, `BestEffort`) implemented in `siar-event-log` (2026-09-25), with per-variant `durability_class()` classifications implemented and tested across all 5 domain event catalogs (messaging, blob-manifest, identity-multidevice, dtn-bundle, emergency). |
 | 57 | SQL Schema | ✅ | `events`/`stream_heads` (Phase 2) plus `projection_checkpoints`/`conversation_summaries` (Phase 4). |
 | 58 | Indexes | ✅ | Unique indexes on offset/event_id/(stream,version) plus each new table's own (Phase 2/4). |
 | 59 | Memory Discipline | ✅ | `ProjectionRunner::catch_up` reads bounded batches (`batch_size`), discards between them — matches the section's own diagram exactly. |

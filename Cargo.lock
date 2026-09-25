@@ -7296,6 +7296,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-emergency-service"
+version = "0.1.0"
+dependencies = [
+ "siar-domain",
+ "siar-emergency",
+ "siar-event-log",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "siar-event-log"
 version = "0.1.0"
 dependencies = [

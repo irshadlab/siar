@@ -28,11 +28,34 @@ struct Inner {
 #[derive(Default)]
 pub struct InMemoryEventStore {
     inner: Mutex<Inner>,
+    /// §68 "Storage Full Behavior" simulation — `None` (the
+    /// [`Self::new`] default) means unbounded, matching every
+    /// existing caller's behavior before this round untouched. See
+    /// [`Self::with_capacity`].
+    max_total_events: Option<usize>,
 }
 
 impl InMemoryEventStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// §68, verbatim: "if storage is full, do not report 'queued'
+    /// unless the durable append succeeded." A real disk filling up
+    /// isn't reproducible in a test the way a `ConcurrencyConflict` or
+    /// an oversized payload is — this gives a real caller something
+    /// deterministic to test that discipline against: once the log
+    /// holds `max_total_events` real (non-duplicate) events, every
+    /// further `append` returns [`EventStoreError::StorageFull`]
+    /// instead of durably appending anything — checked, like §55's
+    /// own payload-size check, before any state changes, so a batch
+    /// that would cross the limit is rejected in full, not partially
+    /// applied.
+    pub fn with_capacity(max_total_events: usize) -> Self {
+        Self {
+            inner: Mutex::default(),
+            max_total_events: Some(max_total_events),
+        }
     }
 }
 
@@ -64,6 +87,23 @@ impl EventStore for InMemoryEventStore {
                 expected_version: request.expected_version,
                 actual_version: current_version,
             });
+        }
+
+        // §68: checked before any state changes, same discipline §55's
+        // payload-size check above already uses — a batch that would
+        // cross `max_total_events` is rejected in full. Counted by
+        // real, non-duplicate events only: a batch that's entirely
+        // §24 idempotent duplicates adds nothing to the log, so it
+        // can't be what pushes storage "full."
+        if let Some(max) = self.max_total_events {
+            let new_count = request
+                .events
+                .iter()
+                .filter(|e| !inner.seen_event_ids.contains(&e.event_id))
+                .count();
+            if inner.log.len() + new_count > max {
+                return Err(EventStoreError::StorageFull);
+            }
         }
 
         let mut new_version = current_version;
@@ -360,5 +400,98 @@ mod tests {
 
         let events = store.read_stream(stream, 0, 10).await.unwrap();
         assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_capacity_limited_store_returns_storage_full_once_the_cap_is_reached() {
+        let store = InMemoryEventStore::with_capacity(2);
+        let stream = StreamId::from_name("conversation/abc");
+
+        store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                events: vec![new_event(EventId::new()), new_event(EventId::new())],
+            })
+            .await
+            .unwrap();
+
+        // The cap is already met — a third event, even alone, is
+        // refused, and nothing about it is durably appended.
+        let result = store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 2,
+                events: vec![new_event(EventId::new())],
+            })
+            .await;
+        assert_eq!(result, Err(EventStoreError::StorageFull));
+        assert_eq!(store.read_stream(stream, 0, 10).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_batch_that_would_cross_the_cap_is_rejected_in_full_not_partially_applied() {
+        let store = InMemoryEventStore::with_capacity(2);
+        let stream = StreamId::from_name("conversation/abc");
+
+        // One event fits under the cap of 2, but this batch asks for
+        // three at once — the whole batch must be refused, not just
+        // the third event.
+        let result = store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                events: vec![
+                    new_event(EventId::new()),
+                    new_event(EventId::new()),
+                    new_event(EventId::new()),
+                ],
+            })
+            .await;
+        assert_eq!(result, Err(EventStoreError::StorageFull));
+        assert!(store.read_stream(stream, 0, 10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_batch_of_only_duplicates_never_trips_the_cap() {
+        let store = InMemoryEventStore::with_capacity(1);
+        let stream = StreamId::from_name("conversation/abc");
+        let event_id = EventId::new();
+        store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                events: vec![new_event(event_id)],
+            })
+            .await
+            .unwrap();
+
+        // Same event_id again — a §24 idempotent no-op, not something
+        // that could ever cross a capacity limit since it adds
+        // nothing real to the log.
+        let result = store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 1,
+                events: vec![new_event(event_id)],
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.local_offsets, vec![None]);
+    }
+
+    #[tokio::test]
+    async fn an_unbounded_store_never_returns_storage_full() {
+        let store = InMemoryEventStore::new();
+        let stream = StreamId::from_name("conversation/abc");
+        let events = (0..50).map(|_| new_event(EventId::new())).collect();
+        store
+            .append(AppendRequest {
+                stream_id: stream,
+                expected_version: 0,
+                events,
+            })
+            .await
+            .unwrap();
     }
 }

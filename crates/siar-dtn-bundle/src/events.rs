@@ -131,6 +131,33 @@ pub enum DtnEvent {
 }
 
 impl DtnEvent {
+    /// §56 "Durability Classes" — see `siar_event_log::durability`'s
+    /// own doc comment for the rule. `BundleForwarded`/`BundleEvicted`
+    /// are `BestEffort`: DTN's own §22 "Spray and Wait" replication
+    /// means a single hop or eviction record is inherently
+    /// best-effort bookkeeping in a domain that is ALREADY lossy by
+    /// design (see `siar_dtn_bundle::spray`'s own doc comment) — losing
+    /// one hop's record causes nothing unsafe, at most a redundant
+    /// re-forward. The rest are `Durable`: none of DTN's real lifecycle
+    /// facts rise to `Critical` by this rule's own bar (an unsafe
+    /// inversion) — a lost `BundleExpired`, say, just means a bundle
+    /// lingers past its real TTL, not that something unsafe is
+    /// trusted.
+    pub fn durability_class(&self) -> siar_event_log::DurabilityClass {
+        use siar_event_log::DurabilityClass as D;
+        match self {
+            Self::BundleCreated { .. } => D::Durable,
+            Self::BundleStored { .. } => D::Durable,
+            Self::BundleForwarded { .. } => D::BestEffort,
+            Self::BundleDestinationReached { .. } => D::Durable,
+            Self::BundleAcknowledged { .. } => D::Durable,
+            Self::BundleCompleted { .. } => D::Durable,
+            Self::BundleExpired { .. } => D::Durable,
+            Self::BundleEvicted { .. } => D::BestEffort,
+            Self::BundleCancelled { .. } => D::Durable,
+        }
+    }
+
     pub fn event_type(&self) -> EventTypeId {
         match self {
             Self::BundleCreated { .. } => EVENT_TYPE_BUNDLE_CREATED,
@@ -237,6 +264,28 @@ mod tests {
             priority: DtnPriority::Normal,
             payload_type: PayloadTypeId(1),
         }
+    }
+
+    #[test]
+    fn forwarding_and_eviction_are_best_effort_the_rest_are_durable() {
+        use siar_event_log::DurabilityClass;
+        let bundle_id = BundleId::new();
+        assert_eq!(
+            sample_created(bundle_id).durability_class(),
+            DurabilityClass::Durable
+        );
+        assert_eq!(
+            DtnEvent::BundleForwarded { bundle_id }.durability_class(),
+            DurabilityClass::BestEffort
+        );
+        assert_eq!(
+            DtnEvent::BundleEvicted { bundle_id }.durability_class(),
+            DurabilityClass::BestEffort
+        );
+        assert_eq!(
+            DtnEvent::BundleCompleted { bundle_id }.durability_class(),
+            DurabilityClass::Durable
+        );
     }
 
     #[test]

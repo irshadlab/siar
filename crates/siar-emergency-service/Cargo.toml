@@ -1,0 +1,21 @@
+[package]
+name = "siar-emergency-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+siar-domain.workspace = true
+# §37's catalog (`events::EmergencyEvent`) plus the new
+# `report_status::ReportStatus`/`ReportEvent` decide layer this round
+# added to close a real gap found while wiring this crate — see
+# lib.rs's own doc comment.
+siar-emergency.workspace = true
+siar-event-log.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tokio.workspace = true

@@ -42,6 +42,7 @@ members = [
     "crates/siar-transport-ble",
     "crates/siar-transport-ble-android",
     "crates/siar-emergency",
+    "crates/siar-emergency-service",
     "crates/siar-testkit",
     "crates/siar-connectivity",
     "apps/cli",
@@ -88,6 +89,7 @@ siar-connectivity = { path = "crates/siar-connectivity" }
 siar-transport-ble = { path = "crates/siar-transport-ble" }
 siar-media-image = { path = "crates/siar-media-image" }
 siar-emergency = { path = "crates/siar-emergency" }
+siar-emergency-service = { path = "crates/siar-emergency-service" }
 
 # --- dev/analysis tooling ---
 # Cargo dependency graph analysis — tracks/queries workspace dependency

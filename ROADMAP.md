@@ -1974,7 +1974,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 43 | Blob References | ✅ | File events reference `BlobId`/`ManifestId`, never raw bytes. Messaging embeds small ciphertext directly by design (text content, not "large binary data" — attachments go through the separate blob subsystem, not through `MessagingEvent`). |
 | 44 | Search as Projection | ⬜ | No FTS projection exists. |
 | 45 | Replay Must Not Re-run Side Effects | 🟡 | True by construction today — the only real `Projection` (`ConversationSummaryProjection`) has zero side effects, so replay is safe. Never stress-tested against a side-effecting projection, since none exists yet. |
-| 46 | Replay Modes | ⬜ | No `ReplayMode` enum; `catch_up` has one implicit mode. |
+| 46 | Replay Modes | 🟡 | `ReplayMode` enum (`ProjectionOnly`, `Recovery`, `Live`), `CatchUpOutcome`, and `ProjectionRunner::catch_up_with_mode` implemented in `siar-event-log` and tested. External work gating ready for orchestration callers (§47/§48). |
 | 47 | Startup Recovery | ⬜ | No orchestrated startup sequence exists anywhere in what's been built. |
 | 48 | Work Queue Reconciliation | ⬜ | Not started. |
 | 49 | Replication Scope | ⬜ | No `ReplicationScope` enum. |

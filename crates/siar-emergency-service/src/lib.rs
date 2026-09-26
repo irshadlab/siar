@@ -152,31 +152,33 @@ impl EmergencyReportService {
     }
 
     /// `ReportStatus`'s own transition table, decided first — recorded
-    /// (§37) only if the decision succeeds. Only `Resolve`/`Cancel`/
-    /// `Expire` go through here — see this module's own doc comment
-    /// for why `TrustReclassified`/`ReportAcknowledged` have their own
-    /// methods below instead.
+    /// (§37) only if the decision succeeds. As of §29 "Pure Decision
+    /// Functions," the decide step is [`siar_emergency::decide`], not
+    /// duplicated here — see that function's own doc comment. Only
+    /// `Resolve`/`Cancel`/`Expire` go through here — see this module's
+    /// own doc comment for why `TrustReclassified`/`ReportAcknowledged`
+    /// have their own methods below instead.
     pub async fn apply(
         &self,
         report_id: ReportId,
         event: ReportEvent,
         origin: EventOrigin,
     ) -> Result<ReportStatus, EmergencyReportError> {
-        let next = {
-            let mut statuses = self.statuses.lock().expect("status lock");
+        let current = {
+            let statuses = self.statuses.lock().expect("status lock");
             let Some(&current) = statuses.get(&report_id) else {
                 return Err(EmergencyReportError::UnknownReport(report_id));
             };
-            let next = current.transition(event)?;
-            statuses.insert(report_id, next);
-            next
+            current
         };
-        let emergency_event = match event {
-            ReportEvent::Resolve => EmergencyEvent::ReportResolved { report_id },
-            ReportEvent::Cancel => EmergencyEvent::ReportCancelled { report_id },
-            ReportEvent::Expire => EmergencyEvent::ReportExpired { report_id },
-        };
-        self.record(emergency_event, origin).await;
+        let (next, events) = siar_emergency::decide(current, event, report_id)?;
+        self.statuses
+            .lock()
+            .expect("status lock")
+            .insert(report_id, next);
+        for emergency_event in events {
+            self.record(emergency_event, origin).await;
+        }
         Ok(next)
     }
 
@@ -224,7 +226,12 @@ impl EmergencyReportService {
     }
 
     fn require_known(&self, report_id: ReportId) -> Result<(), EmergencyReportError> {
-        if self.statuses.lock().expect("status lock").contains_key(&report_id) {
+        if self
+            .statuses
+            .lock()
+            .expect("status lock")
+            .contains_key(&report_id)
+        {
             Ok(())
         } else {
             Err(EmergencyReportError::UnknownReport(report_id))
@@ -251,11 +258,16 @@ impl EmergencyReportService {
 mod tests {
     use super::*;
     use siar_emergency::events::decode_emergency_event;
-    use siar_emergency::report_stream_id;
     use siar_emergency::report::GeoPoint;
+    use siar_emergency::report_stream_id;
     use siar_event_log::InMemoryEventStore;
 
-    fn sample_sos() -> (EmergencyMessageKind, LocationSharing, Option<u16>, Option<String>) {
+    fn sample_sos() -> (
+        EmergencyMessageKind,
+        LocationSharing,
+        Option<u16>,
+        Option<String>,
+    ) {
         (
             EmergencyMessageKind::Sos,
             LocationSharing::Approximate(GeoPoint {
@@ -276,7 +288,15 @@ mod tests {
         let (kind, location, people, note) = sample_sos();
 
         let status = service
-            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
+            .create_report(
+                report_id,
+                kind,
+                sender,
+                location,
+                people,
+                note,
+                EventOrigin::System,
+            )
             .await
             .unwrap();
         assert_eq!(status, ReportStatus::Active);
@@ -294,13 +314,19 @@ mod tests {
             .unwrap();
         assert_eq!(stream.len(), 2);
         assert!(matches!(
-            decode_emergency_event(stream[0].envelope.schema_version, &stream[0].envelope.payload)
-                .unwrap(),
+            decode_emergency_event(
+                stream[0].envelope.schema_version,
+                &stream[0].envelope.payload
+            )
+            .unwrap(),
             EmergencyEvent::ReportCreated { .. }
         ));
         assert!(matches!(
-            decode_emergency_event(stream[1].envelope.schema_version, &stream[1].envelope.payload)
-                .unwrap(),
+            decode_emergency_event(
+                stream[1].envelope.schema_version,
+                &stream[1].envelope.payload
+            )
+            .unwrap(),
             EmergencyEvent::ReportResolved { .. }
         ));
     }
@@ -312,7 +338,15 @@ mod tests {
         let sender = AccountId::new();
         let (kind, location, people, note) = sample_sos();
         service
-            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
+            .create_report(
+                report_id,
+                kind,
+                sender,
+                location,
+                people,
+                note,
+                EventOrigin::System,
+            )
             .await
             .unwrap();
         service
@@ -341,7 +375,15 @@ mod tests {
         let sender = AccountId::new();
         let (kind, location, people, note) = sample_sos();
         service
-            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
+            .create_report(
+                report_id,
+                kind,
+                sender,
+                location,
+                people,
+                note,
+                EventOrigin::System,
+            )
             .await
             .unwrap();
         service
@@ -412,7 +454,15 @@ mod tests {
             .await
             .unwrap();
         let result = service
-            .create_report(report_id, kind, sender, location, people, note, EventOrigin::System)
+            .create_report(
+                report_id,
+                kind,
+                sender,
+                location,
+                people,
+                note,
+                EventOrigin::System,
+            )
             .await;
         assert_eq!(
             result,

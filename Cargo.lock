@@ -7511,6 +7511,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-startup-recovery"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "siar-storage"
 version = "0.1.0"
 dependencies = [

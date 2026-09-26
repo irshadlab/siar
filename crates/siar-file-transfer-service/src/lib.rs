@@ -84,6 +84,21 @@ pub enum FileTransferError {
     FailNeedsReason,
 }
 
+/// §29 "Pure Decision Functions": [`siar_blob_manifest::decide`]'s own
+/// error shape mapped onto this one, so [`FileTransferService::apply`]
+/// can lean on `?` rather than matching it out by hand — kept as a
+/// conversion, not a replacement, so this enum's own variants (and
+/// every existing match against them) stay exactly as they were before
+/// `decide` existed.
+impl From<siar_blob_manifest::DecideError> for FileTransferError {
+    fn from(err: siar_blob_manifest::DecideError) -> Self {
+        match err {
+            siar_blob_manifest::DecideError::InvalidTransition(e) => Self::InvalidTransition(e),
+            siar_blob_manifest::DecideError::FailNeedsReason => Self::FailNeedsReason,
+        }
+    }
+}
+
 /// The real caller — see this module's own doc comment.
 ///
 /// `event_log` is optional, same reason `siar_messaging::service::
@@ -171,10 +186,13 @@ impl FileTransferService {
     }
 
     /// §26's own transition table, decided first — recorded (§34) only
-    /// if the decision succeeds: an invalid transition is rejected
-    /// before this service ever touches the event log, and the state
-    /// map is only updated once `TransferState::transition` itself has
-    /// already accepted the move.
+    /// if the decision succeeds. As of §29 "Pure Decision Functions,"
+    /// the decide step itself is [`siar_blob_manifest::decide`], not
+    /// duplicated here — this method's own job is now just: load
+    /// current state, call that pure function, apply its result, and
+    /// record whatever events (zero or more — this domain's `decide`
+    /// always returns exactly one for a non-`Fail` command, but the
+    /// shape doesn't assume that) it decided actually happened.
     ///
     /// Every `TransferEvent` variant except `Fail` goes through here
     /// — see [`Self::fail_transfer`] for why `Fail` doesn't.
@@ -184,21 +202,21 @@ impl FileTransferService {
         event: TransferEvent,
         origin: EventOrigin,
     ) -> Result<TransferState, FileTransferError> {
-        if matches!(event, TransferEvent::Fail) {
-            return Err(FileTransferError::FailNeedsReason);
-        }
-        let next = {
-            let mut states = self.states.lock().expect("state lock");
+        let current = {
+            let states = self.states.lock().expect("state lock");
             let Some(&current) = states.get(&transfer_id) else {
                 return Err(FileTransferError::UnknownTransfer(transfer_id));
             };
-            let next = current.transition(event)?;
-            states.insert(transfer_id, next);
-            next
+            current
         };
-        let file_event = Self::file_event_for(transfer_id, event)
-            .expect("every TransferEvent other than Fail maps to a FileEvent");
-        self.record(file_event, origin).await;
+        let (next, events) = siar_blob_manifest::decide(current, event, transfer_id)?;
+        self.states
+            .lock()
+            .expect("state lock")
+            .insert(transfer_id, next);
+        for file_event in events {
+            self.record(file_event, origin).await;
+        }
         Ok(next)
     }
 
@@ -263,27 +281,6 @@ impl FileTransferService {
         )
         .await;
         Ok(())
-    }
-
-    /// §26's `TransferEvent` names INTENT (`Decline` and `Cancel` both
-    /// decide "go to `Cancelled`"); §34's `FileEvent` has one variant
-    /// for that shared outcome (`TransferCancelled`), not one per
-    /// intent — the spec draws that line at "what happened to the
-    /// transfer," not "which caller asked for it." `None` for `Fail`
-    /// only; every other variant has exactly one corresponding
-    /// `FileEvent`.
-    fn file_event_for(transfer_id: TransferId, event: TransferEvent) -> Option<FileEvent> {
-        use TransferEvent as E;
-        Some(match event {
-            E::Accept => FileEvent::TransferAccepted { transfer_id },
-            E::Decline => FileEvent::TransferCancelled { transfer_id },
-            E::Start => FileEvent::TransferStarted { transfer_id },
-            E::Pause => FileEvent::TransferPaused { transfer_id },
-            E::Resume => FileEvent::TransferResumed { transfer_id },
-            E::ChunksComplete => FileEvent::TransferCompleted { transfer_id },
-            E::Cancel => FileEvent::TransferCancelled { transfer_id },
-            E::Fail => return None,
-        })
     }
 
     /// Same pattern `siar_messaging::service::MessageService::

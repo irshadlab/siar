@@ -57,4 +57,4 @@ pub use events::{
     EVENT_TYPE_REPORT_RESOLVED, EVENT_TYPE_TRUST_RECLASSIFIED,
 };
 pub use ids::ReportId;
-pub use report_status::{InvalidReportTransition, ReportEvent, ReportStatus};
+pub use report_status::{decide, InvalidReportTransition, ReportEvent, ReportStatus};

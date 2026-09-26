@@ -22,6 +22,9 @@
 //! gated only by "is this report known to the caller at all," never
 //! by [`ReportStatus`].
 
+use crate::events::EmergencyEvent;
+use crate::ids::ReportId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportStatus {
     /// Created, not yet resolved/cancelled/expired. The only
@@ -60,12 +63,7 @@ impl ReportStatus {
             (S::Active, E::Resolve) => S::ReportResolved,
             (S::Active, E::Cancel) => S::ReportCancelled,
             (S::Active, E::Expire) => S::ReportExpired,
-            _ => {
-                return Err(InvalidReportTransition {
-                    state: self,
-                    event,
-                })
-            }
+            _ => return Err(InvalidReportTransition { state: self, event }),
         };
         Ok(next)
     }
@@ -78,6 +76,38 @@ impl ReportStatus {
     }
 }
 
+/// §29 "Pure Decision Functions," this domain's own instance — same
+/// adapted shape `siar_blob_manifest::transfer_state::decide` already
+/// uses (state alongside events, not events alone; see that
+/// function's own doc comment for why). Simpler than that sibling in
+/// one real way: every [`ReportEvent`] variant here is bare and maps
+/// to exactly one [`EmergencyEvent`] with no missing data to refuse
+/// on the way (no `Fail`-needs-a-reason case in this domain), so this
+/// returns [`InvalidReportTransition`] directly rather than needing
+/// its own wrapping error type.
+///
+/// Pure, synchronous, no IO, no async, no event log. Deliberately
+/// does NOT cover `TrustReclassified`/`ReportAcknowledged` — see this
+/// module's own top doc comment for why those were never `ReportEvent`
+/// variants to begin with — nor `ReportCreated`, which isn't a
+/// `(state, command)` pair (no "current status" to decide from for a
+/// report's own first event); the real caller's own `create_report`
+/// handles that directly, same reason `siar_blob_manifest::
+/// transfer_state::decide` doesn't cover `TransferCreated` either.
+pub fn decide(
+    state: ReportStatus,
+    command: ReportEvent,
+    report_id: ReportId,
+) -> Result<(ReportStatus, Vec<EmergencyEvent>), InvalidReportTransition> {
+    let next = state.transition(command)?;
+    let event = match command {
+        ReportEvent::Resolve => EmergencyEvent::ReportResolved { report_id },
+        ReportEvent::Cancel => EmergencyEvent::ReportCancelled { report_id },
+        ReportEvent::Expire => EmergencyEvent::ReportExpired { report_id },
+    };
+    Ok((next, vec![event]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,15 +115,21 @@ mod tests {
     #[test]
     fn a_report_can_be_resolved_cancelled_or_expired_from_active() {
         assert_eq!(
-            ReportStatus::Active.transition(ReportEvent::Resolve).unwrap(),
+            ReportStatus::Active
+                .transition(ReportEvent::Resolve)
+                .unwrap(),
             ReportStatus::ReportResolved
         );
         assert_eq!(
-            ReportStatus::Active.transition(ReportEvent::Cancel).unwrap(),
+            ReportStatus::Active
+                .transition(ReportEvent::Cancel)
+                .unwrap(),
             ReportStatus::ReportCancelled
         );
         assert_eq!(
-            ReportStatus::Active.transition(ReportEvent::Expire).unwrap(),
+            ReportStatus::Active
+                .transition(ReportEvent::Expire)
+                .unwrap(),
             ReportStatus::ReportExpired
         );
     }
@@ -106,7 +142,11 @@ mod tests {
             ReportStatus::ReportExpired,
         ] {
             assert!(status.is_terminal());
-            for event in [ReportEvent::Resolve, ReportEvent::Cancel, ReportEvent::Expire] {
+            for event in [
+                ReportEvent::Resolve,
+                ReportEvent::Cancel,
+                ReportEvent::Expire,
+            ] {
                 assert!(status.transition(event).is_err());
             }
         }
@@ -115,5 +155,51 @@ mod tests {
     #[test]
     fn active_is_not_terminal() {
         assert!(!ReportStatus::Active.is_terminal());
+    }
+
+    #[test]
+    fn decide_returns_the_matching_event_and_the_same_next_state_transition_would() {
+        let report_id = ReportId::new();
+        let (next, events) = decide(ReportStatus::Active, ReportEvent::Resolve, report_id).unwrap();
+        assert_eq!(
+            next,
+            ReportStatus::Active
+                .transition(ReportEvent::Resolve)
+                .unwrap()
+        );
+        assert_eq!(events, vec![EmergencyEvent::ReportResolved { report_id }]);
+    }
+
+    #[test]
+    fn decide_rejects_a_second_lifecycle_event_on_an_already_terminal_report() {
+        let report_id = ReportId::new();
+        let result = decide(
+            ReportStatus::ReportCancelled,
+            ReportEvent::Resolve,
+            report_id,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decide_covers_all_three_lifecycle_events_from_active() {
+        let report_id = ReportId::new();
+        for (command, expected) in [
+            (
+                ReportEvent::Resolve,
+                EmergencyEvent::ReportResolved { report_id },
+            ),
+            (
+                ReportEvent::Cancel,
+                EmergencyEvent::ReportCancelled { report_id },
+            ),
+            (
+                ReportEvent::Expire,
+                EmergencyEvent::ReportExpired { report_id },
+            ),
+        ] {
+            let (_, events) = decide(ReportStatus::Active, command, report_id).unwrap();
+            assert_eq!(events, vec![expected]);
+        }
     }
 }

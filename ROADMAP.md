@@ -1957,7 +1957,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 26 | Gap Detection | ✅ | `detect_gap` (Phase 1), tested against the spec's own worked example. |
 | 27 | Logical Clocks | 🟡 | `stream_version` provides real per-stream ordering; no hybrid logical clock beyond that. |
 | 28 | Offline IDs | ✅ | `EventId`/`CorrelationId` are locally-generated `Uuid` v4 — collision-resistant, offline, stable across retries (verified by `append_with_retry`'s own reuse of the same id). Not time-sortable (not v7) — the section calls this an optional locality improvement, not a correctness requirement. |
-| 29 | Pure Decision Functions | ⬜ | No `decide(state, command) -> Result<Vec<DomainEvent>, DomainError>` pattern provided or enforced anywhere. |
+| 29 | Pure Decision Functions | 🟡 | Pure `decide(state, command, id) -> Result<(State, Vec<DomainEvent>), Error>` implemented and tested across files (`siar-blob-manifest`), emergency (`siar-emergency`), and DTN (`siar-dtn-bundle`), with caller services delegating to them. |
 | 30 | Effect Processing | 🟡 | `record_messaging_event`'s catch-up call is effect-adjacent but ad hoc — no formal effect-processing pattern/type exists. |
 | 31 | Exactly-Once Is Not the Goal | ◇ | Reflected in §24's own idempotent-no-op design; no artifact of its own. |
 | 32 | Retry Event Granularity | ◇ | Reflected in `append_with_retry`'s own per-event retry design; no artifact of its own. |

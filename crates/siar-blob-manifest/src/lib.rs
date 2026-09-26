@@ -128,5 +128,5 @@ pub use limits::ManifestLimits;
 pub use manifest::{build_manifest, BlobManifest, ChunkDescriptor, ManifestError};
 pub use metadata_encryption::{decrypt_file_metadata, encrypt_file_metadata};
 pub use resume::ResumeBitmap;
-pub use transfer_state::{InvalidTransition, TransferEvent, TransferState};
+pub use transfer_state::{decide, DecideError, InvalidTransition, TransferEvent, TransferState};
 pub use verify::{verify_chunk, verify_complete_blob};

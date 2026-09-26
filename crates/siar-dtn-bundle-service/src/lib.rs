@@ -145,47 +145,35 @@ impl DtnBundleService {
 
     /// §18's own transition table, decided first — recorded (§36) only
     /// for the seven `BundleEvent` variants that have a corresponding
-    /// `DtnEvent`; `BecomeEligible`/`Reject` still transition and still
-    /// return `Ok`, just record nothing — see this module's own doc
-    /// comment for why that's deliberate rather than a silent bug.
+    /// `DtnEvent`. As of §29 "Pure Decision Functions," the decide
+    /// step is [`siar_dtn_bundle::decide`], not duplicated here — see
+    /// that function's own doc comment. `BecomeEligible`/`Reject`
+    /// still transition and still return `Ok`, just record nothing
+    /// (an empty `Vec` from `decide`, not a special case this method
+    /// has to know about anymore) — see this module's own doc comment
+    /// for why that's deliberate rather than a silent bug.
     pub async fn apply(
         &self,
         bundle_id: BundleId,
         event: BundleEvent,
         origin: EventOrigin,
     ) -> Result<BundleState, DtnBundleError> {
-        let next = {
-            let mut states = self.states.lock().expect("state lock");
+        let current = {
+            let states = self.states.lock().expect("state lock");
             let Some(&current) = states.get(&bundle_id) else {
                 return Err(DtnBundleError::UnknownBundle(bundle_id));
             };
-            let next = current.transition(event)?;
-            states.insert(bundle_id, next);
-            next
+            current
         };
-        if let Some(dtn_event) = Self::dtn_event_for(bundle_id, event) {
+        let (next, events) = siar_dtn_bundle::decide(current, event, bundle_id)?;
+        self.states
+            .lock()
+            .expect("state lock")
+            .insert(bundle_id, next);
+        for dtn_event in events {
             self.record(dtn_event, origin).await;
         }
         Ok(next)
-    }
-
-    /// See this module's own doc comment's "two transitions" section
-    /// for why `BecomeEligible`/`Reject` return `None` — every other
-    /// `BundleEvent` variant has exactly one corresponding `DtnEvent`.
-    fn dtn_event_for(bundle_id: BundleId, event: BundleEvent) -> Option<DtnEvent> {
-        use BundleEvent as E;
-        Some(match event {
-            E::PersistDurably => DtnEvent::BundleStored { bundle_id },
-            E::BecomeEligible => return None,
-            E::Forward => DtnEvent::BundleForwarded { bundle_id },
-            E::ReachDestination => DtnEvent::BundleDestinationReached { bundle_id },
-            E::Acknowledge => DtnEvent::BundleAcknowledged { bundle_id },
-            E::Complete => DtnEvent::BundleCompleted { bundle_id },
-            E::Expire => DtnEvent::BundleExpired { bundle_id },
-            E::Evict => DtnEvent::BundleEvicted { bundle_id },
-            E::Cancel => DtnEvent::BundleCancelled { bundle_id },
-            E::Reject => return None,
-        })
     }
 
     /// Same no-op-without-a-log, log-not-propagate-on-failure pattern

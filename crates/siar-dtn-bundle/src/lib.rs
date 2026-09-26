@@ -134,7 +134,7 @@ pub use forwarding::{decide_forwarding, EncounteredPeer, ForwardingDecision};
 pub use payload::{InlinePayloadTooLarge, PayloadReference, MAX_INLINE_PAYLOAD_BYTES};
 pub use routing_bridge::{select_dtn_bundle_policy, DtnBundlePolicy, DEFAULT_BUNDLE_TTL_MILLIS};
 pub use spray::spray_allocation;
-pub use state::{BundleEvent, BundleState, InvalidBundleTransition};
+pub use state::{decide, BundleEvent, BundleState, InvalidBundleTransition};
 pub use store::{BundleStore, DtnStoreError, ForwardQuery, InMemoryBundleStore, StoredBundle};
 pub use types::{
     BroadcastScope, BundleId, DtnDestination, DtnPriority, DtnSource, ForwardingClass,

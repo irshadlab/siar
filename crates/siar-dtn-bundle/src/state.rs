@@ -1,6 +1,9 @@
 //! §18 "Bundle State Machine", §19 "Delivery Semantics": "Do not equate
 //! forwarded with delivered."
 
+use crate::events::DtnEvent;
+use crate::types::BundleId;
+
 /// §18's named sequence. `ForwardedAgain` from the spec's own diagram
 /// is deliberately collapsed into re-entering [`BundleState::Forwarded`]
 /// here rather than modeled as a distinct state — the spec shows it as
@@ -92,6 +95,45 @@ impl BundleState {
     }
 }
 
+/// §29 "Pure Decision Functions," this domain's own instance — same
+/// adapted shape `siar_blob_manifest::transfer_state::decide`/
+/// `siar_emergency::decide` already use (state alongside events, not
+/// events alone; see the first of those two for why). This one is the
+/// clearest case for `Vec`'s own shape in the spec's original
+/// signature: `BecomeEligible`/`Reject` are real, valid transitions
+/// that produce ZERO [`DtnEvent`]s (see `siar_dtn_bundle_service`'s
+/// own doc comment for exactly why those two specifically), so this
+/// function's return type genuinely varies between an empty `Vec` and
+/// a one-element one, not always the latter the way its two siblings
+/// do.
+///
+/// Pure, synchronous, no IO, no async, no event log. Doesn't cover
+/// `BundleCreated`, for the same reason neither sibling `decide`
+/// covers ITS domain's own creation event: no "current state" to
+/// decide from — the real caller's own `create_bundle` handles it
+/// directly.
+pub fn decide(
+    state: BundleState,
+    command: BundleEvent,
+    bundle_id: BundleId,
+) -> Result<(BundleState, Vec<DtnEvent>), InvalidBundleTransition> {
+    use BundleEvent as E;
+    let next = state.transition(command)?;
+    let events = match command {
+        E::PersistDurably => vec![DtnEvent::BundleStored { bundle_id }],
+        E::BecomeEligible => vec![],
+        E::Forward => vec![DtnEvent::BundleForwarded { bundle_id }],
+        E::ReachDestination => vec![DtnEvent::BundleDestinationReached { bundle_id }],
+        E::Acknowledge => vec![DtnEvent::BundleAcknowledged { bundle_id }],
+        E::Complete => vec![DtnEvent::BundleCompleted { bundle_id }],
+        E::Expire => vec![DtnEvent::BundleExpired { bundle_id }],
+        E::Evict => vec![DtnEvent::BundleEvicted { bundle_id }],
+        E::Cancel => vec![DtnEvent::BundleCancelled { bundle_id }],
+        E::Reject => vec![],
+    };
+    Ok((next, events))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +170,54 @@ mod tests {
     fn forwarded_is_never_mistaken_for_delivered() {
         assert!(!BundleState::Forwarded.is_delivered());
         assert!(BundleState::Acknowledged.is_delivered());
+    }
+
+    #[test]
+    fn decide_returns_the_matching_event_and_the_same_next_state_transition_would() {
+        let bundle_id = BundleId::new();
+        let (next, events) =
+            decide(BundleState::Created, BundleEvent::PersistDurably, bundle_id).unwrap();
+        assert_eq!(
+            next,
+            BundleState::Created
+                .transition(BundleEvent::PersistDurably)
+                .unwrap()
+        );
+        assert_eq!(events, vec![DtnEvent::BundleStored { bundle_id }]);
+    }
+
+    #[test]
+    fn decide_produces_zero_events_for_become_eligible_and_reject() {
+        let bundle_id = BundleId::new();
+        let (_, events) =
+            decide(BundleState::Stored, BundleEvent::BecomeEligible, bundle_id).unwrap();
+        assert_eq!(events, vec![]);
+        let (_, events) = decide(BundleState::Created, BundleEvent::Reject, bundle_id).unwrap();
+        assert_eq!(events, vec![]);
+    }
+
+    #[test]
+    fn decide_produces_one_event_for_every_other_valid_transition() {
+        let bundle_id = BundleId::new();
+        for (state, command) in [
+            (BundleState::Created, BundleEvent::PersistDurably),
+            (BundleState::Eligible, BundleEvent::Forward),
+            (BundleState::Forwarded, BundleEvent::ReachDestination),
+            (BundleState::DestinationReached, BundleEvent::Acknowledge),
+            (BundleState::Acknowledged, BundleEvent::Complete),
+            (BundleState::Stored, BundleEvent::Expire),
+            (BundleState::Stored, BundleEvent::Evict),
+            (BundleState::Stored, BundleEvent::Cancel),
+        ] {
+            let (_, events) = decide(state, command, bundle_id).unwrap();
+            assert_eq!(events.len(), 1, "{state:?} + {command:?}");
+        }
+    }
+
+    #[test]
+    fn decide_rejects_an_illegal_transition_exactly_like_transition_does() {
+        let bundle_id = BundleId::new();
+        let result = decide(BundleState::Created, BundleEvent::Forward, bundle_id);
+        assert!(result.is_err());
     }
 }

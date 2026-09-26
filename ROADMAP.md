@@ -1975,8 +1975,8 @@ section with no code artifact of its own (informs design elsewhere;
 | 44 | Search as Projection | ⬜ | No FTS projection exists. |
 | 45 | Replay Must Not Re-run Side Effects | 🟡 | True by construction today — the only real `Projection` (`ConversationSummaryProjection`) has zero side effects, so replay is safe. Never stress-tested against a side-effecting projection, since none exists yet. |
 | 46 | Replay Modes | 🟡 | `ReplayMode` enum (`ProjectionOnly`, `Recovery`, `Live`), `CatchUpOutcome`, and `ProjectionRunner::catch_up_with_mode` implemented in `siar-event-log` and tested. External work gating ready for orchestration callers (§47/§48). |
-| 47 | Startup Recovery | ⬜ | No orchestrated startup sequence exists anywhere in what's been built. |
-| 48 | Work Queue Reconciliation | ⬜ | Not started. |
+| 47 | Startup Recovery | 🟡 | `StartupSequence` (§47) implemented in `siar-startup-recovery` enforcing the 6-phase sequential pipeline (`OpenDb` → `VerifyMigrations` → `ResumeProjections` → `ReconcileWorkQueues` → `LoadReadModels` → `StartNetworking`) with optional local-state-ready hook. Ready for application startup integration. |
+| 48 | Work Queue Reconciliation | 🟡 | `reconcile` and `pending_from_history` (§48) implemented in `siar-startup-recovery` computing `ReconciliationReport` with missing/stale reconciliation sets against historical event streams. Ready for domain work queue wiring. |
 | 49 | Replication Scope | ⬜ | No `ReplicationScope` enum. |
 | 50 | Own-Device Sync | ⬜ | Not started. |
 | 51 | Peer and Group Sync | ⬜ | Not started. |

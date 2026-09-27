@@ -1951,7 +1951,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 20 | Event Store Trait | ✅ | `EventStore` (Phase 1). |
 | 21 | Batch Append | ✅ | `AppendRequest.events: Vec<NewEvent>`, all-or-nothing (Phase 1/2). |
 | 22 | Integrity | ✅ | blake3 checksum per row, verified on read (Phase 2). |
-| 23 | Remote Event Ingestion | ⬜ | No dependency on identity/protocol crates for validation; only `detect_gap` (§26) serves this path at all. |
+| 23 | Remote Event Ingestion | 🟡 | `RemoteIngestionPipeline` implemented in `siar-remote-ingestion` enforcing the 9-step safe flow (receive → protocol validation → identity verification → authorization → deduplication → domain validation → append → projection → durable ACK) with synchronous validators and optional `after_append` projection hook; gates ACK strictly after persistence. |
 | 24 | Idempotency | ✅ | Duplicate `event_id` is a no-op, tested (Phase 1/2). |
 | 25 | Out-of-Order Events | 🟡 | `detect_gap` reports a gap; nothing holds or reorders — reporting only, no remediation. |
 | 26 | Gap Detection | ✅ | `detect_gap` (Phase 1), tested against the spec's own worked example. |
@@ -1994,7 +1994,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 63 | Namespaced Custom Events | 🟡 | New `siar-event-registry` crate (2026-09-22): a real, running, tested cross-domain collision check over all 41 `EventTypeId` constants across all five domains — proven to actually fail on a real collision, not just pass vacuously. Still manually maintained (nothing auto-adds a new domain's constant to the roster) — a real registry immune to that would need `inventory`/`linkme`-style compile-time registration, not attempted. |
 | 64 | Multi-Tenant Isolation | ⬜ | No `TenantId` concept anywhere. |
 | 65 | Multiple Identities | ⬜ | No isolation between personal/work identities on one device. |
-| 66 | Security | 🟡 | Local corruption (§22 checksum) and duplicate/replay (§24) are covered. Malformed-imported-event, rollback, oversized-payload, and unauthorized-remote-event are all moot until §23 (remote ingestion) exists at all. |
+| 66 | Security | 🟡 | Malformed-imported-event, duplicate/replay, rollback, oversized-payload, and unauthorized-remote-event are now validated and tested via `RemoteIngestionPipeline` (§23); local corruption covered via checksums (§22) and `ReadOnlyEventStore` (§69); projection poisoning explicitly documented as requiring future `apply` sandboxing. |
 | 67 | Event Store Errors | 🟡 | `EventStoreError` includes `ConcurrencyConflict`/`Backend`/`Corrupt`/`StreamNotFound` plus `StorageFull` (§68) and `ReadOnly` (§69). |
 | 68 | Storage Full Behavior | 🟡 | `EventStoreError::StorageFull` implemented; `InMemoryEventStore::with_capacity(max)` simulates storage exhaustion and rejects appends crossing capacity before state mutation, tested. |
 | 69 | Read-Only Recovery Mode | 🟡 | `ReadOnlyEventStore<S>` wrapper implemented in `siar-event-log` (2026-09-25) — blocks `append` with `EventStoreError::ReadOnly` while allowing unrestricted `read_stream`/`read_log` for viewing/export/diagnostics, tested. |
@@ -2012,7 +2012,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 81 | Diagnostics | ⬜ | Not started. |
 | 82 | Metrics | 🟡 | `MetricsEventStore<S>` wrapper implemented in `siar-event-log` (2026-09-25) — captures 4 of the spec's 8 metrics at the store append boundary: append latency, events/sec, duplicate rate, event-store size, tested. |
 | 83 | Property Tests | ✅ | All 6 spec invariants covered via `proptest` arbitrary-case generation: invariants 1–5 (duplicate-safety, rebuild-equals-live, strictly monotonic versions, atomic failure, checkpoint bound) tested in `siar-event-log/tests/property_invariants.rs`; invariant 6 (expired pending work not resurrected) implemented via `pending_from_history_with_expiry` and tested in `siar-startup-recovery`. |
-| 84 | Crash Injection Tests | 🟡 | Close-and-reopen-the-same-file tests exist for `stoolap_store`/`stoolap_checkpoint_store`/`stoolap_projections` — a real but narrow proxy for "after commit, process restart." Not true injection at arbitrary points (before append, mid-transaction, after projection before network effect, etc.). |
+| 84 | Crash Injection Tests | ✅ | `FaultInjectingEventStore` wrapper implemented in `siar-event-log` and all 5 spec crash points (before append, inside transaction, after event before projection, after projection before network effect, after network effect before success marker) tested in `tests/crash_injection.rs` with deterministic recovery. |
 | 85 | Fuzzing | ⬜ | Not started. |
 | 86 | Golden Event Tests | ⬜ | No fixed-byte-encoding tests for any event schema. |
 | 87 | Recovery Acceptance Test | ⬜ | The exact composed scenario (kill→restart→projection restored→outbox reconstructed→route found→same MessageId resent→recipient dedupes→MessageDelivered committed) doesn't exist as one test, though several of its pieces are covered separately by other tests. |

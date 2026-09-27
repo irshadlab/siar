@@ -1,5 +1,7 @@
 //! §26 "Transfer State Machine".
 
+use serde::{Deserialize, Serialize};
+
 use crate::events::FileEvent;
 use crate::ids::TransferId;
 
@@ -10,7 +12,7 @@ use crate::ids::TransferId;
 /// accept → transfer → complete, with pause/cancel/fail available from
 /// the right states), not a transcription of an explicit table in the
 /// source document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransferState {
     Offered,
     Accepted,

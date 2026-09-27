@@ -7379,6 +7379,7 @@ dependencies = [
  "proptest",
  "serde",
  "siar-domain",
+ "siar-startup-recovery",
  "stoolap",
  "thiserror 2.0.19",
  "tokio",
@@ -7544,6 +7545,17 @@ name = "siar-protocol-ext"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "siar-remote-ingestion"
+version = "0.1.0"
+dependencies = [
+ "siar-domain",
+ "siar-event-log",
  "thiserror 2.0.19",
  "tokio",
  "workspace-hack",

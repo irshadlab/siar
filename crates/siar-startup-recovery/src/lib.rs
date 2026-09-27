@@ -11,5 +11,7 @@
 pub mod reconciliation;
 pub mod sequence;
 
-pub use reconciliation::{pending_from_history, reconcile, ReconciliationReport};
+pub use reconciliation::{
+    pending_from_history, pending_from_history_with_expiry, reconcile, ReconciliationReport,
+};
 pub use sequence::{step, StartupFailure, StartupSequence, StartupStep, Step, StepError};

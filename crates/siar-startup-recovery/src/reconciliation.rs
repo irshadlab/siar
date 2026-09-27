@@ -120,6 +120,46 @@ pub fn reconcile<T, Id: Eq + Hash + Clone>(
     }
 }
 
+/// Same replay [`pending_from_history`] does, plus one more rule:
+/// once `expires` marks an `Id` expired, no LATER `opens` for that
+/// same `Id` ever re-adds it — §83's own "expired pending work is not
+/// resurrected," made real rather than left as an untested claim.
+/// Without this function's own `expired` bookkeeping, a redelivered or
+/// out-of-order "open" arriving after its own expiry would silently
+/// undo the expiry — exactly the resurrection the invariant names.
+///
+/// `expires` firing for an `Id` that was never `opens`-ed, or already
+/// `closes`-ed, is a harmless no-op — same reasoning
+/// [`pending_from_history`]'s own doc comment gives for an
+/// unmatched `closes`.
+pub fn pending_from_history_with_expiry<T, Id: Eq + Hash + Clone>(
+    events: impl IntoIterator<Item = T>,
+    opens: impl Fn(&T) -> Option<Id>,
+    closes: impl Fn(&T) -> Option<Id>,
+    expires: impl Fn(&T) -> Option<Id>,
+) -> HashSet<Id> {
+    let mut pending = HashSet::new();
+    let mut expired = HashSet::new();
+    for event in events {
+        if let Some(id) = opens(&event) {
+            // The one rule this function adds over `pending_from_history`:
+            // an `Id` already marked `expired` ignores any further
+            // `opens` for it, permanently.
+            if !expired.contains(&id) {
+                pending.insert(id);
+            }
+        }
+        if let Some(id) = closes(&event) {
+            pending.remove(&id);
+        }
+        if let Some(id) = expires(&event) {
+            pending.remove(&id);
+            expired.insert(id);
+        }
+    }
+    pending
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +171,7 @@ mod tests {
     enum FakeEvent {
         Opened(u32),
         Closed(u32),
+        Expired(u32),
         Unrelated,
     }
 
@@ -144,6 +185,13 @@ mod tests {
     fn closes(e: &FakeEvent) -> Option<u32> {
         match e {
             FakeEvent::Closed(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn expires(e: &FakeEvent) -> Option<u32> {
+        match e {
+            FakeEvent::Expired(id) => Some(*id),
             _ => None,
         }
     }
@@ -225,5 +273,79 @@ mod tests {
         let report = reconcile(events, opens, closes, &current_work_table);
         assert_eq!(report.missing, vec![1]);
         assert_eq!(report.stale, vec![2]);
+    }
+
+    #[test]
+    fn an_expired_item_is_removed_from_pending() {
+        let events = vec![FakeEvent::Opened(1), FakeEvent::Expired(1)];
+        let pending = pending_from_history_with_expiry(events, opens, closes, expires);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn a_reopen_after_expiry_is_not_resurrected() {
+        // §83's own invariant 6, as a concrete example: 1 is opened,
+        // expires, and is then "opened" again — a plausible redelivery
+        // or out-of-order replay of the original open — and must stay
+        // gone.
+        let events = vec![
+            FakeEvent::Opened(1),
+            FakeEvent::Expired(1),
+            FakeEvent::Opened(1),
+        ];
+        let pending = pending_from_history_with_expiry(events, opens, closes, expires);
+        assert!(!pending.contains(&1));
+    }
+
+    #[test]
+    fn expiring_something_never_opened_or_already_closed_is_a_harmless_no_op() {
+        let events = vec![FakeEvent::Expired(99)];
+        let pending = pending_from_history_with_expiry(events, opens, closes, expires);
+        assert!(pending.is_empty());
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// §83, invariant 6: "expired pending work is not
+        /// resurrected." However many times (0 to 5) an `open` for
+        /// the same id arrives AFTER that id has already expired —
+        /// modeling redelivery, replay, or simple out-of-order
+        /// arrival, all real possibilities for an at-least-once
+        /// event log — the id never reappears as pending.
+        #[test]
+        fn expired_work_is_never_resurrected_by_any_number_of_later_opens(
+            opens_after_expiry in 0usize..5
+        ) {
+            let id = 1u32;
+            let mut events = vec![FakeEvent::Opened(id), FakeEvent::Expired(id)];
+            for _ in 0..opens_after_expiry {
+                events.push(FakeEvent::Opened(id));
+            }
+            let pending = pending_from_history_with_expiry(events, opens, closes, expires);
+            prop_assert!(!pending.contains(&id));
+        }
+
+        /// The other direction, checked in the same property so a
+        /// regression that makes EVERYTHING vanish (rather than just
+        /// expired ids) can't slip through: an id that was opened but
+        /// never expired is still pending regardless of how many
+        /// *unrelated* ids in the same history did expire.
+        #[test]
+        fn an_unexpired_item_survives_regardless_of_other_ids_expiring(
+            other_expired_ids in prop::collection::hash_set(2u32..100, 0..5)
+        ) {
+            let survivor = 1u32;
+            let mut events = vec![FakeEvent::Opened(survivor)];
+            for &id in &other_expired_ids {
+                events.push(FakeEvent::Opened(id));
+                events.push(FakeEvent::Expired(id));
+            }
+            let pending = pending_from_history_with_expiry(events, opens, closes, expires);
+            prop_assert!(pending.contains(&survivor));
+            for id in &other_expired_ids {
+                prop_assert!(!pending.contains(id));
+            }
+        }
     }
 }

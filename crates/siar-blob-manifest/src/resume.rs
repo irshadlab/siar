@@ -1,4 +1,9 @@
-//! §29 "Resume Bitmap", §30 "Range-Based Resume".
+//! §29 "Resume Bitmap", §30 "Range-Based Resume", §31 "Resume
+//! Protocol".
+
+use serde::{Deserialize, Serialize};
+
+use crate::ids::ManifestId;
 
 /// §29: which chunks (by index) have been durably received, tracked as
 /// a real bitset (`Vec<bool>` — simple and correct; a packed `u64`
@@ -62,9 +67,64 @@ impl ResumeBitmap {
     }
 }
 
+/// §31 "Resume Protocol": "Receiver sends: manifest known, missing
+/// chunks: 3,4,9,10. Sender transfers only missing chunks. No full
+/// restart." — the actual wire-shaped request that exchange implies.
+/// Built from a receiver's own [`ResumeBitmap`] via
+/// [`ResumeRequest::from_bitmap`], reusing §30's own range form
+/// ([`ResumeBitmap::missing_ranges`]) rather than one entry per missing
+/// chunk index, for the same reason that method already gives —
+/// requesting "12 through 47" is one item, not 35.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeRequest {
+    pub manifest_id: ManifestId,
+    pub missing_ranges: Vec<(u32, u32)>,
+}
+
+impl ResumeRequest {
+    /// A request with no missing ranges means "I already have
+    /// everything" — a real, meaningful `ResumeRequest`, not an error
+    /// case; a sender receiving one sends nothing further, which
+    /// [`ResumeRequest::is_satisfied`] makes an explicit check instead
+    /// of an implicit "empty vec happens to mean done."
+    pub fn from_bitmap(manifest_id: ManifestId, bitmap: &ResumeBitmap) -> Self {
+        Self {
+            manifest_id,
+            missing_ranges: bitmap.missing_ranges(),
+        }
+    }
+
+    pub fn is_satisfied(&self) -> bool {
+        self.missing_ranges.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resume_request_built_from_a_bitmap_matches_its_own_missing_ranges() {
+        let manifest_id = ManifestId::new();
+        let mut bitmap = ResumeBitmap::new(10);
+        for i in [0, 1, 2, 5, 6, 9] {
+            bitmap.mark_received(i);
+        }
+        let request = ResumeRequest::from_bitmap(manifest_id, &bitmap);
+        assert_eq!(request.manifest_id, manifest_id);
+        assert_eq!(request.missing_ranges, vec![(3, 5), (7, 9)]);
+        assert!(!request.is_satisfied());
+    }
+
+    #[test]
+    fn a_complete_bitmap_produces_a_satisfied_resume_request() {
+        let manifest_id = ManifestId::new();
+        let mut bitmap = ResumeBitmap::new(2);
+        bitmap.mark_received(0);
+        bitmap.mark_received(1);
+        let request = ResumeRequest::from_bitmap(manifest_id, &bitmap);
+        assert!(request.is_satisfied());
+    }
 
     #[test]
     fn a_fresh_bitmap_is_entirely_missing() {

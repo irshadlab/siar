@@ -144,6 +144,7 @@
 
 pub mod durability;
 pub mod envelope;
+pub mod fault_injection;
 pub mod gap;
 pub mod ids;
 pub mod memory_store;
@@ -157,6 +158,7 @@ pub mod store;
 
 pub use durability::DurabilityClass;
 pub use envelope::{EventEnvelope, EventOrigin};
+pub use fault_injection::{FaultInjectingEventStore, FaultMode};
 pub use gap::{detect_gap, StreamGap};
 pub use ids::{CorrelationId, EventId, EventTypeId, LocalLogOffset, StreamId, Timestamp};
 pub use memory_store::InMemoryEventStore;

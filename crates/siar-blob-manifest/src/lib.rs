@@ -58,6 +58,49 @@
 //!   and didn't have, and the same "construct only, never append"
 //!   split this crate's own state machine already keeps between
 //!   deciding and recording.
+//! - [`metadata_privacy`] — §22 "Metadata Privacy": a real
+//!   [`metadata_privacy::MetadataSensitivity`] classification (public
+//!   transport / encrypted application / local-only) with this crate's
+//!   own default assignment for every field [`descriptor::FileMetadata`]
+//!   actually has, plus [`metadata_privacy::public_transport_view`] as
+//!   the one place that policy is enforced in code rather than left as
+//!   a convention.
+//! - [`attachment_reference`] — §23 "Message Attachment Reference":
+//!   [`attachment_reference::AttachmentReference`] pairing a
+//!   [`descriptor::BlobDescriptor`] with either a visible or
+//!   already-sealed [`attachment_reference::AttachmentMetadata`],
+//!   structurally incapable of carrying file bytes. Its own doc
+//!   comment also covers §24 "File-Only Transfer" — a structural
+//!   property (no dependency on any conversation/message concept
+//!   anywhere in this crate), not a type of its own.
+//! - §25 "Transfer Identity" — already real: [`ids::TransferId`],
+//!   built for §34's events before this round, is exactly what §25
+//!   asks for ("a transfer is distinct from a blob; same blob may have
+//!   multiple transfers/recipients/retries") — no new code needed,
+//!   named here so the section isn't miscounted as untouched.
+//! - [`transfer_record`] — §27 "Transfer Record":
+//!   [`transfer_record::TransferRecord`], field-for-field per the
+//!   spec's own snippet (plus a [`transfer_record::TransferDirection`]
+//!   the snippet implies but doesn't name), with
+//!   [`transfer_record::TransferRecord::advance`] keeping `state` and
+//!   `updated_at_millis` from ever drifting out of sync.
+//! - [`transfer_journal`] — §28 "Transfer Journal": high-frequency,
+//!   NON-durable operational state
+//!   ([`transfer_journal::TransferJournal`] — chunk bitmap, bytes
+//!   verified, active path, retry count) kept deliberately separate
+//!   from both [`transfer_record::TransferRecord`] and the event log —
+//!   §28's own "do not append a permanent event for every packet,"
+//!   made structural by this module never constructing a
+//!   [`events::FileEvent`] at all.
+//! - [`resume::ResumeRequest`] — §31 "Resume Protocol": the real
+//!   wire-shaped request ("manifest known, missing chunks: ...") a
+//!   receiver would send, built from a [`resume::ResumeBitmap`] via
+//!   [`resume::ResumeRequest::from_bitmap`].
+//! - [`mod@partial_availability`] — §32 "Partial Availability": the pure
+//!   computation a future blob store's "safe partial-read status"
+//!   needs — how many bytes from the start of a file are covered by an
+//!   unbroken run of received chunks, deliberately not counting a
+//!   chunk received out of order as "available" on its own.
 //!
 //! Every module is covered by tests exercising real bytes/hashes/state
 //! transitions/ciphertext — including a tamper-detection test for
@@ -97,8 +140,12 @@
 //!   parallelism/adaptive concurrency (§41-43), file offer/auto-accept/
 //!   authorization policy (§44-46), quotas/sparse files/staging
 //!   (§47-50), and everything from roughly §51 onward** — a genuinely
-//!   small slice of a 208-section document.
+//!   small slice of a 208-section document. §20 "Chunk Nonces" and §21
+//!   "Encryption Metadata" are resolved, not open — see
+//!   [`descriptor::EncryptionDescriptor`]'s own doc comment: whole-blob
+//!   AEAD means there was never a per-chunk nonce to derive.
 
+pub mod attachment_reference;
 pub mod chunking;
 pub mod descriptor;
 pub mod encryption;
@@ -107,10 +154,15 @@ pub mod ids;
 pub mod limits;
 pub mod manifest;
 pub mod metadata_encryption;
+pub mod metadata_privacy;
+pub mod partial_availability;
 pub mod resume;
+pub mod transfer_journal;
+pub mod transfer_record;
 pub mod transfer_state;
 pub mod verify;
 
+pub use attachment_reference::{AttachmentMetadata, AttachmentReference};
 pub use chunking::{chunk_fixed_size, ChunkSizeClass};
 pub use descriptor::{
     BlobDescriptor, ChunkingDescriptor, EncryptionAlgorithm, EncryptionDescriptor, FileMetadata,
@@ -127,6 +179,13 @@ pub use ids::{BlobEncryptionKey, BlobId, ChunkHash, LogicalAttachmentId, Manifes
 pub use limits::ManifestLimits;
 pub use manifest::{build_manifest, BlobManifest, ChunkDescriptor, ManifestError};
 pub use metadata_encryption::{decrypt_file_metadata, encrypt_file_metadata};
-pub use resume::ResumeBitmap;
+pub use metadata_privacy::{
+    default_sensitivity, public_transport_view, MetadataField, MetadataSensitivity,
+    PublicTransportMetadata,
+};
+pub use partial_availability::{partial_availability, PartialAvailability};
+pub use resume::{ResumeBitmap, ResumeRequest};
+pub use transfer_journal::TransferJournal;
+pub use transfer_record::{TransferDirection, TransferRecord};
 pub use transfer_state::{decide, DecideError, InvalidTransition, TransferEvent, TransferState};
 pub use verify::{verify_chunk, verify_complete_blob};

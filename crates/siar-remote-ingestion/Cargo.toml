@@ -1,0 +1,18 @@
+[package]
+name = "siar-remote-ingestion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+siar-event-log.workspace = true
+thiserror.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tokio.workspace = true
+# Only for `EventOrigin::RemoteDevice`'s own `DeviceId` in this
+# crate's test module — see `lib.rs`'s own tests module comment for
+# why this is dev-only, not a real production dependency.
+siar-domain.workspace = true

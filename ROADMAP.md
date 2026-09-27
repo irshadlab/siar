@@ -2011,7 +2011,7 @@ section with no code artifact of its own (informs design elsewhere;
 | 80 | Emergency Integration | ⬜ | Not started. |
 | 81 | Diagnostics | ⬜ | Not started. |
 | 82 | Metrics | 🟡 | `MetricsEventStore<S>` wrapper implemented in `siar-event-log` (2026-09-25) — captures 4 of the spec's 8 metrics at the store append boundary: append latency, events/sec, duplicate rate, event-store size, tested. |
-| 83 | Property Tests | 🟡 | Several of the section's own listed invariants ARE covered — but only by targeted example tests (one specific scenario each), never by a property/fuzz framework generating arbitrary cases. |
+| 83 | Property Tests | ✅ | All 6 spec invariants covered via `proptest` arbitrary-case generation: invariants 1–5 (duplicate-safety, rebuild-equals-live, strictly monotonic versions, atomic failure, checkpoint bound) tested in `siar-event-log/tests/property_invariants.rs`; invariant 6 (expired pending work not resurrected) implemented via `pending_from_history_with_expiry` and tested in `siar-startup-recovery`. |
 | 84 | Crash Injection Tests | 🟡 | Close-and-reopen-the-same-file tests exist for `stoolap_store`/`stoolap_checkpoint_store`/`stoolap_projections` — a real but narrow proxy for "after commit, process restart." Not true injection at arbitrary points (before append, mid-transaction, after projection before network effect, etc.). |
 | 85 | Fuzzing | ⬜ | Not started. |
 | 86 | Golden Event Tests | ⬜ | No fixed-byte-encoding tests for any event schema. |

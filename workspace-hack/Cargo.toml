@@ -36,6 +36,7 @@ digest-a6292c17cd707f01 = { package = "digest", version = "0.11", features = ["a
 ed25519 = { version = "2", default-features = false, features = ["alloc", "serde", "std"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
+fastrand = { version = "2" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["sink"] }
@@ -54,7 +55,10 @@ percent-encoding = { version = "2" }
 pkcs8 = { version = "0.11", default-features = false, features = ["pem"] }
 portable-atomic = { version = "1", features = ["serde"] }
 postcard = { version = "1", features = ["experimental-derive", "use-std"] }
-rand = { version = "0.10" }
+ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
+rand-274715c4dabd11b0 = { package = "rand", version = "0.9" }
+rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
+rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 refinery-core = { version = "0.9", features = ["rusqlite", "toml"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }

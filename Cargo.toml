@@ -116,6 +116,13 @@ postcard = { version = "1", features = ["alloc"] }
 bytes = { version = "1", features = ["serde"] }
 thiserror = "2"
 anyhow = "1"
+# §83 "Property Tests" — arbitrary-case generation for the event log's
+# own stated invariants (duplicate-safety, rebuild-equals-live, strictly
+# increasing stream versions, atomic failure, checkpoint never ahead of
+# applied state), replacing single-scenario example tests for those
+# specific checks. Pure Rust, no proc-macro-heavy alternative needed for
+# this crate's own usage (no `proptest-derive`).
+proptest = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }

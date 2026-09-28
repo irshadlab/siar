@@ -808,6 +808,7 @@ For commercial enterprises that wish to rebrand, white-label, or host modified c
 3. Maintain zero-warning clean compilation across all targets (`cargo check --workspace`, `cargo clippy -D warnings --workspace`).
 4. Preserve strict boundary isolation — core crates under `crates/` must remain pure-Rust without mandatory C-library linkages.
 5. Platform-specific hardware integration must be strictly isolated in dedicated crates (`siar-media-android`, `siar-transport-ble-android`).
+6. **Follow Specification Governance**: Core domain, protocol, transport, routing, and daemon development must strictly follow [`sys-arch/`](sys-arch/); all UI, desktop/mobile interaction, visual state machines, and styling must strictly follow [`ui-ux/`](ui-ux/). Pull requests must cite their governing specification chapters.
 
 ---
 

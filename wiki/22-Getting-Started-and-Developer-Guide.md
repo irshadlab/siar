@@ -146,16 +146,31 @@ siar/
 │   │   └── siar-calls/                   # Realtime P2P media call session protocols & signaling
 │   └── [Simulation & Test Harness]
 │       └── siar-testkit/                 # In-memory virtual radio mesh simulator & link impairments
-├── sys-arch/                             # 176 System Architecture Specifications
+├── sys-arch/                             # 176 System Architecture Specifications (Core Engine & Cloud)
+├── ui-ux/                                # 27 Interaction & Design Specifications (Frontends & State)
 └── wiki/                                 # 50-Chapter Comprehensive Architectural Wiki
 ```
+
+### Architectural Specification Duality: `sys-arch/` for Core, `ui-ux/` for UI
+
+All engineering contributions to SIAR must strictly map to one of two authoritative specification corpora:
+
+1. **Core Engine & Platform Development (`sys-arch/`)**:
+   - Dictates all 39 domain crates in `crates/`, headless daemons (`apps/emergency-node`), CLI tools (`apps/cli`), and native JNI bridge layers.
+   - Authoritative chapters cover wire framing (`sys-arch/01`), identity & root keys (`sys-arch/02`), multi-metric routing (`sys-arch/03`), DTN bundles (`sys-arch/06`), capability negotiation (`sys-arch/07`), daemon lifecycle (`sys-arch/16`), and end-to-end security (`sys-arch/28`).
+   - Invariant: Core runtime code must remain pure-Rust, zero-external-infrastructure-dependent, and panic-free.
+
+2. **Frontend & UI/UX Development (`ui-ux/`)**:
+   - Dictates all client UI applications (`apps/desktop` via Dioxus 0.7, `apps/android` via Jetpack Compose), and reactive UI state machines in `crates/siar-ui-state`.
+   - Authoritative chapters cover application shells (`ui-ux-01..03`), message timelines & composer (`ui-ux-04..06`), Security Center & key ceremonies (`ui-ux-15`), emergency SOS mesh UX (`ui-ux-17`), design tokens (`ui-ux-22`), and degraded offline states (`ui-ux-24`).
+   - Invariant: UI is strictly a decoupled, stateless client of the runtime daemon (`sys-arch/16`); UI layers never initiate raw network sockets, manage cryptographic ratchets, or implement ad-hoc transport failover.
 
 ---
 
 ## 3. Compiling & Testing the Workspace
 
 ```bash
-# 1. Fast compile-check across all 33 crates and test targets
+# 1. Fast compile-check across all 39 crates and test targets
 cargo check --workspace --tests
 
 # 2. Run unit tests across all crates

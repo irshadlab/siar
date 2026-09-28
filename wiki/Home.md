@@ -4,6 +4,15 @@
 > 
 > **Architecture Scope:** 176 Exhaustive Architecture Specifications (514k+ lines, 875k+ words) documented across **50 in-depth wiki chapters in 12 specialized domains**.
 
+> [!CAUTION]
+> ### ⚠️ FOUNDATIONAL DEVELOPMENT NOTICE — NOT CURRENTLY USABLE ON ANY DEVICE
+>
+> * **Active Foundational Development:** SIAR is currently in pre-alpha foundational systems development. **It is NOT YET USABLE on any daily-driver mobile phone, desktop, or operational device.** End-user applications and installable packages will become operational upon the completion of the first formal milestone release (Milestone 1 / v0.1.0+).
+> * **AI / LLM Development Transparency Disclosure:** SIAR's extensive architectural specifications (176 specifications across 514k+ lines), wiki documentation, and codebase are **heavily developed with the assistance of advanced Artificial Intelligence / Large Language Models (AI/LLMs)** working under human architectural direction and verification.
+> * **URGENT: Security Researchers, Cryptographers & Protocol Engineers Required:** Because SIAR is designed for post-infrastructure, disaster-recovery, and high-threat environments, **independent third-party security researchers and protocol engineers are urgently needed** to perform formal mathematical verification, cryptographic audits, memory safety inspections, and fuzz testing across the cryptography (`siar-crypto`, `siar-crypto-mls`), wire framing (`siar-protocol`, `siar-protocol-ext`), transport/routing (`siar-transport`, `siar-routing-policy`), storage, and media subsystems to discover and eliminate potential vulnerabilities before real-world deployment.
+>
+> **DO NOT deploy SIAR in production, life-safety, high-threat, or operational environments until formal independent audits and the v0.1.0 milestone release are complete.**
+
 ---
 
 ## 🧭 Master Wiki Portal & Sitemap
@@ -138,7 +147,7 @@ sys-arch/ & ui-ux/ (176 Specifications · 514k+ lines · 875k+ words)
 ## 📚 Complete Table of Contents by Domain (50 Chapters)
 
 ### 🏛️ Part I: Core Architecture, Identity & Cryptography
-* **[[01-System-Overview-and-Architecture]]**: High-level design, survivability invariants, workspace topology (31 Rust domain crates, 3 apps, 2 Android JNI bridges), and the 3-Tier architecture.
+* **[[01-System-Overview-and-Architecture]]**: High-level design, survivability invariants, workspace topology (39 Rust domain crates, 4 apps, 2 Android JNI bridges), and the 3-Tier architecture.
 * **[[02-Multi-Device-Identity-and-Trust]]**: Ed25519 root authority, monotonic certificates, device tree revocation, SAS out-of-band verification.
 * **[[03-Cryptographic-Engine-and-Key-Management]]**: IETF MLS (RFC 9420) tree ratchets, pairwise Double Ratchet, BLAKE3 convergent chunk encryption, memory zeroization, post-quantum hybrid KEM roadmap.
 * **[[48-Cryptographic-Agility-and-Post-Quantum-Migration]]**: Formal ML-KEM-768 hybrid KEM, PQXDH ratcheting, stateful hash-based signatures (XMSS/LMS), dynamic cipher suite negotiation.

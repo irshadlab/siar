@@ -4,6 +4,15 @@
 > **Corpus Scope:** 176 Architecture Specifications (Parts 01–33, UI-UX 01–27, Parts 34–150; 514k+ lines, 875k+ words)  
 > **Key Crates:** [`crates/siar-domain`](../crates/siar-domain), [`crates/siar-protocol`](../crates/siar-protocol), [`crates/siar-protocol-ext`](../crates/siar-protocol-ext), [`crates/siar-capability`](../crates/siar-capability), [`crates/siar-routing-policy`](../crates/siar-routing-policy)
 
+> [!CAUTION]
+> ### ⚠️ FOUNDATIONAL DEVELOPMENT NOTICE — NOT CURRENTLY USABLE ON ANY DEVICE
+>
+> * **Active Foundational Development:** SIAR is currently in pre-alpha foundational systems development. **It is NOT YET USABLE on any daily-driver mobile phone, desktop, or operational device.** End-user applications and installable packages will become operational upon the completion of the first formal milestone release (Milestone 1 / v0.1.0+).
+> * **AI / LLM Development Transparency Disclosure:** SIAR's extensive architectural specifications (176 specifications across 514k+ lines), wiki documentation, and codebase are **heavily developed with the assistance of advanced Artificial Intelligence / Large Language Models (AI/LLMs)** working under human architectural direction and verification.
+> * **URGENT: Security Researchers, Cryptographers & Protocol Engineers Required:** Because SIAR is designed for post-infrastructure, disaster-recovery, and high-threat environments, **independent third-party security researchers and protocol engineers are urgently needed** to perform formal mathematical verification, cryptographic audits, memory safety inspections, and fuzz testing across the cryptography (`siar-crypto`, `siar-crypto-mls`), wire framing (`siar-protocol`, `siar-protocol-ext`), transport/routing (`siar-transport`, `siar-routing-policy`), storage, and media subsystems to discover and eliminate potential vulnerabilities before real-world deployment.
+>
+> **DO NOT deploy SIAR in production, life-safety, high-threat, or operational environments until formal independent audits and the v0.1.0 milestone release are complete.**
+
 ---
 
 ## 1. Architectural Philosophy & The 4 Communication Paradigms
@@ -234,41 +243,60 @@ Developing SIAR requires overcoming five notoriously difficult engineering hurdl
 
 ---
 
-## 9. Workspace Crate Taxonomy (31 Domain Crates)
+## 9. Workspace Crate Taxonomy (39 Domain Crates)
 
-The Rust workspace is partitioned into 31 specialized, single-responsibility domain crates alongside application binaries and platform drivers:
+The Rust workspace is partitioned into **39 specialized, single-responsibility domain crates** alongside application binaries and platform drivers:
 
-```mermaid
-graph TD
-  Domain[siar-domain] --> Crypto[siar-crypto]
-  Crypto --> MLS[siar-crypto-mls]
-  Crypto --> Identity[siar-identity-multidevice]
-  Domain --> Protocol[siar-protocol]
-  Protocol --> ProtocolExt[siar-protocol-ext]
-  Protocol --> Capability[siar-capability]
-  ProtocolExt --> RoutingPolicy[siar-routing-policy]
-  RoutingPolicy --> Connectivity[siar-connectivity]
-  Connectivity --> Transport[siar-transport]
-  Transport --> TransportBLE[siar-transport-ble]
-  Transport --> TransportBLEAnd[siar-transport-ble-android]
-  Transport --> TransportBTC[siar-transport-bluetooth-classic]
-  Transport --> TransportWiFiDir[siar-transport-wifi-direct]
-  Transport --> TransportWiFiAw[siar-transport-wifi-aware]
-  Domain --> EventLog[siar-event-log]
-  EventLog --> Storage[siar-storage]
-  Storage --> ResourceLimits[siar-resource-limits]
-  Storage --> CrashRecovery[siar-crash-recovery]
-  Storage --> Blob[siar-blob-manifest]
-  Storage --> Messaging[siar-messaging]
-  Messaging --> DTN[siar-dtn-bundle]
-  DTN --> Emergency[siar-emergency]
-  Messaging --> Calls[siar-calls]
-  Calls --> MediaAV1[siar-media-av1]
-  Calls --> MediaAudio[siar-media-audio]
-  Calls --> MediaAndroid[siar-media-android]
-  Storage --> UIState[siar-ui-state]
-  UIState --> DesktopApp[apps/desktop]
-  UIState --> AndroidApp[apps/android]
+```text
+crates/
+├── [Core Domain, Identity & Trust]
+│   ├── siar-domain                    # Core entities: AccountId, DeviceId, Ticket, SafetyFingerprint
+│   ├── siar-crypto                    # Ed25519, X25519, ChaCha20-Poly1305, zeroize primitives
+│   ├── siar-crypto-mls                # IETF MLS (RFC 9420) Tree-KEM 1:1 and group E2EE engine
+│   ├── siar-identity-multidevice      # Multi-device authority, device certs, trust store, SAS pairing
+│   └── siar-identity-audit-recorder   # Monotonic append-only audit trail for identity lifecycle & revocations
+├── [Protocols, Capability & Extension Engine]
+│   ├── siar-protocol                  # Wire envelopes, Postcard binary codec, frame types
+│   ├── siar-protocol-ext              # Extensible protocol engine: FairScheduler, BoundedQueue, health
+│   └── siar-capability                # Two-phase capability negotiation & codec matrices
+├── [Mesh Routing, Policy & Dynamic Connectivity]
+│   ├── siar-routing-policy            # Multi-metric candidate scoring, hysteresis, decide_route
+│   └── siar-connectivity              # Cross-transport state engine, connection pooling & link probes
+├── [Multi-Transport Physical Sockets]
+│   ├── siar-transport                 # Transport manager, pooled socket multiplexer & lifecycle
+│   ├── siar-transport-ble             # Linux/cross-platform Bluetooth Low Energy (L2CAP CoC) driver
+│   ├── siar-transport-ble-android     # Android native Bluetooth Low Energy transport driver
+│   ├── siar-transport-bluetooth-classic # High-throughput RFCOMM Bluetooth Classic transport
+│   ├── siar-transport-wifi-direct     # High-bandwidth Wi-Fi Direct P2P ad-hoc transport
+│   └── siar-transport-wifi-aware      # Wi-Fi Aware (NAN — Neighbor Awareness Networking) transport
+├── [DTN, Emergency Priority & Life-Safety Services]
+│   ├── siar-dtn-bundle                # Bundle framing, custody receipts & Spray-and-Wait forwarding
+│   ├── siar-dtn-bundle-service        # Background daemon service orchestrating DTN bundle sync
+│   ├── siar-emergency                 # 5-tier priority class queuing (P0 Life-Safety to P4 Bulk)
+│   └── siar-emergency-service         # Autonomous SOS beacon broadcaster & triage packet engine
+├── [Storage, Blobs, Event Logging & Reliability]
+│   ├── siar-storage                   # Pure-Rust Stoolap embedded relational SQL (Messages, Outbox)
+│   ├── siar-event-log                 # Monotonic append-only event log & causal gap detection
+│   ├── siar-event-notify              # Internal reactive pub-sub event notification dispatcher
+│   ├── siar-event-registry            # Global schema registry of system events and audit subscribers
+│   ├── siar-blob-manifest             # SIMD BLAKE3 Merkle DAG blob chunking & AEAD encryption
+│   ├── siar-file-transfer-service     # Peer-assisted swarm blob chunk distribution coordinator
+│   ├── siar-resource-limits           # Token-bucket backpressure, ring buffers & queue drop policies
+│   ├── siar-crash-recovery            # WAL recovery, transactional checkpoints & corrupt state isolation
+│   ├── siar-startup-recovery          # Cold-boot consistency verification & orphaned ticket repair
+│   └── siar-remote-ingestion          # Ingestion gateway for external telemetry and bridge adapters
+├── [Messaging Orchestration & UI State Machines]
+│   ├── siar-messaging                 # MessageService, GroupService, Ticket manager, multi-node tests
+│   └── siar-ui-state                  # Framework-agnostic UI state machines & Security Center
+├── [Realtime Media, Voice/Video & Hardware Codecs]
+│   ├── siar-media-core                # Media traits, raw video/audio buffers, sample clocks
+│   ├── siar-media-audio               # Pure-Rust lock-free audio DSP (Opus, AEC, NS, AGC, <10ms latency)
+│   ├── siar-media-av1                 # Desktop dav1d AV1 video decoder with lookahead decoding
+│   ├── siar-media-android             # Android MediaCodec hardware surface zero-copy pipeline
+│   ├── siar-media-image               # Image processing, format transcoding & responsive thumbnails
+│   └── siar-calls                     # Realtime P2P media call session protocols & signaling
+└── [Simulation & Test Harness]
+    └── siar-testkit                   # In-memory virtual radio mesh simulator & link impairments
 ```
 
 ---

@@ -38,6 +38,7 @@
 
 - [What SIAR Is](#what-siar-is)
 - [Core Design Rules](#core-design-rules)
+- [Specification Governance: sys-arch for Core, ui-ux for UI](#specification-governance-sys-arch-for-core-ui-ux-for-ui)
 - [Architecture: Five Layers](#architecture-five-layers)
 - [Transport & Routing Policy Engine](#transport--routing-policy-engine)
 - [Multi-Device Identity & Trust](#multi-device-identity--trust)
@@ -93,6 +94,57 @@ These rules appear directly in the sys-arch specifications and govern every crat
 | Protocol extensions are a versioned capability architecture, not a dynamic plugin system for arbitrary untrusted code | `sys-arch/01` §2 |
 | SIAR must treat anonymity as an explicit routing/security property, not a side effect of encryption | `sys-arch/34` §1 |
 | The call is a logical secure session; network paths, codecs, devices, and surfaces are replaceable implementation resources inside that session | `sys-arch/29` §1 |
+
+---
+
+## Specification Governance: sys-arch for Core, ui-ux for UI
+
+All engineering and implementation in SIAR strictly follows a dual-specification authority model:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   SIAR SPECIFICATION GOVERNANCE ARCHITECTURE                            │
+├────────────────────────────────────────────────────┬─────────────────────────────────────────────────────┤
+│ 📐 Core Engine, Protocols & Daemons: sys-arch/     │ 🎨 Frontends, UI/UX & State Machines: ui-ux/        │
+├────────────────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+│ • Authority Corpus: sys-arch/ (176 Specifications) │ • Authority Corpus: ui-ux/ (27 Specifications)      │
+│   - Parts 01–33: Core Mesh, Local-First Engine,    │   - ui-ux-01..03: App Shells & Platform Navigation  │
+│     DTN, Multi-Transport, Security & Codecs        │   - ui-ux-04..06: Timelines, Composer & Attachments │
+│   - Parts 34–150: Anonymous Mixnet, Private        │   - ui-ux-07..10: Realtime Calls, Groups & Files    │
+│     Mailboxes, Cloud Ecosystem & Resilient Ops     │   - ui-ux-11..17: Security Center, SOS & Pairing    │
+│                                                    │   - ui-ux-18..27: Tokens, Motion, A11y & Gates      │
+│ • Target Codebases:                                │ • Target Codebases:                                 │
+│   - Pure-Rust domain crates: crates/siar-* (39)    │   - apps/desktop (Dioxus 0.7 Desktop GUI)           │
+│   - apps/emergency-node (Headless Solar Daemon)    │   - apps/android (Jetpack Compose + JNI UI layer)   │
+│   - apps/cli (Interactive Terminal & Diagnostics)  │   - crates/siar-ui-state (Security Center & Flows)  │
+│ • Core Invariants:                                 │ • UI Invariants:                                    │
+│   - Zero external infrastructure dependency        │   - UI is strictly a decoupled client of runtime    │
+│   - Feature code never implements transport choice │   - UI never owns durable transport or crypto state │
+│   - Pure Rust, memory-safe, panic-free paths       │   - Reactive state machines isolate UI from events  │
+└────────────────────────────────────────────────────┴─────────────────────────────────────────────────────┘
+```
+
+### 1. Core Development Follows `sys-arch/`
+All backend runtime engines, protocol framing, cryptographic handshakes, transport drivers, and storage subsystems must strictly follow the **[`sys-arch/`](sys-arch/)** specification corpus:
+- **Wire Protocols & Handshakes**: Binary wire framing, extension negotiation, and capability schemas follow [`sys-arch/01`](sys-arch/01-protocol-extension-system-architecture.md) and [`sys-arch/07`](sys-arch/07-capability-negotiation-architecture.md).
+- **Identity & Cryptography**: Root Ed25519 account sovereignty, device certificates, OpenMLS trees, and SAS out-of-band verification follow [`sys-arch/02`](sys-arch/02-multi-device-identity-architecture.md) and [`sys-arch/28`](sys-arch/28-production-security-e2ee-key-management-privacy-architecture.md).
+- **Transport & Multi-Metric Routing**: Candidate discovery, link-state scoring, adaptive transport selection, and battery-aware scheduling follow [`sys-arch/03`](sys-arch/03-transport-routing-policy-engine-architecture.md) and [`sys-arch/13`](sys-arch/13-battery-aware-scheduling-architecture.md).
+- **DTN & Emergency Survivability**: Delay-tolerant bundle store-carry-forward and life-safety priority queues follow [`sys-arch/06`](sys-arch/06-dtn-store-carry-forward-architecture.md) and [`sys-arch/17`](sys-arch/17-emergency-priority-classes-architecture.md).
+- **Daemon Lifecycle & Headless Services**: Headless unattended operation, crash recovery, and WAL replay follow [`sys-arch/09`](sys-arch/09-crash-recovery-architecture.md), [`sys-arch/16`](sys-arch/16-daemon-headless-runtime-architecture.md), and [`sys-arch/20`](sys-arch/20-embedded-linux-node-architecture.md).
+
+### 2. User Interface Development Follows `ui-ux/`
+All user-facing graphical applications, mobile experiences, layout systems, visual states, and reactive UI state machines must strictly follow the **[`ui-ux/`](ui-ux/)** specification corpus:
+- **Application Shells & Navigation**: Multi-pane desktop navigation, mobile tab bars, window state restoration, and back-stack handling follow [`ui-ux-01`](ui-ux/ui-ux-01-product-foundation-cross-platform-interaction-architecture.md), [`ui-ux-02`](ui-ux/ui-ux-02-desktop-dioxus-app-shell-navigation-window-architecture.md), and [`ui-ux-03`](ui-ux/ui-ux-03-android-jetpack-compose-app-shell-navigation-lifecycle-architecture.md).
+- **Conversations & Message Timeline**: Message bubbles, delivery checkmarks (Pending, DTN Relayed, Delivered, Read), media carousels, and composer attachments follow [`ui-ux-04`](ui-ux/ui-ux-04-conversation-list-inbox-architecture.md), [`ui-ux-05`](ui-ux/ui-ux-05-conversation-message-timeline-architecture.md), and [`ui-ux-06`](ui-ux/ui-ux-06-message-composer-attachments-voice-notes-drafts-architecture.md).
+- **Security Center & Trust Flows**: Cryptographic identity management, key rotation warnings, device revocation ceremonies, recovery phrase verification, and SAS visual comparisons follow [`ui-ux-15`](ui-ux/ui-ux-15-security-center-devices-keys-recovery-architecture.md).
+- **Emergency SOS & Offline Degraded States**: High-contrast offline mesh indicators, zero-connection SOS banners, transport fallback indicators, and battery-saver modes follow [`ui-ux-17`](ui-ux/ui-ux-17-emergency-sos-offline-mesh-architecture.md) and [`ui-ux-24`](ui-ux/ui-ux-24-error-loading-empty-offline-degraded-state-architecture.md).
+- **Design Tokens, Typography & Inclusive Access**: Color tokens, typography scales, touch targets, screen reader semantic labels, and motion curves follow [`ui-ux-21`](ui-ux/ui-ux-21-accessibility-inclusive-interaction-architecture%20.md) and [`ui-ux-22`](ui-ux/ui-ux-22-design-system-tokens-typography-icons-motion-architecture.md).
+
+### 3. Core-to-UI Separation Invariant
+In accordance with [`sys-arch/16`](sys-arch/16-daemon-headless-runtime-architecture.md) and [`ui-ux-01`](ui-ux/ui-ux-01-product-foundation-cross-platform-interaction-architecture.md):
+1. **The Daemon Owns State**: The pure-Rust core runtime manages durable database storage, active network sockets, cryptographic ratchet states, and routing decisions.
+2. **The UI is a Stateless Client**: Frontend applications (`apps/desktop`, `apps/android`) observe reactive state streams exposed by [`siar-ui-state`](crates/siar-ui-state) and emit user intent commands.
+3. **No Direct Socket or Crypto Manipulation in UI**: UI code must never open raw network sockets, attempt ad-hoc cryptographic operations, or implement private transport failover logic.
 
 ---
 

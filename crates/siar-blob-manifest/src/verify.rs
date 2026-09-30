@@ -1,5 +1,11 @@
 //! §14 "Chunk Identity": "allows verifying individual chunks before
-//! whole-object completion."
+//! whole-object completion." [`verify_complete_blob`] is also §76
+//! "Full Blob Verification"'s own "reconstruct ordered ciphertext →
+//! verify root/blob identity" — but see
+//! [`crate::source_trust::verify_manifest_authenticity`]'s own doc
+//! comment for a real gap this function alone does NOT close: it
+//! checks a manifest for internal self-consistency, never against an
+//! externally-authenticated expected [`BlobId`] (§77).
 
 use crate::ids::{BlobId, ChunkHash};
 use crate::manifest::{BlobManifest, ChunkDescriptor};

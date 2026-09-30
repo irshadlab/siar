@@ -76,6 +76,16 @@ pub struct FileMetadata {
 /// limit (matches ext4/NTFS/APFS's own 255-byte filename ceilings, so
 /// a name that fits here is a name every target platform can also
 /// actually write to disk).
+///
+/// §54 "Path Traversal Protection": "must remain just a display
+/// string. Never construct storage paths directly from remote
+/// filenames." This type enforces that by omission, not by stripping
+/// characters — there is no `as_path`/`to_path_buf` method anywhere on
+/// `FileName`, only [`FileName::as_str`] for display. The one
+/// sanctioned route from a `FileName` to bytes actually written to
+/// disk is [`crate::filename_safety::sanitize_for_export`] (§55), which
+/// takes a `FileName` and returns a real, traversal-safe `String` —
+/// never this type directly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileName(String);
 

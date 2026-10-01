@@ -39,7 +39,7 @@ table is a live pointer, not a duplicate of that detail.
 | 02 | siar-identity-multidevice | ✅ **204/204 — spec complete** (21-item Definition-of-Done self-audit: 19/21 done, 2 honestly partial) | `docs/docs/02-multi-device-identity-architecture.md` |
 | 03 | siar-routing-policy | ✅ **200/200 — spec complete** (19 rounds; own Definition-of-Done self-audit included) | `docs/docs/03-transport-routing-policy-engine-architecture.md` |
 | 04 | siar-event-log | 🟡 **27✅/24🟡/35⬜/9◇ of 95** — Phases 1-4 done; Phase 5 (outbox) deliberately deferred, not decided; §63 closed by new `siar-event-registry` crate | `docs/docs/04-offline-event-log-architecture.md` |
-| 05 | siar-blob-manifest | 🟡 **~93/210** | `docs/docs/05-robust-file-blob-subsystem-architecture.md` |
+| 05 | siar-blob-manifest | 🟡 **~102/210** | `docs/docs/05-robust-file-blob-subsystem-architecture.md` |
 | 06 | siar-dtn-bundle | 🟡 **~65/192** | `docs/docs/06-dtn-store-carry-forward-architecture.md` |
 | 07 | siar-capability | 🟡 **~19/164** | `docs/docs/07-capability-negotiation-architecture.md` |
 | 08 | siar-resource-limits | 🟡 **~56/193** | `docs/docs/08-resource-limits-backpressure-architecture.md` |

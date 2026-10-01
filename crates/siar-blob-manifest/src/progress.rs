@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::transfer_journal::TransferJournal;
 use crate::transfer_state::TransferState;
 
 /// §140's own struct, field-for-field, verbatim — the spec gives this
@@ -16,6 +17,32 @@ pub struct TransferProgress {
 }
 
 impl TransferProgress {
+    /// §97 "Durable Progress": "progress displayed to user should
+    /// derive from verified bytes, not merely bytes received into
+    /// memory. This gives truthful resume semantics." The one
+    /// sanctioned way to build a `TransferProgress` in this crate:
+    /// `verified_bytes` comes directly from
+    /// [`TransferJournal::bytes_verified`] — the same field
+    /// [`crate::transfer_journal::TransferJournal::record_chunk_verified`]
+    /// updates only once a chunk has actually passed verification, not
+    /// merely arrived. This crate has no separate "bytes received but
+    /// unverified" counter anywhere for a caller to reach for instead
+    /// — §97's own requirement is satisfied by there being nothing
+    /// else to construct this from.
+    pub fn from_journal(
+        journal: &TransferJournal,
+        total_bytes: u64,
+        active_bytes_per_sec: Option<u64>,
+        state: TransferState,
+    ) -> Self {
+        Self {
+            total_bytes,
+            verified_bytes: journal.bytes_verified,
+            active_bytes_per_sec,
+            state,
+        }
+    }
+
     /// Not in the spec's own snippet, but the obvious derived value a
     /// UI needs from these fields — `0.0` for a zero-byte transfer
     /// rather than a division-by-zero `NaN`, since "0 of 0 bytes" is
@@ -75,6 +102,22 @@ mod tests {
     fn percent_complete_reflects_verified_over_total() {
         let p = progress(200, 50, None);
         assert_eq!(p.percent_complete(), 25.0);
+    }
+
+    #[test]
+    fn from_journal_pulls_verified_bytes_from_the_journal_never_a_raw_received_count() {
+        let mut journal = TransferJournal::new(4);
+        journal.record_chunk_verified(0, 1_000);
+        journal.record_chunk_verified(1, 500);
+        // A retry doesn't touch bytes_verified — from_journal must
+        // still report only the real verified total, not something
+        // inflated by retry activity.
+        journal.record_retry();
+
+        let p =
+            TransferProgress::from_journal(&journal, 10_000, Some(200), TransferState::InProgress);
+        assert_eq!(p.verified_bytes, 1_500);
+        assert_eq!(p.total_bytes, 10_000);
     }
 
     #[test]

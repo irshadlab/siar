@@ -61,6 +61,19 @@ impl ReferenceSet {
     pub fn is_gc_eligible(&self) -> bool {
         self.references.is_empty()
     }
+
+    /// §94's own `reference_count` field: the real total across every
+    /// kind, not per-kind — a blob with two `MessageAttachment`
+    /// references and one `Backup` reference has `len() == 3`, the
+    /// same number [`ReferenceSet::is_gc_eligible`] is really asking
+    /// "is this zero?" about.
+    pub fn len(&self) -> usize {
+        self.references.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.references.is_empty()
+    }
 }
 
 /// §61, field-for-field. A distinct vocabulary from
@@ -132,5 +145,17 @@ mod tests {
         );
         refs.remove_reference(ReferenceKind::FileShareHistory);
         assert!(refs.is_gc_eligible());
+    }
+
+    #[test]
+    fn len_counts_every_kind_together_not_per_kind() {
+        let mut refs = ReferenceSet::new();
+        assert_eq!(refs.len(), 0);
+        assert!(refs.is_empty());
+        refs.add_reference(ReferenceKind::MessageAttachment);
+        refs.add_reference(ReferenceKind::MessageAttachment);
+        refs.add_reference(ReferenceKind::Backup);
+        assert_eq!(refs.len(), 3);
+        assert!(!refs.is_empty());
     }
 }

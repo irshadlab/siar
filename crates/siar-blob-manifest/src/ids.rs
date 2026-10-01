@@ -18,6 +18,27 @@ impl BlobId {
         Self(*blake3::hash(ciphertext).as_bytes())
     }
 
+    /// §114 "Hashing Performance": "hash incrementally while
+    /// streaming... but ensure the chosen ciphertext-addressing scheme
+    /// computes the correct final identity." This crate has no
+    /// streaming I/O to drive incremental hashing from yet (see
+    /// `lib.rs`'s own §37-39 scope note) — but the correctness
+    /// requirement §114 actually cares about doesn't need one: it's a
+    /// property of blake3's incremental `Hasher` matching its
+    /// whole-buffer `hash` function, which this method both exercises
+    /// for real and this module's own test proves against
+    /// [`BlobId::from_ciphertext`] directly. A future streaming reader
+    /// calls this exact method, feeding it chunks as they arrive,
+    /// rather than buffering a whole ciphertext just to satisfy
+    /// [`BlobId::from_ciphertext`]'s slice signature.
+    pub fn from_ciphertext_incremental<'a>(chunks: impl Iterator<Item = &'a [u8]>) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        for chunk in chunks {
+            hasher.update(chunk);
+        }
+        Self(*hasher.finalize().as_bytes())
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -126,5 +147,47 @@ pub struct BlobEncryptionKey(pub [u8; 32]);
 impl std::fmt::Debug for BlobEncryptionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("BlobEncryptionKey(..)") // never print key material, even in Debug
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incremental_hashing_produces_the_identical_id_to_whole_buffer_hashing() {
+        // §114's own real correctness requirement: a future streaming
+        // pipeline that hashes as bytes arrive must compute the exact
+        // same identity as this crate's existing whole-buffer path —
+        // proven here directly, not assumed.
+        let whole = b"the quick brown fox jumps over the lazy dog, several times over";
+        let whole_id = BlobId::from_ciphertext(whole);
+
+        // Split into several uneven chunks, the way a real streaming
+        // reader would hand bytes over as they arrive.
+        let pieces: Vec<&[u8]> = vec![&whole[0..10], &whole[10..11], &whole[11..40], &whole[40..]];
+        assert_eq!(
+            pieces.iter().map(|p| p.len()).sum::<usize>(),
+            whole.len(),
+            "the split must reconstruct the exact same bytes"
+        );
+        let incremental_id = BlobId::from_ciphertext_incremental(pieces.into_iter());
+
+        assert_eq!(incremental_id, whole_id);
+    }
+
+    #[test]
+    fn a_single_chunk_incrementally_hashed_still_matches() {
+        let bytes = b"single piece";
+        let whole_id = BlobId::from_ciphertext(bytes);
+        let incremental_id = BlobId::from_ciphertext_incremental(std::iter::once(&bytes[..]));
+        assert_eq!(incremental_id, whole_id);
+    }
+
+    #[test]
+    fn zero_chunks_hashes_the_same_as_an_empty_buffer() {
+        let whole_id = BlobId::from_ciphertext(b"");
+        let incremental_id = BlobId::from_ciphertext_incremental(std::iter::empty());
+        assert_eq!(incremental_id, whole_id);
     }
 }

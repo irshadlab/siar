@@ -1,25 +1,19 @@
 //! §108 "Rate Limiting", §110 "Resource Policy", §111 "Battery
 //! Awareness", §112 "Memory Pressure", §113 "Thermal Pressure".
 //!
-//! §107 "Multiple Sources" gets no type of its own: "if one source
-//! repeatedly sends corrupt chunks, blacklist source for that transfer
-//! while preserving other sources" is the multi-source generalization
-//! of §105's own per-chunk escalation
-//! ([`crate::transfer_control::on_corrupt_chunk`]) — a caller tracks
-//! one failure counter per source (naturally keyed by whatever source
-//! identity it already has, e.g. a `DeviceId`) and feeds each source's
-//! own corrupt chunks through that same function independently.
-//! "Preserving other sources" falls out for free from that being
-//! *separate* counters, not a shared one — nothing new to build.
+//! §107 "Multiple Sources" has its real type in
+//! [`crate::transfer_control::SourceFailureTracker`], not here — see
+//! that type's own doc comment.
 //!
-//! §109 "Abuse Protection" also gets no new type: every one of its six
-//! named threats already has a real, existing mitigation elsewhere in
-//! this crate, so adding a seventh type here would just rename them.
-//! Huge fake size / millions of chunks →
+//! §109 "Abuse Protection" is proven, not just mapped in prose, by
+//! `tests/abuse_protection_matrix.rs` — one test per named threat,
+//! each against the real mitigation named below rather than a
+//! seventh, redundant type. Huge fake size / millions of chunks →
 //! [`crate::limits::ManifestLimits`]'s own size and chunk-count
 //! ceilings, enforced inside [`crate::manifest::build_manifest`] before
 //! any hashing happens; never-completing transfers →
-//! [`crate::file_offer::FileOffer::is_expired`]; hash mismatch spam →
+//! [`crate::source_integrity::source_mutated`]/[`crate::file_offer::FileOffer::is_expired`];
+//! hash mismatch spam →
 //! [`crate::transfer_control::on_corrupt_chunk`]'s own escalating
 //! penalty; storage exhaustion →
 //! [`crate::storage_lifecycle::StoragePressure`]; offer spam → this

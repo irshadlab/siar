@@ -37,6 +37,21 @@ pub struct BundleIntegrity {
     pub origin_signature: Option<Vec<u8>>,
 }
 
+impl BundleIntegrity {
+    /// §59 "Bundle Validation"'s own "signature/integrity" item, the
+    /// half this crate can actually check without `siar-crypto`: a
+    /// relay never needs to decrypt a payload to confirm it's the same
+    /// bytes the origin hashed (§5: "the relay does not need to
+    /// understand the application payload"). Does NOT verify
+    /// `origin_signature` — that needs the real signer/verifier this
+    /// crate deliberately doesn't have; a caller with `siar-crypto`
+    /// available layers that check on top, it isn't skipped silently
+    /// here.
+    pub fn verify_payload_hash(&self, payload_bytes: &[u8]) -> bool {
+        blake3::hash(payload_bytes).as_bytes() == &self.payload_hash
+    }
+}
+
 /// §6, field-for-field, plus [`BundleIntegrity`] (§8) folded in as
 /// `integrity` matches the spec's own struct.
 ///
@@ -45,13 +60,16 @@ pub struct BundleIntegrity {
 /// level (Rust has no field-level immutability short of splitting into
 /// two structs) — [`DtnBundle::forwarded`]/[`DtnBundle::consume_replication`]
 /// are the only sanctioned mutation paths this crate provides, both
-/// hop-local per §13's own list. §14's own further recommendation —
-/// splitting a wire-facing `WireBundle` from a local-only
-/// `LocalBundleRecord` carrying storage path/retry count/peer
-/// history/custody state — is NOT implemented here: this single
-/// `DtnBundle` struct currently plays both roles, a real, named gap
-/// rather than a split this crate's own doc comment should imply
-/// exists.
+/// hop-local per §13's own list.
+///
+/// §14 "Bundle Envelope vs Local Record": every field here IS the wire
+/// form — [`crate::store::WireBundle`] is a type alias making that
+/// explicit for anyone reading against the spec's own naming. The
+/// local-only half of §14's split (storage path, retry count, peer
+/// history, custody state) now lives on
+/// [`crate::store::StoredBundle`], not on this struct — see that
+/// type's own doc comment for the full accounting of which field
+/// satisfies which of §14's four named local-record items.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DtnBundle {
     pub bundle_id: BundleId,
@@ -149,5 +167,16 @@ mod tests {
         assert!(b.consume_replication());
         assert_eq!(b.replication_budget, 0);
         assert!(!b.consume_replication());
+    }
+
+    #[test]
+    fn verify_payload_hash_accepts_the_matching_bytes_and_rejects_everything_else() {
+        let payload = b"real payload bytes";
+        let integrity = BundleIntegrity {
+            payload_hash: *blake3::hash(payload).as_bytes(),
+            origin_signature: None,
+        };
+        assert!(integrity.verify_payload_hash(payload));
+        assert!(!integrity.verify_payload_hash(b"tampered payload bytes"));
     }
 }

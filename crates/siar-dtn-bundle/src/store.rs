@@ -1,4 +1,6 @@
-//! §15 "Durable Store", §16 "Bundle Store Interface".
+//! §15 "Durable Store", §16 "Bundle Store Interface", §14 "Bundle
+//! Envelope vs Local Record" (the local-record half — see
+//! [`StoredBundle`]'s own doc comment).
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -7,12 +9,67 @@ use thiserror::Error;
 
 use crate::bundle::DtnBundle;
 use crate::state::BundleState;
-use crate::types::BundleId;
+use crate::types::{BundleId, RouteToken};
 
+/// §14's own naming for the wire-facing half of the split — a type
+/// alias, not a new struct, since [`DtnBundle`]'s own fields already
+/// are exactly the wire form (see that type's own doc comment). Having
+/// this alias means code that wants to talk in the spec's own §14
+/// vocabulary can, without this crate maintaining two structs with
+/// identical fields.
+pub type WireBundle = DtnBundle;
+
+/// §14's own local-record half, plus §18's existing `state` field
+/// (already local-only — a peer never needs to know this device's own
+/// state-machine position for someone else's bundle). Field-for-field
+/// against §14's own four named items:
+/// - `storage path` → [`StoredBundle::storage_path`]. `Option<String>`,
+///   not a real filesystem path type — `None` for a bundle that only
+///   ever lived in this in-memory store (see
+///   [`InMemoryBundleStore`]'s own doc comment); a real disk-backed
+///   store would populate it.
+/// - `local retry count` → [`StoredBundle::retry_count`], bumped by
+///   [`StoredBundle::record_retry`].
+/// - `peer history` → [`StoredBundle::peer_history`], the ordered list
+///   of [`RouteToken`]s this bundle has been handed to so far —
+///   `RouteToken`, not a `DeviceId`, for the same non-correlation
+///   reason [`crate::types::DtnSource`]/[`crate::types::DtnDestination`]
+///   already use it. Appended to (not deduplicated) by
+///   [`StoredBundle::record_peer`] — the same peer may legitimately
+///   receive a bundle more than once across separate encounters, and
+///   a full history, not just a set, is what §143 "Forward History"
+///   (not yet built) will eventually want to read.
+/// - `custody state` → the pre-existing `state: `[`BundleState`] field,
+///   already local-only; §14 doesn't ask for anything new here, just
+///   confirmation it belongs on this side of the split, not the wire
+///   side.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredBundle {
     pub bundle: DtnBundle,
     pub state: BundleState,
+    pub storage_path: Option<String>,
+    pub retry_count: u32,
+    pub peer_history: Vec<RouteToken>,
+}
+
+impl StoredBundle {
+    fn new(bundle: DtnBundle) -> Self {
+        Self {
+            bundle,
+            state: BundleState::Stored,
+            storage_path: None,
+            retry_count: 0,
+            peer_history: Vec::new(),
+        }
+    }
+
+    pub fn record_retry(&mut self) {
+        self.retry_count += 1;
+    }
+
+    pub fn record_peer(&mut self, peer: RouteToken) {
+        self.peer_history.push(peer);
+    }
 }
 
 /// §16's own query type — not detailed further in the source text
@@ -83,13 +140,7 @@ impl BundleStore for InMemoryBundleStore {
             .bundles
             .lock()
             .expect("InMemoryBundleStore lock poisoned");
-        bundles.insert(
-            bundle.bundle_id,
-            StoredBundle {
-                bundle,
-                state: BundleState::Stored,
-            },
-        );
+        bundles.insert(bundle.bundle_id, StoredBundle::new(bundle));
         Ok(())
     }
 
@@ -175,9 +226,7 @@ mod tests {
     use super::*;
     use crate::bundle::BundleIntegrity;
     use crate::payload::PayloadReference;
-    use crate::types::{
-        DtnDestination, DtnPriority, DtnSource, ForwardingClass, PayloadTypeId, RouteToken,
-    };
+    use crate::types::{DtnDestination, DtnPriority, DtnSource, ForwardingClass, PayloadTypeId};
 
     fn bundle(expires_at_millis: u64) -> DtnBundle {
         DtnBundle {
@@ -275,5 +324,27 @@ mod tests {
         let store = InMemoryBundleStore::new();
         let result = store.mark_forwarded(BundleId::new()).await;
         assert!(matches!(result, Err(DtnStoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn a_fresh_stored_bundle_has_no_local_record_history_yet() {
+        let record = StoredBundle::new(bundle(1_000));
+        assert_eq!(record.storage_path, None);
+        assert_eq!(record.retry_count, 0);
+        assert!(record.peer_history.is_empty());
+    }
+
+    #[test]
+    fn record_retry_and_record_peer_accumulate_independently() {
+        let mut record = StoredBundle::new(bundle(1_000));
+        record.record_retry();
+        record.record_retry();
+        record.record_peer(RouteToken(vec![7]));
+        record.record_peer(RouteToken(vec![7])); // same peer twice: a real, separate encounter
+        assert_eq!(record.retry_count, 2);
+        assert_eq!(
+            record.peer_history,
+            vec![RouteToken(vec![7]), RouteToken(vec![7])]
+        );
     }
 }

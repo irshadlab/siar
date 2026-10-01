@@ -1,8 +1,12 @@
 //! §98 "Transfer ACK", §99 "Chunk ACK", §100 "Completion ACK", §101
 //! "Transfer Cancellation", §102 "Pause", §103 "Deferred Transfer",
-//! §104 "Retry", §105 "Corrupt Chunk", §106 "Corrupt Manifest".
+//! §104 "Retry", §105 "Corrupt Chunk", §106 "Corrupt Manifest", §107
+//! "Multiple Sources".
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use siar_domain::DeviceId;
 
 use crate::resume::ResumeBitmap;
 
@@ -124,6 +128,45 @@ pub fn on_corrupt_chunk(prior_failure_count: u32, penalize_threshold: u32) -> Co
 // all-or-nothing; this crate has never had a partial-reconstruction
 // code path to disable, so there was nothing to remove.
 
+/// §107: "If one source repeatedly sends corrupt chunks: blacklist
+/// source for that transfer, while preserving other sources." A real
+/// per-source tracker, not a convention left to callers: it owns one
+/// [`on_corrupt_chunk`] failure count per [`DeviceId`], so recording a
+/// corrupt chunk from one source can never bump another's count —
+/// "preserving other sources" is enforced by the `HashMap` keying
+/// itself, not by caller discipline.
+#[derive(Debug, Clone, Default)]
+pub struct SourceFailureTracker {
+    failures_by_source: HashMap<DeviceId, u32>,
+}
+
+impl SourceFailureTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records one corrupt chunk from `source` and returns the same
+    /// [`CorruptChunkAction`] [`on_corrupt_chunk`] would, computed
+    /// against THAT source's own running count — never any other
+    /// source's.
+    pub fn record_corrupt_chunk(
+        &mut self,
+        source: DeviceId,
+        penalize_threshold: u32,
+    ) -> CorruptChunkAction {
+        let prior = self.failures_by_source.get(&source).copied().unwrap_or(0);
+        let action = on_corrupt_chunk(prior, penalize_threshold);
+        self.failures_by_source.insert(source, action.failure_count);
+        action
+    }
+
+    pub fn is_blacklisted(&self, source: DeviceId, penalize_threshold: u32) -> bool {
+        self.failures_by_source
+            .get(&source)
+            .is_some_and(|&count| count >= penalize_threshold)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +209,29 @@ mod tests {
         let action = on_corrupt_chunk(2, 3);
         assert_eq!(action.failure_count, 3);
         assert!(action.should_penalize_source);
+    }
+
+    #[test]
+    fn a_source_failure_tracker_blacklists_only_the_offending_source() {
+        let mut tracker = SourceFailureTracker::new();
+        let bad_source = DeviceId::new();
+        let good_source = DeviceId::new();
+
+        for _ in 0..3 {
+            tracker.record_corrupt_chunk(bad_source, 3);
+        }
+        tracker.record_corrupt_chunk(good_source, 3);
+
+        assert!(tracker.is_blacklisted(bad_source, 3));
+        assert!(
+            !tracker.is_blacklisted(good_source, 3),
+            "the good source must be preserved"
+        );
+    }
+
+    #[test]
+    fn a_source_with_no_recorded_failures_is_never_blacklisted() {
+        let tracker = SourceFailureTracker::new();
+        assert!(!tracker.is_blacklisted(DeviceId::new(), 1));
     }
 }

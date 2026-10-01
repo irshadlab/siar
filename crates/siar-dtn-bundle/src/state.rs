@@ -72,6 +72,20 @@ impl BundleState {
             (S::Forwarded, E::ReachDestination) => S::DestinationReached,
             (S::Forwarded, E::Expire) => S::Expired,
             (S::Forwarded, E::Evict) => S::Evicted,
+            // §69 "Cancel Bundle": "Origin may issue BundleCancel for
+            // still-undelivered bundles." A bundle already in flight to
+            // another carrier is still undelivered per §19's own
+            // forwarded-is-not-delivered distinction — this transition
+            // was missing until this round, which meant a `Forwarded`
+            // bundle could never legally be cancelled at all, contrary
+            // to the spec's own "still-undelivered" wording. Real
+            // propagation to whichever peer already holds a copy is
+            // still best-effort (this crate has no encounter transport
+            // to propagate over — see this crate's own top doc
+            // comment); this transition only makes local cancellation
+            // of THIS device's own copy possible, which is the
+            // necessary first step regardless.
+            (S::Forwarded, E::Cancel) => S::Cancelled,
             (S::DestinationReached, E::Acknowledge) => S::Acknowledged,
             (S::Acknowledged, E::Complete) => S::Completed,
             _ => return Err(InvalidBundleTransition { state: self, event }),
@@ -92,6 +106,15 @@ impl BundleState {
             self,
             Self::DestinationReached | Self::Acknowledged | Self::Completed
         )
+    }
+
+    /// §69: "Origin may issue BundleCancel for still-undelivered
+    /// bundles." Delegates to [`BundleState::transition`] itself rather
+    /// than duplicating the transition table's own list of which
+    /// states accept [`BundleEvent::Cancel`] — this is a query, not a
+    /// second source of truth about which states are cancellable.
+    pub fn is_cancellable(self) -> bool {
+        self.transition(BundleEvent::Cancel).is_ok()
     }
 }
 
@@ -170,6 +193,35 @@ mod tests {
     fn forwarded_is_never_mistaken_for_delivered() {
         assert!(!BundleState::Forwarded.is_delivered());
         assert!(BundleState::Acknowledged.is_delivered());
+    }
+
+    #[test]
+    fn a_forwarded_still_undelivered_bundle_can_be_cancelled() {
+        // §69: "still-undelivered" includes Forwarded, not just
+        // Stored/Eligible — this was a real gap until this round.
+        assert!(BundleState::Forwarded.is_cancellable());
+        let s = BundleState::Forwarded
+            .transition(BundleEvent::Cancel)
+            .unwrap();
+        assert_eq!(s, BundleState::Cancelled);
+    }
+
+    #[test]
+    fn a_delivered_or_terminal_bundle_is_never_cancellable() {
+        for state in [
+            BundleState::DestinationReached,
+            BundleState::Acknowledged,
+            BundleState::Completed,
+            BundleState::Expired,
+            BundleState::Evicted,
+            BundleState::Cancelled,
+            BundleState::Rejected,
+        ] {
+            assert!(
+                !state.is_cancellable(),
+                "{state:?} should not be cancellable"
+            );
+        }
     }
 
     #[test]

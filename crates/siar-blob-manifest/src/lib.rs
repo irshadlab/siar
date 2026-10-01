@@ -263,19 +263,13 @@
 //!   a number — "do not present false precision" enforced by the type
 //!   itself, not a formatting convention a caller could forget).
 //!
-//! ## Round 11: §91, §96, §108, §110-113 (plus §92-95/§97/§107/§109/§114
-//! resolved without new code)
+//! ## Round 11: §91, §96, §108, §110-113
 //!
 //! - [`quarantine`] — §91 "Quarantine":
 //!   [`quarantine::QuarantineRecord`], a deliberately separate type
 //!   from [`storage_lifecycle::BlobClassification`] — quarantine isn't
 //!   a fifth lifecycle tier, it's outside that system entirely, which
 //!   is what "do not expose to normal applications" actually means.
-//! - **§92 "Filesystem Permissions", §93-95 "Database Schema"/"Blob
-//!   Table"/"Transfer Chunk Table" — no code**: OS-level and SQL-
-//!   schema concerns for a real store this crate doesn't have (see
-//!   `lib.rs`'s own "no blob store exists" scope note); premature to
-//!   design a schema for a backend that isn't built yet.
 //! - [`resume::ResumeBitmap`] — §96 "Chunk Bitmap Optimization", this
 //!   round's real structural improvement: rewritten from `Vec<bool>`
 //!   (one byte per chunk) to a hand-rolled bit-packed `Vec<u64>` (one
@@ -286,10 +280,6 @@
 //!   ([`transfer_planner`], [`transfer_control`], [`mod@partial_availability`])
 //!   kept working without modification — proven by the full suite
 //!   passing unchanged, not just the new bit-packing-specific tests.
-//! - **§97 "Durable Progress" — already satisfied, no new work**:
-//!   [`progress::TransferProgress::verified_bytes`] (§140, built last
-//!   round) is already "verified bytes," never "bytes received into
-//!   memory."
 //! - [`resource_policy`] — §108 "Rate Limiting"
 //!   ([`resource_policy::RateLimitPolicy`], the same two-tier known/
 //!   unknown-peer shape `siar-dtn-bundle`'s own `PeerQuotaPolicy`
@@ -303,22 +293,51 @@
 //!   verified progress" enforced by omission — none of its four
 //!   actions touch `TransferJournal::bytes_verified`), §113 "Thermal
 //!   Pressure" ([`resource_policy::ThermalPressureAdjustments`]).
-//! - **§107 "Multiple Sources" — no new type**: the multi-source
-//!   generalization of §105's own [`transfer_control::on_corrupt_chunk`]
-//!   — a caller tracks one failure counter per source; "preserving
-//!   other sources" falls out for free from those counters being
-//!   separate, not shared.
-//! - **§109 "Abuse Protection" — no new type**: all six named threats
-//!   already have a real mitigation elsewhere in this crate (see
-//!   [`resource_policy`]'s own doc comment for the full mapping) —
-//!   naming a seventh type here would only rename them.
-//! - **§114 "Hashing Performance" — deferred alongside §37-39**: real
-//!   incremental streaming hash needs the streaming I/O this crate has
-//!   already deferred; the section's own correctness requirement
-//!   ("ensure the chosen ciphertext-addressing scheme computes the
-//!   correct final identity") is already satisfied structurally —
-//!   [`ids::BlobId::from_ciphertext`] hashes whatever bytes it's given
-//!   and has no idea whether they arrived streamed or all at once.
+//!
+//! ## Round 12: §92-95, §97, §107, §109, §114 — brought in for real,
+//! not left as doc-only resolutions
+//!
+//! - [`schema_rows`] — §92 "Filesystem Permissions"
+//!   ([`schema_rows::FilesystemPermissionPolicy`], a real owner-only-
+//!   mode-bits value — actually applying it via `chmod` is real OS
+//!   I/O this crate still doesn't perform, but the restrictive numbers
+//!   themselves are no longer just prose), §93 "Database Schema"/§94
+//!   "Blob Table"/§95 "Transfer Chunk Table" ([`schema_rows::BlobRow`]/
+//!   [`schema_rows::BlobDerivative`]/[`schema_rows::TransferChunkRow`]/
+//!   [`schema_rows::TransferSourceRow`]/[`schema_rows::BlobPinRow`] —
+//!   real row-shape types for five of the spec's eight named
+//!   conceptual tables; the other three already had a type elsewhere
+//!   in this crate, mapped explicitly in this module's own doc
+//!   comment. `BlobRow` has no path field of any kind — "do not store
+//!   content path from untrusted metadata" enforced by there being
+//!   nowhere to put one).
+//! - [`crate::blob_references::ReferenceSet::len`] — added to support
+//!   [`schema_rows::BlobRow::reference_count`] with a real number,
+//!   not a placeholder.
+//! - [`progress::TransferProgress::from_journal`] — §97 "Durable
+//!   Progress," made a real enforcement instead of a true-by-
+//!   omission claim: this is now the one sanctioned constructor that
+//!   reads `verified_bytes` directly from
+//!   [`transfer_journal::TransferJournal::bytes_verified`], the same
+//!   field [`transfer_journal::TransferJournal::record_chunk_verified`]
+//!   only advances once a chunk has actually passed verification.
+//! - [`transfer_control::SourceFailureTracker`] — §107 "Multiple
+//!   Sources," brought in for real: a per-[`siar_domain::DeviceId`]
+//!   failure counter built on [`transfer_control::on_corrupt_chunk`],
+//!   where "preserving other sources" is enforced by the `HashMap`
+//!   keying itself, not by caller discipline.
+//! - `tests/abuse_protection_matrix.rs` — §109 "Abuse Protection,"
+//!   brought in for real as one consolidated integration test per
+//!   named threat, proving each of the six already-real mitigations
+//!   this crate has, rather than leaving the mapping as prose only a
+//!   human would read.
+//! - [`ids::BlobId::from_ciphertext_incremental`] — §114 "Hashing
+//!   Performance," brought in for real: a genuinely usable incremental
+//!   hashing entry point (blake3's own streaming `Hasher`) that a
+//!   future streaming reader can call today, plus a test proving it
+//!   produces the IDENTICAL [`ids::BlobId`] as whole-buffer
+//!   [`ids::BlobId::from_ciphertext`] — §114's own real correctness
+//!   requirement, checked directly rather than assumed.
 //!
 //! Every module is covered by tests exercising real bytes/hashes/state
 //! transitions/ciphertext — including a tamper-detection test for
@@ -388,6 +407,7 @@ pub mod quarantine;
 pub mod relay_and_dtn;
 pub mod resource_policy;
 pub mod resume;
+pub mod schema_rows;
 pub mod source_integrity;
 pub mod source_trust;
 pub mod storage_lifecycle;
@@ -440,6 +460,10 @@ pub use resource_policy::{
     RateLimits, ThermalPressureAdjustments,
 };
 pub use resume::{ResumeBitmap, ResumeRequest};
+pub use schema_rows::{
+    BlobDerivative, BlobLifecycleState, BlobPinRow, BlobRow, DerivativeKind,
+    FilesystemPermissionPolicy, TransferChunkRow, TransferSourceRow,
+};
 pub use source_integrity::{source_mutated, SourceSnapshot};
 pub use source_trust::{verify_manifest_authenticity, BlobSource};
 pub use storage_lifecycle::{
@@ -451,7 +475,7 @@ pub use transfer_authorization::{
 };
 pub use transfer_control::{
     allows_transfer_completion, on_corrupt_chunk, ChunkAck, CorruptChunkAction, DeferredReason,
-    StagingRetentionPolicy, TransferAckKind,
+    SourceFailureTracker, StagingRetentionPolicy, TransferAckKind,
 };
 pub use transfer_journal::TransferJournal;
 pub use transfer_planner::{

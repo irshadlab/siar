@@ -99,10 +99,69 @@
 //! - **§32-35 peer utility/destination likelihood/encounter history
 //!   (deferred in the spec's own §188 "Initial Production Scope" list:
 //!   "social routing, predictive routing"), and everything from
-//!   roughly §46 onward** — a genuinely small slice of a 190-section
-//!   document.
+//!   roughly §46 onward except where named below** — still a large
+//!   remaining slice of a 192-section document.
 //!
-//! `events.rs` is a separate matter — not this crate's own §1-190
+//! ## Round 3: §14, §69, §91/§93-94
+//!
+//! - [`store::StoredBundle`] — §14 "Bundle Envelope vs Local Record",
+//!   finally closed: [`store::WireBundle`] names the wire half
+//!   ([`bundle::DtnBundle`] itself), and `StoredBundle` gained the
+//!   three local-only fields the spec names (`storage_path`,
+//!   `retry_count`, `peer_history`) alongside the pre-existing `state`
+//!   (already local-only) — see that type's own doc comment for which
+//!   field satisfies which of the spec's four named items.
+//! - [`state::BundleState::is_cancellable`], [`cancel::BundleCancel`]
+//!   — §69 "Cancel Bundle". Closing this section surfaced a real gap
+//!   the same way `mark_eligible` did in an earlier round: `Forwarded`
+//!   bundles couldn't legally be cancelled at all, contradicting the
+//!   spec's own "still-undelivered" wording (§19 already establishes
+//!   `Forwarded` as undelivered) — fixed in
+//!   [`state::BundleState::transition`], not worked around.
+//! - [`priority_authorization`] — §91 "Authority Alerts" ([`priority_authorization::AuthorityAlert`]),
+//!   §93 "Priority Authorization"/§94 "Priority Downgrade"
+//!   ([`priority_authorization::authorize_priority`], structurally
+//!   unable to grant [`types::DtnPriority::Sos`] to an unauthorized
+//!   claim). §92 "Spam Resistance" is named but deliberately given no
+//!   type of its own here — see that module's own doc comment for why
+//!   its six mechanisms belong to other crates (mostly Part 08,
+//!   `siar-resource-limits`) or are already covered by §93's own work.
+//!
+//! ## Round 4: §54-61
+//!
+//! - [`eviction`] — §54 "Eviction": [`eviction::EvictionTier`], a
+//!   real `Ord`-ranked seven-tier enum (declaration order IS eviction
+//!   order) plus [`eviction::eviction_tier`] mapping a bundle's state
+//!   and priority onto it — "never use FIFO blindly" enforced by there
+//!   being no insertion-order field anywhere in the type.
+//! - [`admission`] — §55 "Storage Quotas"
+//!   ([`admission::StorageQuotas`]), §56 "Critical Reserve"
+//!   ([`admission::is_reserved_class`], reusing
+//!   [`types::StorageClass`]'s existing two reserved variants rather
+//!   than adding a third), §57 "Per-Peer Quota"
+//!   ([`admission::PeerQuotaTier`]/[`admission::PeerQuotaPolicy`],
+//!   deliberately NOT reusing
+//!   [`priority_authorization::PriorityClaim`]'s authorization bool —
+//!   "authorization and quota are separate," per the section's own
+//!   words), §58 "Admission Control"
+//!   ([`admission::admit_bundle`], the seven-check gate in the
+//!   spec's own listed order, structurally unable to admit on an
+//!   all-false input).
+//! - [`validation`] — §59 "Bundle Validation"
+//!   ([`validation::validate_bundle`], covering every item this
+//!   crate has a real field for — the two it doesn't, `version` and
+//!   `header size`, are named honestly rather than faked with an
+//!   always-passing check), §60 "Oversized Bundle" (checked against
+//!   the bundle's own real `postcard`-serialized byte length, never a
+//!   size field inside it), §61 "Malformed Metadata" (resolved by
+//!   construction — see that module's own doc comment for why it
+//!   needed no code). [`bundle::BundleIntegrity::verify_payload_hash`]
+//!   is this round's other real addition — the "signature/integrity"
+//!   half §59 asks for that this crate can actually check without
+//!   `siar-crypto` (a relay never needs to decrypt a payload to
+//!   confirm it's the bytes the origin hashed).
+//!
+//! `events.rs` is a separate matter — not this crate's own §1-192
 //! numbering above, but `04-offline-event-log-architecture.md`'s §36
 //! "DTN Events"/§79 "DTN Integration" (that spec's own Phase 3, the
 //! fourth domain event catalog after identity/messaging/files — see
@@ -110,18 +169,28 @@
 //! it has no `siar_domain` dependency despite `EventOrigin` needing
 //! one).
 
+pub mod admission;
 pub mod bundle;
+pub mod cancel;
 pub mod dedup;
 pub mod events;
+pub mod eviction;
 pub mod forwarding;
 pub mod payload;
+pub mod priority_authorization;
 pub mod routing_bridge;
 pub mod spray;
 pub mod state;
 pub mod store;
 pub mod types;
+pub mod validation;
 
+pub use admission::{
+    admit_bundle, is_reserved_class, AdmissionChecks, AdmissionDenialReason, PeerQuotaPolicy,
+    PeerQuotaTier, StorageQuotas,
+};
 pub use bundle::{BundleIntegrity, DtnBundle};
+pub use cancel::BundleCancel;
 pub use dedup::SeenBundles;
 pub use events::{
     bundle_stream_id, decode_dtn_event, DtnEvent, DtnEventDecodeError,
@@ -130,13 +199,20 @@ pub use events::{
     EVENT_TYPE_BUNDLE_EVICTED, EVENT_TYPE_BUNDLE_EXPIRED, EVENT_TYPE_BUNDLE_FORWARDED,
     EVENT_TYPE_BUNDLE_STORED,
 };
+pub use eviction::{eviction_tier, EvictionTier};
 pub use forwarding::{decide_forwarding, EncounteredPeer, ForwardingDecision};
 pub use payload::{InlinePayloadTooLarge, PayloadReference, MAX_INLINE_PAYLOAD_BYTES};
+pub use priority_authorization::{
+    authorize_priority, AuthorityAlert, PriorityClaim, PriorityDecision, UnauthorizedPriorityPolicy,
+};
 pub use routing_bridge::{select_dtn_bundle_policy, DtnBundlePolicy, DEFAULT_BUNDLE_TTL_MILLIS};
 pub use spray::spray_allocation;
 pub use state::{decide, BundleEvent, BundleState, InvalidBundleTransition};
-pub use store::{BundleStore, DtnStoreError, ForwardQuery, InMemoryBundleStore, StoredBundle};
+pub use store::{
+    BundleStore, DtnStoreError, ForwardQuery, InMemoryBundleStore, StoredBundle, WireBundle,
+};
 pub use types::{
     BroadcastScope, BundleId, DtnDestination, DtnPriority, DtnSource, ForwardingClass,
     PayloadTypeId, RouteToken, StorageClass,
 };
+pub use validation::{validate_bundle, BundleValidationError, BundleValidationLimits};

@@ -7299,6 +7299,7 @@ name = "siar-dtn-bundle"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "blake3",
  "postcard",
  "serde",
  "siar-blob-manifest",

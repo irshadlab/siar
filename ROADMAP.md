@@ -40,9 +40,9 @@ table is a live pointer, not a duplicate of that detail.
 | 03 | siar-routing-policy | ✅ **200/200 — spec complete** (19 rounds; own Definition-of-Done self-audit included) | `docs/docs/03-transport-routing-policy-engine-architecture.md` |
 | 04 | siar-event-log | 🟡 **27✅/24🟡/35⬜/9◇ of 95** — Phases 1-4 done; Phase 5 (outbox) deliberately deferred, not decided; §63 closed by new `siar-event-registry` crate | `docs/docs/04-offline-event-log-architecture.md` |
 | 05 | siar-blob-manifest | 🟡 **~102/210** | `docs/docs/05-robust-file-blob-subsystem-architecture.md` |
-| 06 | siar-dtn-bundle | 🟡 **~65/192** | `docs/docs/06-dtn-store-carry-forward-architecture.md` |
-| 07 | siar-capability | 🟡 **~19/164** | `docs/docs/07-capability-negotiation-architecture.md` |
-| 08 | siar-resource-limits | 🟡 **~56/193** | `docs/docs/08-resource-limits-backpressure-architecture.md` |
+| 06 | siar-dtn-bundle | 🟡 **~83/192** (+18 in round 5: §29-31, 37-39, 71-72, 80-81, 107-108, 142-144, 154-156; 119 tests) | `docs/docs/06-dtn-store-carry-forward-architecture.md` |
+| 07 | siar-capability | 🟡 **recount pending** — the old ~19/164 predates rounds N+1/N+2; +~18 in N+2 (§13-15, 40-44, 89-93, 108-111, 136-138; 76 tests) | `docs/docs/07-capability-negotiation-architecture.md` |
+| 08 | siar-resource-limits | 🟡 **~119/193** (+14 in round 7: §28, 98, 144-145, 153-155, 158-164 — account tree/tenant isolation, fair semaphore, preemption+safe pause, cancel scopes, task registry, supervisor, sharded stats; +14 in round 6: §5-7, 9-16, 141-143 — layers/hard+soft limits, global budget + borrowing, profiles, config validation, dynamic config; +~15 in round 5: §42-43, 62-67, 78-79, 111-112, 132-136; round 4 added §58-61, 69, 81/83/87, 91-97, 99-104, 124-126, 129, 169-171; 206 tests) | `docs/docs/08-resource-limits-backpressure-architecture.md` |
 | 09 | siar-crash-recovery | 🟡 **~15/186** (earliest-stage of the nine) | `docs/docs/09-crash-recovery-architecture.md` |
 
 **Three real, unresolved reconciliation questions**, deliberately not
@@ -167,6 +167,26 @@ outside what's already done.
     priorities" below: extensibility/ecosystem work is deliberately
     lowest priority until the core product is solid, and this ranking
     doesn't change that call.
+
+---
+
+## 2026-10-02 refactor/audit pass
+
+Workspace-wide `cargo clippy --all-targets` is warning-free; `cargo test`
+(excluding the heavy `siar-media-av1`/`siar-media-audio` codec crates)
+had 1697 passing / 0 failing at last count. Defects fixed:
+- 06: `decide_forwarding` cast peer count with `as u8` (256 peers → 0 →
+  every bundle held forever); `StoredBundle::peer_history` unbounded
+  (§143); `retry_count` overflow; payload-hash compare now constant-time.
+- 07: `BoundedBytes` derived `Deserialize`, bypassing its 256-byte bound
+  for peer-supplied bytes.
+- Saturating counters: blob transfer journal retries, UI unread count,
+  identity link rate limiter.
+- 08: `TokenBucket` moved its refill mark backwards on a regressing clock,
+  granting a free burst on the next forward reading; strict-priority
+  `BoundedPriorityQueue` can starve low tiers (new `AgingQueue` is the
+  starvation-safe alternative; the old queue is kept as-is).
+Not touched: the three open reconciliation questions above.
 
 ---
 

@@ -48,7 +48,9 @@ impl BundleIntegrity {
     /// available layers that check on top, it isn't skipped silently
     /// here.
     pub fn verify_payload_hash(&self, payload_bytes: &[u8]) -> bool {
-        blake3::hash(payload_bytes).as_bytes() == &self.payload_hash
+        // `blake3::Hash`'s `PartialEq` is constant-time; comparing raw
+        // byte arrays is not.
+        blake3::hash(payload_bytes) == blake3::Hash::from_bytes(self.payload_hash)
     }
 }
 
@@ -114,6 +116,29 @@ impl DtnBundle {
         }
         self.replication_budget -= 1;
         true
+    }
+}
+
+/// Shared minimal bundle for sibling-module unit tests.
+#[cfg(test)]
+pub(crate) fn test_bundle() -> DtnBundle {
+    use crate::types::RouteToken;
+    DtnBundle {
+        bundle_id: BundleId::new(),
+        source: DtnSource(RouteToken(vec![1])),
+        destination: DtnDestination::DeviceOpaque(RouteToken(vec![2])),
+        payload_type: PayloadTypeId(1),
+        created_at_millis: 0,
+        expires_at_millis: 1_000_000,
+        priority: DtnPriority::Normal,
+        hop_limit: 8,
+        replication_budget: 4,
+        forwarding_class: ForwardingClass::SprayAndWait,
+        payload_ref: PayloadReference::Inline(vec![1, 2, 3]),
+        integrity: BundleIntegrity {
+            payload_hash: [0u8; 32],
+            origin_signature: None,
+        },
     }
 }
 

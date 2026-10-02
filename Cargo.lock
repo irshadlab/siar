@@ -7569,6 +7569,7 @@ dependencies = [
  "serde",
  "siar-domain",
  "siar-protocol-ext",
+ "thiserror 2.0.19",
  "workspace-hack",
 ]
 

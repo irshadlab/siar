@@ -446,7 +446,7 @@ mod tests {
                 report_id,
                 kind,
                 sender,
-                location.clone(),
+                location,
                 people,
                 note.clone(),
                 EventOrigin::System,

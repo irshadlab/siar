@@ -200,7 +200,7 @@ async fn crash_after_projection_before_network_effect_is_caught_by_reconciliatio
     let closes = |e: &siar_event_log::StoredEvent| {
         (e.envelope.event_type == WORK_DONE)
             .then_some(())
-            .and_then(|_| e.envelope.causation_id)
+            .and(e.envelope.causation_id)
     };
     let current_work_table = std::collections::HashSet::new(); // lost/corrupt
     let report = siar_startup_recovery::reconcile(history, opens, closes, &current_work_table);

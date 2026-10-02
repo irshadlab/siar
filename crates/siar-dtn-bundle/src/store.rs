@@ -19,6 +19,9 @@ use crate::types::{BundleId, RouteToken};
 /// identical fields.
 pub type WireBundle = DtnBundle;
 
+/// Upper bound on [`StoredBundle::peer_history`] (§143).
+pub const MAX_PEER_HISTORY: usize = 64;
+
 /// §14's own local-record half, plus §18's existing `state` field
 /// (already local-only — a peer never needs to know this device's own
 /// state-machine position for someone else's bundle). Field-for-field
@@ -64,10 +67,21 @@ impl StoredBundle {
     }
 
     pub fn record_retry(&mut self) {
-        self.retry_count += 1;
+        self.retry_count = self.retry_count.saturating_add(1);
     }
 
+    /// Records a peer this bundle was handed to. §143 requires the
+    /// history be *bounded*: a peer already present is not duplicated,
+    /// and once [`MAX_PEER_HISTORY`] is reached the oldest entry is
+    /// dropped (a stale entry only costs one redundant send; unbounded
+    /// growth is a slow memory/disk leak on a long-lived relay).
     pub fn record_peer(&mut self, peer: RouteToken) {
+        if self.peer_history.contains(&peer) {
+            return;
+        }
+        if self.peer_history.len() >= MAX_PEER_HISTORY {
+            self.peer_history.remove(0);
+        }
         self.peer_history.push(peer);
     }
 }
@@ -222,6 +236,33 @@ impl BundleStore for InMemoryBundleStore {
 }
 
 #[cfg(test)]
+mod history_bound_tests {
+    use super::*;
+
+    #[test]
+    fn peer_history_is_deduplicated_and_bounded() {
+        let mut r = StoredBundle::new(crate::bundle::test_bundle());
+        for i in 0..(MAX_PEER_HISTORY as u8 + 10) {
+            r.record_peer(RouteToken(vec![i]));
+            r.record_peer(RouteToken(vec![i]));
+        }
+        assert_eq!(r.peer_history.len(), MAX_PEER_HISTORY);
+        assert_eq!(
+            r.peer_history.last(),
+            Some(&RouteToken(vec![MAX_PEER_HISTORY as u8 + 9]))
+        );
+    }
+
+    #[test]
+    fn retry_count_saturates() {
+        let mut r = StoredBundle::new(crate::bundle::test_bundle());
+        r.retry_count = u32::MAX;
+        r.record_retry();
+        assert_eq!(r.retry_count, u32::MAX);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::bundle::BundleIntegrity;
@@ -340,11 +381,12 @@ mod tests {
         record.record_retry();
         record.record_retry();
         record.record_peer(RouteToken(vec![7]));
-        record.record_peer(RouteToken(vec![7])); // same peer twice: a real, separate encounter
+        record.record_peer(RouteToken(vec![7])); // repeat encounter: collapsed (§143 bounded history)
+        record.record_peer(RouteToken(vec![8]));
         assert_eq!(record.retry_count, 2);
         assert_eq!(
             record.peer_history,
-            vec![RouteToken(vec![7]), RouteToken(vec![7])]
+            vec![RouteToken(vec![7]), RouteToken(vec![8])]
         );
     }
 }

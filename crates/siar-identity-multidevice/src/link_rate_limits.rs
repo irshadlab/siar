@@ -75,7 +75,8 @@ impl LinkRateLimiter {
     }
 
     pub fn record_invite_created(&mut self, account_id: AccountId) {
-        self.activity.entry(account_id).or_default().active_invites += 1;
+        let a = self.activity.entry(account_id).or_default();
+        a.active_invites = a.active_invites.saturating_add(1);
     }
 
     pub fn record_invite_consumed_or_expired(&mut self, account_id: AccountId) {
@@ -144,7 +145,8 @@ impl RecoveryRateLimiter {
     }
 
     pub fn record_attempt(&mut self, account_id: AccountId) {
-        *self.attempts.entry(account_id).or_insert(0) += 1;
+        let n = self.attempts.entry(account_id).or_insert(0);
+        *n = n.saturating_add(1);
     }
 
     pub fn is_over_limit(&self, account_id: AccountId) -> bool {

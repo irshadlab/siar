@@ -161,6 +161,24 @@
 //!   `siar-crypto` (a relay never needs to decrypt a payload to
 //!   confirm it's the bytes the origin hashed).
 //!
+//! ## Round 5: §29-31, §37-39, §71-72, §80-81, §107-108, §142-144, §154-156
+//!
+//! - [`bloom`], [`inventory`] — §29-31 summaries and reconciliation
+//!   selection. Peer-supplied filters are validated on decode (an empty
+//!   bit array would otherwise be a remote `% 0` panic).
+//! - [`forward_history`] — §142-144; also bounds
+//!   [`store::StoredBundle::peer_history`] (§143), which previously grew
+//!   without limit.
+//! - [`tombstone`] — §154-156, exact IDs only (never Bloom, §30).
+//! - [`scheduler`] — §37-39/§80-81 strict-then-DRR encounter plan.
+//! - [`ack`] — §107-108, exact ACK sets (no false-positive delivery).
+//! - [`lifetime`] — §71-72 monotonic-age expiry with a capped lifetime.
+//!
+//! Defect fixes in this round: `decide_forwarding` truncated the peer
+//! count with `as u8` (256 peers wrapped to 0 and silently held every
+//! bundle); `retry_count` could overflow; payload-hash comparison is now
+//! constant-time.
+//!
 //! `events.rs` is a separate matter — not this crate's own §1-192
 //! numbering above, but `04-offline-event-log-architecture.md`'s §36
 //! "DTN Events"/§79 "DTN Integration" (that spec's own Phase 3, the
@@ -169,26 +187,35 @@
 //! it has no `siar_domain` dependency despite `EventOrigin` needing
 //! one).
 
+pub mod ack;
 pub mod admission;
+pub mod bloom;
 pub mod bundle;
 pub mod cancel;
 pub mod dedup;
 pub mod events;
 pub mod eviction;
+pub mod forward_history;
 pub mod forwarding;
+pub mod inventory;
+pub mod lifetime;
 pub mod payload;
 pub mod priority_authorization;
 pub mod routing_bridge;
+pub mod scheduler;
 pub mod spray;
 pub mod state;
 pub mod store;
+pub mod tombstone;
 pub mod types;
 pub mod validation;
 
+pub use ack::{AckSummary, Nack, NackReason, RetryAdvice, MAX_ACKS_PER_SUMMARY};
 pub use admission::{
     admit_bundle, is_reserved_class, AdmissionChecks, AdmissionDenialReason, PeerQuotaPolicy,
     PeerQuotaTier, StorageQuotas,
 };
+pub use bloom::{BloomError, BundleBloom};
 pub use bundle::{BundleIntegrity, DtnBundle};
 pub use cancel::BundleCancel;
 pub use dedup::SeenBundles;
@@ -200,17 +227,27 @@ pub use events::{
     EVENT_TYPE_BUNDLE_STORED,
 };
 pub use eviction::{eviction_tier, EvictionTier};
+pub use forward_history::{
+    decide_forwarding_with_history, ForwardDirection, ForwardHistory, ForwardRecord, ForwardResult,
+};
 pub use forwarding::{decide_forwarding, EncounteredPeer, ForwardingDecision};
+pub use inventory::{select_missing, InventorySummary, OfferCandidate, MAX_RECENT_IDS};
+pub use lifetime::{LifetimeRecord, MAX_BUNDLE_LIFETIME_MILLIS};
 pub use payload::{InlinePayloadTooLarge, PayloadReference, MAX_INLINE_PAYLOAD_BYTES};
 pub use priority_authorization::{
     authorize_priority, AuthorityAlert, PriorityClaim, PriorityDecision, UnauthorizedPriorityPolicy,
 };
 pub use routing_bridge::{select_dtn_bundle_policy, DtnBundlePolicy, DEFAULT_BUNDLE_TTL_MILLIS};
+pub use scheduler::{
+    plan_encounter, BandwidthClass, EncounterCapacity, SchedulableItem, SchedulerPolicy, SizeClass,
+    TrafficClass,
+};
 pub use spray::spray_allocation;
 pub use state::{decide, BundleEvent, BundleState, InvalidBundleTransition};
 pub use store::{
     BundleStore, DtnStoreError, ForwardQuery, InMemoryBundleStore, StoredBundle, WireBundle,
 };
+pub use tombstone::{ReintroductionVerdict, TombstoneReason, TombstoneTable};
 pub use types::{
     BroadcastScope, BundleId, DtnDestination, DtnPriority, DtnSource, ForwardingClass,
     PayloadTypeId, RouteToken, StorageClass,

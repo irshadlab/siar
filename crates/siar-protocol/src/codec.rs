@@ -36,7 +36,13 @@ pub fn encode_frame_generic<T: Serialize>(
             limit,
         });
     }
-    dst.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    // The prefix is a u32: a caller-supplied `limit` above `u32::MAX`
+    // must not let a larger body wrap its own length header.
+    let len = u32::try_from(body.len()).map_err(|_| CodecError::FrameTooLarge {
+        declared: body.len(),
+        limit: u32::MAX as usize,
+    })?;
+    dst.extend_from_slice(&len.to_le_bytes());
     dst.extend_from_slice(&body);
     Ok(())
 }

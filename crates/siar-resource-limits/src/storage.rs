@@ -20,8 +20,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// type rather than a parallel storage-only enum, so "Full" and
 /// `Exhausted` are structurally the same value, not two names a caller
 /// could accidentally treat as different states).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum PressureState {
+    #[default]
     Normal,
     Elevated,
     Critical,

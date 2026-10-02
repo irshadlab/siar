@@ -62,7 +62,7 @@ pub enum ForwardingDecision {
 /// actually within `radius_hops` is this crate's own hop-count
 /// bookkeeping ([`DtnBundle::hop_limit`]), not something this function
 /// re-derives from the `BroadcastScope` value itself.
-fn peer_is_destination(peer_token: &RouteToken, destination: &DtnDestination) -> bool {
+pub(crate) fn peer_is_destination(peer_token: &RouteToken, destination: &DtnDestination) -> bool {
     match destination {
         DtnDestination::DeviceOpaque(token)
         | DtnDestination::AccountOpaque(token)
@@ -129,8 +129,10 @@ fn spray_decision(bundle: &DtnBundle, encountered_peers: &[EncounteredPeer]) -> 
     if encountered_peers.is_empty() {
         return ForwardingDecision::Hold;
     }
-    let (spray_count, retain) =
-        spray_allocation(bundle.replication_budget, encountered_peers.len() as u8);
+    let (spray_count, retain) = spray_allocation(
+        bundle.replication_budget,
+        u8::try_from(encountered_peers.len()).unwrap_or(u8::MAX),
+    );
     if spray_count == 0 {
         return ForwardingDecision::Hold;
     }

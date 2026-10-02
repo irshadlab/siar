@@ -15,6 +15,15 @@ use uuid::Uuid;
 pub struct BundleId(Uuid);
 
 impl BundleId {
+    /// Raw 16 bytes, for hashing (Bloom filters) and compact ACK ranges.
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        self.0.as_bytes()
+    }
+
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(Uuid::from_bytes(bytes))
+    }
+
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }

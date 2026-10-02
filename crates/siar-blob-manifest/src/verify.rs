@@ -13,7 +13,9 @@ use crate::manifest::{BlobManifest, ChunkDescriptor};
 /// Real, byte-level verification — recomputes the hash and compares,
 /// not a trust-the-caller check.
 pub fn verify_chunk(chunk_bytes: &[u8], descriptor: &ChunkDescriptor) -> bool {
-    chunk_bytes.len() as u32 == descriptor.size
+    // `try_from`, not `as u32`: a chunk of `2^32 + size` bytes must not
+    // alias to `size`.
+    u32::try_from(chunk_bytes.len()) == Ok(descriptor.size)
         && ChunkHash::from_ciphertext_chunk(chunk_bytes) == descriptor.hash
 }
 

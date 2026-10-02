@@ -53,8 +53,27 @@ pub const MAX_PARAMETER_BYTES: usize = 256;
 /// §12: a bounded byte parameter — rejects at construction rather than
 /// truncating silently, matching this workspace's established
 /// bounded-collection pattern (`siar_protocol_ext::BoundedQueue`).
+///
+/// Deserialization goes through [`BoundedBytes::new`] (`try_from`), so
+/// the bound also holds for bytes a *peer* sent — a plain derived
+/// `Deserialize` would let a hostile advertisement carry an arbitrarily
+/// large parameter straight past the constructor's check.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "Vec<u8>", into = "Vec<u8>")]
 pub struct BoundedBytes(Vec<u8>);
+
+impl TryFrom<Vec<u8>> for BoundedBytes {
+    type Error = BoundedBytesError;
+    fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::new(v)
+    }
+}
+
+impl From<BoundedBytes> for Vec<u8> {
+    fn from(b: BoundedBytes) -> Self {
+        b.0
+    }
+}
 
 impl BoundedBytes {
     pub fn new(bytes: Vec<u8>) -> Result<Self, BoundedBytesError> {
@@ -91,12 +110,22 @@ pub struct CapabilityBits(pub u64);
 impl CapabilityBits {
     pub const EMPTY: Self = Self(0);
 
+    /// Sets `bit`. Panics if `bit >= 64`: the previous `bit & 63` masking
+    /// silently aliased bit 64 onto bit 0, i.e. granting or testing a
+    /// *different* capability than the caller named. Use
+    /// [`Self::try_with_bit`] for any index not known at compile time.
     pub fn with_bit(self, bit: u8) -> Self {
-        Self(self.0 | (1u64 << (bit as u32 & 63)))
+        self.try_with_bit(bit)
+            .expect("CapabilityBits supports bit indices 0..=63")
     }
 
+    pub fn try_with_bit(self, bit: u8) -> Option<Self> {
+        (bit < 64).then(|| Self(self.0 | (1u64 << bit)))
+    }
+
+    /// Out-of-range indices are simply "not set".
     pub fn has_bit(self, bit: u8) -> bool {
-        (self.0 & (1u64 << (bit as u32 & 63))) != 0
+        bit < 64 && (self.0 & (1u64 << bit)) != 0
     }
 
     /// §19's simple-Boolean intersection rule (`negotiated = local ∩
@@ -157,6 +186,27 @@ impl CapabilityDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn out_of_range_bits_do_not_alias_low_bits() {
+        let b = CapabilityBits::EMPTY.with_bit(0);
+        assert!(!b.has_bit(64), "bit 64 must not read as bit 0");
+        assert_eq!(CapabilityBits::EMPTY.try_with_bit(64), None);
+        assert!(CapabilityBits::EMPTY.try_with_bit(63).unwrap().has_bit(63));
+    }
+
+    #[test]
+    fn bounded_bytes_bound_also_holds_on_the_wire() {
+        let wire = postcard::to_allocvec(&vec![0u8; MAX_PARAMETER_BYTES + 1]).unwrap();
+        assert!(postcard::from_bytes::<BoundedBytes>(&wire).is_err());
+        let ok = postcard::to_allocvec(&vec![7u8; 4]).unwrap();
+        assert_eq!(
+            postcard::from_bytes::<BoundedBytes>(&ok)
+                .unwrap()
+                .as_slice(),
+            &[7, 7, 7, 7]
+        );
+    }
 
     #[test]
     fn bounded_bytes_rejects_oversized_input() {

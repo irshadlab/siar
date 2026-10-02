@@ -55,7 +55,13 @@ impl TokenBucket {
     }
 
     fn refill(&mut self, now_millis: u64) {
-        let elapsed = now_millis.saturating_sub(self.last_refill_millis);
+        // A clock that goes backwards must not rewind the refill mark:
+        // doing so would make the *next* forward reading look like a
+        // long elapsed interval and hand out a burst of free tokens.
+        if now_millis <= self.last_refill_millis {
+            return;
+        }
+        let elapsed = now_millis - self.last_refill_millis;
         let added = elapsed.saturating_mul(self.refill_rate_per_sec);
         self.milli_tokens = self
             .milli_tokens
@@ -93,6 +99,15 @@ impl TokenBucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_backwards_clock_does_not_grant_a_free_burst() {
+        let mut b = TokenBucket::new(100, 10, 10_000);
+        assert!(b.try_consume(100, 10_000)); // drain
+        assert!(!b.try_consume(1, 5_000)); // clock jumps back: no refill
+                                           // Forward again to just 1s after the real last mark: only ~10 tokens.
+        assert_eq!(b.available(11_000), 10);
+    }
 
     #[test]
     fn starts_full_and_allows_an_immediate_burst_up_to_capacity() {

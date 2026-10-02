@@ -6,7 +6,36 @@
 //! against the spec's own section numbers rather than a shallow first
 //! pass across all 164 sections.
 //!
-//! ## This pass — a second real extension: dtn/1 (§37, §11)
+//! ## Round N+2 — §13-15, §40-44, §89-93, §108-111, §136-138
+//!
+//! - [`advertisement`] — authenticated, session-bound, replay-resistant
+//!   envelope (signature check delegated to a verifier trait so this
+//!   crate doesn't depend on Part 02's cert types).
+//! - [`health`] + [`media_extension`] — half-open breaker for runtime
+//!   capability failure; deterministic codec choice from a shared catalog.
+//! - [`privacy`] — staged disclosure, profiles, round-down coarsening.
+//! - [`device_view`] — multi-device selection/fan-out, deterministic.
+//!
+//! Defect fix: `BoundedBytes` derived `Deserialize`, so its 256-byte
+//! bound did not apply to peer-supplied bytes; it now deserializes via
+//! `try_from`.
+//!
+//! ## Round N+1 — §28-32, §45-55, §112-114
+//!
+//! - [`security`] — downgrade resistance: shared-catalog algorithm
+//!   selection (never peer order), hard minimum floor, ratcheting
+//!   remembered baseline with policy-decided `DowngradeSuspected`.
+//! - [`epoch`] — epoch-numbered delta updates; stale = ignored, skipped
+//!   epoch = request snapshot, atomic apply, bounded size.
+//! - [`cache`] — bounded cache; stale absence is `Unknown`, never `No`.
+//! - [`guard`] — per-operation requirements with version minimums,
+//!   fallback suggestions, fail-closed on unknown operations.
+//!
+//! Defect fixes: `CapabilityBits::with_bit(64)` silently aliased bit 0
+//! (`& 63`), so a capability could be read as a different one — now
+//! panics/`None`/`false`; `CapabilitySet` lookups are binary-search.
+//!
+//! ## Earlier — a second real extension: dtn/1 (§37, §11)
 //!
 //! - [`dtn_extension`] — §37 "DTN Capabilities" (plus §11's own
 //!   `dtn.max_bundle_size = 1 MiB` worked example):
@@ -119,34 +148,63 @@
 //! [`negotiate::negotiate`]'s module doc explains why and what a
 //! caller does instead. None of these are guessed at here.
 
+pub mod advertisement;
+pub mod cache;
 pub mod descriptor;
+pub mod device_view;
 pub mod dtn_extension;
+pub mod epoch;
 pub mod error;
 pub mod extension;
 pub mod files_extension;
+pub mod guard;
 pub mod hash;
+pub mod health;
 pub mod id;
+pub mod media_extension;
 pub mod negotiate;
 pub mod policy;
+pub mod privacy;
 pub mod registry;
+pub mod security;
 pub mod set;
 pub mod transcript;
 pub mod version;
 
+pub use advertisement::{
+    signing_digest, verify_advertisement, AdvertisementEnvelope, AdvertisementError,
+    AdvertisementVerifier, ReplayGuard,
+};
+pub use cache::{CapabilityCache, Freshness, PeerKey, StalenessPolicy, Support};
 pub use descriptor::{
     BoundedBytes, BoundedBytesError, CapabilityBits, CapabilityDescriptor, CapabilityDirection,
     CapabilityLifetime, CapabilityParameters, CapabilityRequirement, MAX_PARAMETER_BYTES,
 };
+pub use device_view::{AccountCapabilityView, DeviceKey, Need};
 pub use dtn_extension::DtnExtensionNegotiator;
+pub use epoch::{
+    ApplyOutcome, CapabilityDelta, CapabilityEpoch, CapabilityUpdate, EpochError,
+    LocalCapabilityState, PeerCapabilityView, MAX_DELTAS_PER_UPDATE,
+};
 pub use error::CapabilityNegotiationError;
 pub use extension::ExtensionNegotiator;
 pub use files_extension::FilesExtensionNegotiator;
+pub use guard::{
+    FallbackSuggestion, GuardVerdict, OperationGuard, OperationId, OperationRequirement,
+};
 pub use hash::CapabilitySetHash;
+pub use health::{Health, HealthPolicy, HealthTracker};
 pub use id::{CapabilityId, CapabilityNamespace, NamespaceId};
+pub use media_extension::{select_codec, SelectedCodec};
 pub use negotiate::negotiate;
 pub use policy::CapabilityPolicy;
+pub use privacy::{disclose, DisclosureStage, PrivacyProfile, ResourceClass};
 pub use registry::{
     CapabilityDefinition, CapabilityDependency, CapabilityRegistry, ParameterSchema, SecurityClass,
+};
+pub use security::{
+    assess_session, select_algorithm, AlgorithmCatalog, AlgorithmId, BaselinePolicy,
+    MinimumSecurityProfile, SecurityBaseline, SecurityGeneration, SecurityVerdict,
 };
 pub use set::{CapabilitySet, CapabilitySetError, MAX_CAPABILITIES_PER_SET};
 pub use transcript::{confirm, HandshakeNonce, NegotiationHash};

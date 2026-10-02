@@ -50,12 +50,28 @@ pub enum FramingError {
 /// the framing survives being split across several reads on the other
 /// end, since [`FrameDecoder`] doesn't assume read/write boundaries
 /// line up with frame boundaries.)
+///
+/// Prefer [`try_encode_frame`]: this variant cannot report a payload the
+/// 4-byte length prefix can't represent, and `payload.len() as u32`
+/// would silently wrap it.
 pub fn encode_frame(payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER_LEN + payload.len());
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(&checksum16(payload).to_be_bytes());
     out.extend_from_slice(payload);
     out
+}
+
+/// Like [`encode_frame`] but refuses payloads over the same cap the
+/// decoder enforces, so nothing is emitted that the peer would reject.
+pub fn try_encode_frame(payload: &[u8]) -> Result<Vec<u8>, FramingError> {
+    match u32::try_from(payload.len()) {
+        Ok(len) if len <= MAX_FRAME_LEN => Ok(encode_frame(payload)),
+        _ => Err(FramingError::FrameTooLarge {
+            claimed: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+            max: MAX_FRAME_LEN,
+        }),
+    }
 }
 
 /// Incrementally reassembles frames from an RFCOMM `InputStream`. Feed
@@ -219,5 +235,16 @@ mod tests {
         let wire = encode_frame(&[]);
         let mut decoder = FrameDecoder::new();
         assert_eq!(decoder.push(&wire).unwrap(), vec![Vec::<u8>::new()]);
+    }
+
+    #[test]
+    fn try_encode_frame_enforces_the_decoder_cap() {
+        let ok = vec![0u8; 16];
+        assert_eq!(try_encode_frame(&ok).unwrap(), encode_frame(&ok));
+        let too_big = vec![0u8; MAX_FRAME_LEN as usize + 1];
+        assert!(matches!(
+            try_encode_frame(&too_big),
+            Err(FramingError::FrameTooLarge { .. })
+        ));
     }
 }

@@ -58,7 +58,7 @@ impl TransferJournal {
     }
 
     pub fn record_retry(&mut self) {
-        self.retry_count += 1;
+        self.retry_count = self.retry_count.saturating_add(1);
     }
 
     pub fn set_active_path(&mut self, path: impl Into<String>) {

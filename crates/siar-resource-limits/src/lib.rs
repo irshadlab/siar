@@ -5,7 +5,90 @@
 //! scoped, tested slice per pass, tracked honestly against the spec's
 //! own section numbers.
 //!
-//! ## This pass — weighted max-min bandwidth fairness (§54-56)
+//! ## Round 7 — §28, 98, 144-145, 153-155, 158-164 (concurrency & isolation)
+//!
+//! - [`accounting`] — generation-tagged account tree: a charge hits the
+//!   leaf and every ancestor atomically, and a refusal names the exact
+//!   node ("files/bob"); [`accounting::TenantPools`] keeps each tenant's
+//!   critical reserve exclusive while normal work shares the remainder.
+//! - [`fair_semaphore`] — strict-FIFO semaphore; a task that releases
+//!   cannot re-acquire past waiters; dropped waiters leave the line.
+//! - [`preempt`] — preemption only of holds that are `Preemptible` *and*
+//!   can pause at a boundary (the unsafe combination is rejected at
+//!   registration), via a request→boundary→resume handshake.
+//! - [`cancel`] — hierarchical cancel tokens and `OperationScope`
+//!   (cancel first, release holds LIFO), runtime-agnostic.
+//! - [`tasks`] — bounded task registry with RAII guards (§161-162).
+//! - [`supervisor`] — pure restart state machine: bounded exponential
+//!   backoff, crash-loop → Degraded, single probe per cooldown.
+//! - [`sharded`] — cache-line-padded counters for hot statistics only;
+//!   limits stay on exact CAS counters.
+//!
+//! ## Round 6 — §5-7, 9-16, 141-143 (the budget foundation)
+//!
+//! - [`policy_layers`] — layered limits that can only tighten under a
+//!   hard ceiling (order-independent), hard-limit set, and soft limits
+//!   that map depth-into-the-band to an ordered adaptation ladder before
+//!   outright rejection.
+//! - [`budget`] — one global memory budget, per-subsystem guarantees,
+//!   capped *revocable* borrowing; a lender refused inside its guarantee
+//!   is told which borrowers to claw back; borrowing can be switched off
+//!   under pressure.
+//! - [`profile`] — Embedded / MobileLow / MobileNormal / Desktop / Server
+//!   defaults (MobileNormal reproduces §10's 256 MiB split), the full
+//!   `ResourceConfig`, and a validator that reports every inconsistency
+//!   at once (§142's three examples are tests).
+//! - [`dynamic_config`] — atomic runtime updates: validate the whole
+//!   candidate, commit or change nothing; tightening below current usage
+//!   yields a drain report instead of killing work.
+//!
+//! ## Round 5 — §42-43, 62-67, 78-79, 111-112, 132-136
+//!
+//! - [`connections`] — RAII session limiter (global + per-peer; the
+//!   per-peer map is bounded by the global cap) and per-class FD limiter
+//!   under a total ceiling.
+//! - [`slots`] — transfer slots with an interactive-only reserve, a
+//!   read-gate over the downstream stages, a bounded read-ahead window.
+//! - [`inbound`] — per-trust message size / rate / pending gate (cheap
+//!   checks first, rejected messages cost no token); outbound
+//!   persist-don't-lose rule.
+//! - [`dtn_intake`] — relay intake order (peer quota → storage pressure →
+//!   relay quota/eviction) and the per-encounter byte/bundle budget.
+//! - [`cost`] — pre-work cost admission, reserve/actual true-up, and a
+//!   per-owner estimate-accuracy ledger (never a discount).
+//! - [`wait_policy`] — wait vs fail-with-fallback vs defer-durably.
+//! - [`abuse`] — decaying strike ladder (throttle → quarantine →
+//!   disconnect → block) and trust-clamped priority authorization (§133-134).
+//! - [`op_holds`] — durable vs per-attempt holds across retries and path
+//!   switches; release-before-reacquire.
+//!
+//! ## Round 4 — backpressure core: §58-61, 69, 81, 83, 87, 91-95, 96-97, 99-104, 124-126, 129, 169-171
+//!
+//! - [`pressure`] — worst-of pressure signals → [`pressure::OverloadMode`]
+//!   (Normal / Shedding / Overload / CriticalOnly) with immediate
+//!   escalation and stepwise, dwell-gated de-escalation (no flapping);
+//!   [`pressure::shed`] is a priority-cutoff load shedder that defers
+//!   durable work and drops ephemeral work (§22).
+//! - [`coalesce`] — latest-value slot, bounded keyed coalescer (typing,
+//!   presence), drop-oldest/stale realtime ring.
+//! - [`aging`] — priority queue whose waiting items climb tiers (never
+//!   above a floor), fixing the strict-priority starvation of
+//!   [`queue::BoundedPriorityQueue`] (§56, §99-100); plus a starvation
+//!   report.
+//! - [`reservation`] — all-or-nothing multi-resource acquisition in one
+//!   canonical order with rollback, RAII bundles (cancel/panic safe),
+//!   deadlines.
+//! - [`storm`] — per-class connection-rate buckets so an unknown-peer
+//!   flood can't consume trusted capacity.
+//! - [`safety`] — checked length conversion, decompression bomb guard,
+//!   RAII depth limiter.
+//! - [`error`] — typed [`error::ResourceError`] with a retryability verdict.
+//!
+//! Defect fix: [`token_bucket::TokenBucket`] moved its refill mark
+//! backwards on a regressing clock, so the next normal reading granted
+//! a burst of free tokens; backwards readings are now ignored.
+//!
+//! ## Earlier — weighted max-min bandwidth fairness (§54-56)
 //!
 //! - [`bandwidth_fairness`] — §54 "Bandwidth Fairness", §55 "Weighted
 //!   Fair Queueing", §56 "Strict Priority Risks":
@@ -186,16 +269,42 @@
 //! plugins, §62-77), and cost-estimate admission (§78 onward). None
 //! of these are guessed at here.
 
+pub mod abuse;
+pub mod accounting;
 pub mod admission;
+pub mod aging;
 pub mod bandwidth_fairness;
+pub mod budget;
+pub mod cancel;
+pub mod coalesce;
+pub mod connections;
+pub mod cost;
 pub mod cpu_pool;
+pub mod dtn_intake;
+pub mod dynamic_config;
+pub mod error;
 pub mod extension_quota;
+pub mod fair_semaphore;
+pub mod inbound;
+pub mod op_holds;
 pub mod peer_quota;
 pub mod permits;
+pub mod policy_layers;
+pub mod preempt;
+pub mod pressure;
+pub mod profile;
 pub mod queue;
+pub mod reservation;
+pub mod safety;
+pub mod sharded;
+pub mod slots;
 pub mod storage;
+pub mod storm;
+pub mod supervisor;
+pub mod tasks;
 pub mod token_bucket;
 pub mod types;
+pub mod wait_policy;
 
 pub use admission::{
     admit, AdmissionResult, BandwidthClass, DeferredReason, DropReason, RejectReason,

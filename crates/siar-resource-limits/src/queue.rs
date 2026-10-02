@@ -62,6 +62,10 @@ pub struct QueueCapacities {
 }
 
 impl QueueCapacities {
+    pub(crate) fn capacity_of(&self, priority: WorkPriority) -> usize {
+        self.get(priority)
+    }
+
     fn get(&self, priority: WorkPriority) -> usize {
         match priority {
             WorkPriority::Critical => self.critical,

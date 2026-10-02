@@ -37,10 +37,18 @@ impl CapabilitySet {
     /// creating a duplicate entry that canonical ordering would then
     /// need a tie-break rule for).
     pub fn insert(&mut self, descriptor: CapabilityDescriptor) -> Result<(), CapabilitySetError> {
-        if let Some(existing) = self.descriptors.iter_mut().find(|d| d.id == descriptor.id) {
-            *existing = descriptor;
-            return Ok(());
-        }
+        // Sorted by id and unique per id, so binary search is exact and
+        // its `Err` position is the canonical insertion point.
+        let pos = match self
+            .descriptors
+            .binary_search_by_key(&descriptor.id, |d| d.id)
+        {
+            Ok(i) => {
+                self.descriptors[i] = descriptor;
+                return Ok(());
+            }
+            Err(pos) => pos,
+        };
 
         if self.descriptors.len() >= MAX_CAPABILITIES_PER_SET {
             return Err(CapabilitySetError::TooManyCapabilities {
@@ -48,15 +56,23 @@ impl CapabilitySet {
             });
         }
 
-        let pos = self
-            .descriptors
-            .partition_point(|d| Self::sort_key(d) < Self::sort_key(&descriptor));
         self.descriptors.insert(pos, descriptor);
         Ok(())
     }
 
     pub fn get(&self, id: &CapabilityId) -> Option<&CapabilityDescriptor> {
-        self.descriptors.iter().find(|d| &d.id == id)
+        self.descriptors
+            .binary_search_by_key(id, |d| d.id)
+            .ok()
+            .map(|i| &self.descriptors[i])
+    }
+
+    /// Removes the descriptor for `id`, returning it if present.
+    pub fn remove(&mut self, id: &CapabilityId) -> Option<CapabilityDescriptor> {
+        self.descriptors
+            .binary_search_by_key(id, |d| d.id)
+            .ok()
+            .map(|i| self.descriptors.remove(i))
     }
 
     pub fn contains(&self, id: &CapabilityId) -> bool {
@@ -74,10 +90,6 @@ impl CapabilitySet {
     /// Always yields descriptors in canonical order (§27).
     pub fn iter(&self) -> impl Iterator<Item = &CapabilityDescriptor> {
         self.descriptors.iter()
-    }
-
-    fn sort_key(d: &CapabilityDescriptor) -> (CapabilityId, crate::version::CapabilityVersion) {
-        (d.id, d.version)
     }
 }
 

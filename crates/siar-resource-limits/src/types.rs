@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// all pressure into one generic 'busy' flag") is exactly why this is
 /// ten distinct variants rather than a single `Pressure` bool or
 /// enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ResourceKind {
     Memory,
     Cpu,
@@ -29,6 +29,28 @@ pub enum ResourceKind {
 /// quantity shape for (bytes, a rate, or a count). A CPU/energy/
 /// thermal budget would be a coarser class-based type, not a number,
 /// and isn't invented here since the spec doesn't give one.
+impl ResourceKind {
+    pub const COUNT: usize = 10;
+
+    /// Declaration order is the canonical lock/acquisition order (§92-93).
+    pub const ALL: [ResourceKind; Self::COUNT] = [
+        Self::Memory,
+        Self::Cpu,
+        Self::Storage,
+        Self::Network,
+        Self::Connections,
+        Self::Streams,
+        Self::QueueSlots,
+        Self::FileDescriptors,
+        Self::Energy,
+        Self::Thermal,
+    ];
+
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceBudget {
     pub memory_bytes: u64,

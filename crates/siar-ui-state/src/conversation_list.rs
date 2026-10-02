@@ -54,7 +54,7 @@ impl ConversationListState {
 
     pub fn increment_unread(&mut self, conversation: ConversationId) {
         if let Some(c) = self.conversations.iter_mut().find(|c| c.id == conversation) {
-            c.unread_count += 1;
+            c.unread_count = c.unread_count.saturating_add(1);
         }
     }
 

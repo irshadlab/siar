@@ -17,8 +17,40 @@ pub enum Retryability {
     AfterBackoff,
 }
 
+/// §170's four classes, distinct from [`Retryability`] (which says *when*
+/// an automatic retry makes sense): this says *who* has to act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryClass {
+    /// Capacity or rate will come back; retrying is reasonable.
+    Retryable,
+    /// Retrying won't help until a person (free up space) or a policy
+    /// (raise a quota) changes something.
+    UserActionOrPolicy,
+    /// This exact request can never succeed.
+    PermanentForRequest,
+    /// The operation was cancelled; do not resume it implicitly.
+    Terminal,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ResourceError {
+    // ---- §169's nine named variants (the first block) ----
+    #[error("hard limit exceeded")]
+    HardLimitExceeded,
+    #[error("busy")]
+    Busy,
+    #[error("deferred until resources free up")]
+    Deferred,
+    #[error("storage full")]
+    StorageFull,
+    #[error("memory pressure")]
+    MemoryPressure,
+    #[error("too many connections")]
+    TooManyConnections,
+    #[error("too many streams")]
+    TooManyStreams,
+    // `QuotaExceeded` and `Cancelled` are the other two named variants;
+    // they live below beside the finer-grained ones.
     #[error("{0:?} budget exhausted")]
     BudgetExhausted(ResourceKind),
     #[error("{0:?} quota exceeded")]
@@ -40,6 +72,11 @@ pub enum ResourceError {
 impl ResourceError {
     pub fn retryability(&self) -> Retryability {
         match self {
+            Self::HardLimitExceeded | Self::StorageFull => Retryability::Never,
+            Self::Busy | Self::Deferred | Self::TooManyConnections | Self::TooManyStreams => {
+                Retryability::WhenCapacityFrees
+            }
+            Self::MemoryPressure => Retryability::AfterBackoff,
             Self::BudgetExhausted(_) => Retryability::WhenCapacityFrees,
             Self::QuotaExceeded(_) | Self::RateLimited => Retryability::AfterBackoff,
             Self::Overloaded(OverloadMode::Normal) => Retryability::WhenCapacityFrees,
@@ -48,6 +85,40 @@ impl ResourceError {
             | Self::Cancelled
             | Self::MalformedRequest(_)
             | Self::Unsafe(_) => Retryability::Never,
+        }
+    }
+}
+
+impl ResourceError {
+    /// §170 classification.
+    pub fn retry_class(&self) -> RetryClass {
+        match self {
+            Self::Busy
+            | Self::Deferred
+            | Self::MemoryPressure
+            | Self::TooManyConnections
+            | Self::TooManyStreams
+            | Self::BudgetExhausted(_)
+            | Self::QuotaExceeded(_)
+            | Self::RateLimited
+            | Self::Overloaded(_) => RetryClass::Retryable,
+            Self::StorageFull => RetryClass::UserActionOrPolicy,
+            Self::HardLimitExceeded
+            | Self::DeadlineExpired
+            | Self::MalformedRequest(_)
+            | Self::Unsafe(_) => RetryClass::PermanentForRequest,
+            Self::Cancelled => RetryClass::Terminal,
+        }
+    }
+}
+
+impl From<crate::admission_pipeline::ConnectionReject> for ResourceError {
+    fn from(e: crate::admission_pipeline::ConnectionReject) -> Self {
+        use crate::admission_pipeline::ConnectionReject as C;
+        match e {
+            C::NoSlot(_) => Self::TooManyConnections,
+            C::HandshakeBudget(_) => Self::Busy,
+            C::SourceRate | C::Storm(_) => Self::RateLimited,
         }
     }
 }
@@ -90,6 +161,64 @@ mod tests {
         assert_eq!(
             ResourceError::Unsafe(SafetyError::TooDeep(3)).retryability(),
             Retryability::Never
+        );
+    }
+
+    #[test]
+    fn spec_170_classification() {
+        assert_eq!(ResourceError::Busy.retry_class(), RetryClass::Retryable);
+        assert_eq!(
+            ResourceError::StorageFull.retry_class(),
+            RetryClass::UserActionOrPolicy
+        );
+        assert_eq!(
+            ResourceError::HardLimitExceeded.retry_class(),
+            RetryClass::PermanentForRequest
+        );
+        assert_eq!(ResourceError::Cancelled.retry_class(), RetryClass::Terminal);
+    }
+
+    #[test]
+    fn the_two_classifications_agree() {
+        // A "retryable" error must have some automatic-retry story; a
+        // permanent/terminal/user-action one must never ask for one.
+        let all = [
+            ResourceError::HardLimitExceeded,
+            ResourceError::Busy,
+            ResourceError::Deferred,
+            ResourceError::StorageFull,
+            ResourceError::MemoryPressure,
+            ResourceError::TooManyConnections,
+            ResourceError::TooManyStreams,
+            ResourceError::BudgetExhausted(ResourceKind::Memory),
+            ResourceError::QuotaExceeded(ResourceKind::Storage),
+            ResourceError::RateLimited,
+            ResourceError::Overloaded(OverloadMode::Shedding),
+            ResourceError::DeadlineExpired,
+            ResourceError::Cancelled,
+            ResourceError::MalformedRequest(ResourceKind::Memory),
+            ResourceError::Unsafe(SafetyError::TooDeep(1)),
+        ];
+        for e in all {
+            match e.retry_class() {
+                RetryClass::Retryable => assert_ne!(e.retryability(), Retryability::Never, "{e:?}"),
+                _ => assert_eq!(e.retryability(), Retryability::Never, "{e:?}"),
+            }
+            assert!(!e.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn connection_rejections_map_to_resource_errors() {
+        use crate::admission_pipeline::ConnectionReject as C;
+        use crate::connections::LimitDenied;
+        assert_eq!(
+            ResourceError::from(C::NoSlot(LimitDenied::Global)),
+            ResourceError::TooManyConnections
+        );
+        assert_eq!(
+            ResourceError::from(C::SourceRate),
+            ResourceError::RateLimited
         );
     }
 

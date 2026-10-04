@@ -7566,6 +7566,9 @@ dependencies = [
 name = "siar-resource-limits"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "postcard",
+ "proptest",
  "serde",
  "siar-domain",
  "siar-protocol-ext",

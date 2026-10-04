@@ -5,6 +5,114 @@
 //! scoped, tested slice per pass, tracked honestly against the spec's
 //! own section numbers.
 //!
+//! ## Round 12 — §45, 169-171, 172-185, 189, 191 (verification & completion)
+//!
+//! - [`storage_classes`] — durable / cache / staging / relay quotas with a
+//!   shared ceiling that excludes the critical reserve, and an eviction
+//!   plan (cache first, then relay; durable and staging never
+//!   policy-evicted). Added because the Definition of Done requires
+//!   separate class quotas and none existed.
+//! - [`error`] — the spec's nine `ResourceError` variants and §170's four
+//!   [`error::RetryClass`] classes alongside the existing finer-grained
+//!   [`error::Retryability`]; `tests/api_audit.rs` enforces §171 (no
+//!   string/boxed errors in the public API) and zero `unsafe`.
+//! - [`peer_quota::PeerQuota::clamped_to`] — a per-trust quota could exceed
+//!   an entire small device's global limit (a `LocalOwnDevice` peer: 512
+//!   streams vs Embedded's 16); now clamped, tighten-only.
+//! - `tests/`: `properties.rs` (§173, proptest), `concurrency.rs` (§174),
+//!   `scenarios.rs` (§175-183, one test per spec scenario),
+//!   `fuzzing.rs` (§184, in-tree fuzz targets), `definition_of_done.rs`
+//!   (§191, one test per bullet, §189's first-implementation list
+//!   included). `benches/resource_bench.rs` (§185, std-only,
+//!   `cargo bench`).
+//!
+//! ## Round 11 — §113-120, 123, 129-130, 156-157 (limits, ingress, scheduler)
+//!
+//! - [`feature_limits`] — the eight per-feature limit sets, derived from
+//!   the profile config and cross-validated against it and the hard
+//!   limits (this caught a real default error: an Embedded DTN bundle
+//!   larger than the hard frame limit). File offers are checked from
+//!   their declared numbers, with manifest size *derived* from file and
+//!   chunk size, so a tiny chunk size can't smuggle in a huge manifest.
+//! - [`frame`] — length-prefixed decoder that rejects an oversize header
+//!   before allocating, grows its body buffer only as bytes arrive, and
+//!   poisons itself on error.
+//! - [`admission_pipeline`] — unknown-peer gate (length → syntax →
+//!   class-wide rate → stateless keyed-BLAKE3 cookie under load →
+//!   per-source rate) and connection admission (slot → handshake budget
+//!   → per-source rate → class/global storm), refundable resources first.
+//! - [`scheduler`] — Ingress → admission (trust-clamped priority, mode
+//!   shedding) → aging priority queues → all-or-nothing permit
+//!   acquisition → worker → metrics feedback, split into Network / CPU /
+//!   Storage shards with independent locks.
+//!
+//! ## Round 10 — §80, 105-110, 137-140, 165-168 (observability & restart)
+//!
+//! - [`snapshot`] — `ResourceSnapshot`; reported pressure is never lower
+//!   than what the numbers themselves imply.
+//! - [`metrics`] — fixed-size, lock-free metrics keyed only by trust
+//!   class / priority / resource kind / a bounded extension label, so
+//!   series count is a compile-time constant (no raw peer ID can become a
+//!   label); log2 wait histograms; opt-in local-only per-peer diagnostics
+//!   (no `Serialize`); an on/off leak tracker.
+//! - [`feedback`] — `UserMessage` is a fieldless enum (a user can't be
+//!   shown a semaphore count) with stable l10n keys; developer lines in
+//!   the spec's `Memory: 72/128 MiB` format.
+//! - [`events`] — batched, coalescing `ResourceEvent` hub (flaps inside a
+//!   window emit nothing, storms become one event with a repeat count),
+//!   and a journal filter that records only deferred-for-storage /
+//!   paused-for-pressure, once per episode.
+//! - [`restart`] — pure recovery planning keyed on durable operation ids
+//!   (the per-process `ReservationId` restarts at 1 and must never be
+//!   persisted): restore / release expired / release orphans / delete
+//!   orphan staging / reset active ops; restoring re-admits against the
+//!   *current* quota; persisted settings are the only serialized state.
+//!
+//! ## Round 9 — §86-89, 121-122, 146-152 (modes & effective limits)
+//!
+//! - [`effective_limits`] — `min(hard, policy, negotiated, pressure)` with
+//!   the binding source reported; pressure is a purely local throttle on
+//!   top of the negotiated value (8 → 2 under Critical, back to 8 when it
+//!   eases, no renegotiation unless the peer depends on the number).
+//! - [`cpu_thermal`] — CPU pressure from queue depth / latency / encoder /
+//!   thermal; hash-parallelism, AV1 complexity, compression and indexing
+//!   responses; thermal response that can never disable critical
+//!   communication; three energy budgets (background work, radio
+//!   activation, CPU-heavy) whose retuning keeps remaining tokens instead
+//!   of refilling.
+//! - [`modes`] — foreground / background / battery saver / emergency /
+//!   call active / server overload / headless relay as composable flags.
+//!   Boosts, then restrictions, then clamp-to-hard; checked over all 128
+//!   flag combinations (no ceiling breached, reserves and control capacity
+//!   never reduced, essential work never throttled to zero).
+//!
+//! ## Round 8 — §68, 70-77, 82, 84-85, 127-128, 131 (subsystem backpressure)
+//!
+//! - [`routing_limits`] — caps on concurrent connects / discovery jobs /
+//!   retry timers, one in-flight connect per target; a coalescing
+//!   discovery table (one row per noisy peer, one change per drain).
+//! - [`negotiation_limits`] — offer-shape limits checked before a session
+//!   is allocated; per-peer and global negotiation concurrency.
+//! - [`event_log_pressure`] — bounded writer queue that hands rejected
+//!   items back, projection-lag states with hysteresis (Critical slows
+//!   writes and sheds secondary work, a hard bound refuses writes), and
+//!   outbox accounting that rejects bulk first and keeps a critical reserve.
+//! - [`fanout`] — one bounded per-consumer queue for daemon IPC, FFI and
+//!   plugins: critical never silently lost, coalesce by key, droppable
+//!   first out, and *resync-from-snapshot* when even critical overflows;
+//!   callback rate limiter; plugin mailbox with handler timeouts/strikes.
+//! - [`verification`] — verification CPU priced in cost units: unknown
+//!   senders share one class-wide bucket and a capped slice of the queue
+//!   (rotating identities buys nothing); known peers get per-peer buckets;
+//!   half-open / authenticated / active handshake pools with promotion
+//!   that never leaks or double-counts a slot.
+//! - [`os_memory`] — Android trim levels, iOS warnings and budget
+//!   exhaustion merged into one `PressureState`, with hold-then-decay for
+//!   edge-triggered platform signals. Platform code reports raw facts only.
+//!
+//! Defect hardening: `BoundedCounter::release` now saturates (loud in
+//! debug builds) instead of wrapping to ~`u64::MAX`.
+//!
 //! ## Round 7 — §28, 98, 144-145, 153-155, 158-164 (concurrency & isolation)
 //!
 //! - [`accounting`] — generation-tagged account tree: a charge hits the
@@ -272,6 +380,7 @@
 pub mod abuse;
 pub mod accounting;
 pub mod admission;
+pub mod admission_pipeline;
 pub mod aging;
 pub mod bandwidth_fairness;
 pub mod budget;
@@ -280,13 +389,25 @@ pub mod coalesce;
 pub mod connections;
 pub mod cost;
 pub mod cpu_pool;
+pub mod cpu_thermal;
 pub mod dtn_intake;
 pub mod dynamic_config;
+pub mod effective_limits;
 pub mod error;
+pub mod event_log_pressure;
+pub mod events;
 pub mod extension_quota;
 pub mod fair_semaphore;
+pub mod fanout;
+pub mod feature_limits;
+pub mod feedback;
+pub mod frame;
 pub mod inbound;
+pub mod metrics;
+pub mod modes;
+pub mod negotiation_limits;
 pub mod op_holds;
+pub mod os_memory;
 pub mod peer_quota;
 pub mod permits;
 pub mod policy_layers;
@@ -295,15 +416,21 @@ pub mod pressure;
 pub mod profile;
 pub mod queue;
 pub mod reservation;
+pub mod restart;
+pub mod routing_limits;
 pub mod safety;
+pub mod scheduler;
 pub mod sharded;
 pub mod slots;
+pub mod snapshot;
 pub mod storage;
+pub mod storage_classes;
 pub mod storm;
 pub mod supervisor;
 pub mod tasks;
 pub mod token_bucket;
 pub mod types;
+pub mod verification;
 pub mod wait_policy;
 
 pub use admission::{

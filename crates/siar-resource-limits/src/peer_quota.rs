@@ -109,6 +109,19 @@ impl PeerQuota {
     /// capacity is set equal to the per-second rate itself: enough to
     /// absorb one full second of legitimate traffic arriving at once,
     /// without licensing sustained bursting beyond the configured rate.
+    /// §173 "peer quota <= global quota". The per-trust table above is
+    /// device-independent (a `LocalOwnDevice` peer may hold 512 streams),
+    /// but an embedded node's *entire* stream budget is 16. Clamp each
+    /// dimension that has a global counterpart to that global limit; this
+    /// can only tighten, never raise, a quota.
+    pub fn clamped_to(&self, cfg: &crate::profile::ResourceConfig) -> Self {
+        Self {
+            max_active_streams: self.max_active_streams.min(cfg.network.max_streams),
+            max_dtn_relay_bytes: self.max_dtn_relay_bytes.min(cfg.storage.relay_quota_bytes),
+            ..*self
+        }
+    }
+
     pub fn request_rate_bucket(&self, now_millis: u64) -> TokenBucket {
         TokenBucket::new(
             self.max_requests_per_sec,
@@ -196,6 +209,73 @@ impl PeerUsageCounters {
         self.inbound_bytes = self.inbound_bytes.saturating_sub(delta.inbound_bytes);
         self.staged_files = self.staged_files.saturating_sub(delta.staged_files);
         self.dtn_relay_bytes = self.dtn_relay_bytes.saturating_sub(delta.dtn_relay_bytes);
+    }
+}
+
+#[cfg(test)]
+mod clamp_tests {
+    use super::*;
+    use crate::profile::{ResourceConfig, ResourceProfile};
+
+    const TRUSTS: [TrustClass; 6] = [
+        TrustClass::Unknown,
+        TrustClass::Known,
+        TrustClass::Verified,
+        TrustClass::Organization,
+        TrustClass::Authority,
+        TrustClass::LocalOwnDevice,
+    ];
+
+    #[test]
+    fn unclamped_quotas_can_exceed_a_small_device_which_is_why_clamping_exists() {
+        let emb = ResourceConfig::for_profile(ResourceProfile::Embedded);
+        assert!(
+            PeerQuota::for_trust_class(TrustClass::LocalOwnDevice).max_active_streams
+                > emb.network.max_streams
+        );
+    }
+
+    #[test]
+    fn clamped_quota_never_exceeds_the_global_limits_and_never_loosens() {
+        for p in [
+            ResourceProfile::Embedded,
+            ResourceProfile::MobileLow,
+            ResourceProfile::MobileNormal,
+            ResourceProfile::Desktop,
+            ResourceProfile::Server,
+        ] {
+            let cfg = ResourceConfig::for_profile(p);
+            for t in TRUSTS {
+                let raw = PeerQuota::for_trust_class(t);
+                let c = raw.clamped_to(&cfg);
+                assert!(
+                    c.max_active_streams <= cfg.network.max_streams,
+                    "{p:?}/{t:?}"
+                );
+                assert!(
+                    c.max_dtn_relay_bytes <= cfg.storage.relay_quota_bytes,
+                    "{p:?}/{t:?}"
+                );
+                assert!(
+                    c.max_active_streams <= raw.max_active_streams
+                        && c.max_dtn_relay_bytes <= raw.max_dtn_relay_bytes
+                );
+                assert_eq!(
+                    (
+                        c.max_pending_messages,
+                        c.max_inbound_bytes,
+                        c.max_staged_files,
+                        c.max_requests_per_sec
+                    ),
+                    (
+                        raw.max_pending_messages,
+                        raw.max_inbound_bytes,
+                        raw.max_staged_files,
+                        raw.max_requests_per_sec
+                    )
+                );
+            }
+        }
     }
 }
 

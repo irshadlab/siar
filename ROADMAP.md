@@ -42,7 +42,7 @@ table is a live pointer, not a duplicate of that detail.
 | 05 | siar-blob-manifest | 🟡 **~102/210** | `docs/docs/05-robust-file-blob-subsystem-architecture.md` |
 | 06 | siar-dtn-bundle | 🟡 **~83/192** (+18 in round 5: §29-31, 37-39, 71-72, 80-81, 107-108, 142-144, 154-156; 119 tests) | `docs/docs/06-dtn-store-carry-forward-architecture.md` |
 | 07 | siar-capability | 🟡 **recount pending** — the old ~19/164 predates rounds N+1/N+2; +~18 in N+2 (§13-15, 40-44, 89-93, 108-111, 136-138; 76 tests) | `docs/docs/07-capability-negotiation-architecture.md` |
-| 08 | siar-resource-limits | 🟡 **~119/193** (+14 in round 7: §28, 98, 144-145, 153-155, 158-164 — account tree/tenant isolation, fair semaphore, preemption+safe pause, cancel scopes, task registry, supervisor, sharded stats; +14 in round 6: §5-7, 9-16, 141-143 — layers/hard+soft limits, global budget + borrowing, profiles, config validation, dynamic config; +~15 in round 5: §42-43, 62-67, 78-79, 111-112, 132-136; round 4 added §58-61, 69, 81/83/87, 91-97, 99-104, 124-126, 129, 169-171; 206 tests) | `docs/docs/08-resource-limits-backpressure-architecture.md` |
+| 08 | siar-resource-limits | 🟡 **~189/193 — Definition of Done (§191) is executable and passing** (round 12: §45, 169-171, 172-185, 189, 191 — storage classes, error classes, property/concurrency/scenario/fuzz tests, benchmarks; remaining: §187-188 public facade/integration API once the wiring settles, plus prose-only §1-2, 186, 190, 192-193; +13 in round 11: §113-120, 123, 129-130, 156-157 — per-feature limits, pre-allocation frame decoder, unknown-peer + connection admission pipelines, sharded scheduler; +15 in round 10: §80, 105-110, 137-140, 165-168 — snapshot, bounded-cardinality metrics, user/dev feedback, batched events + journal filter, restart/crash recovery planning; +13 in round 9: §86-89, 121-122, 146-152 — CPU/thermal/energy, effective limits + runtime tightening, composable runtime modes; +15 in round 8: §68, 70-77, 82, 84-85, 127-128, 131 — routing/discovery/negotiation limits, event-log/projection/outbox pressure, IPC/FFI/plugin fan-out queues, verification budget + handshake pools, OS memory pressure; +14 in round 7: §28, 98, 144-145, 153-155, 158-164 — account tree/tenant isolation, fair semaphore, preemption+safe pause, cancel scopes, task registry, supervisor, sharded stats; +14 in round 6: §5-7, 9-16, 141-143 — layers/hard+soft limits, global budget + borrowing, profiles, config validation, dynamic config; +~15 in round 5: §42-43, 62-67, 78-79, 111-112, 132-136; round 4 added §58-61, 69, 81/83/87, 91-97, 99-104, 124-126, 129, 169-171; 415 tests across unit/property/concurrency/scenario/fuzz/audit/DoD) | `docs/docs/08-resource-limits-backpressure-architecture.md` |
 | 09 | siar-crash-recovery | 🟡 **~15/186** (earliest-stage of the nine) | `docs/docs/09-crash-recovery-architecture.md` |
 
 **Three real, unresolved reconciliation questions**, deliberately not
@@ -186,6 +186,23 @@ had 1697 passing / 0 failing at last count. Defects fixed:
   granting a free burst on the next forward reading; strict-priority
   `BoundedPriorityQueue` can starve low tiers (new `AgingQueue` is the
   starvation-safe alternative; the old queue is kept as-is).
+- 08 (round 8): `BoundedCounter::release` used a plain `fetch_sub`, so an
+  over-release would wrap the counter to ~`u64::MAX` and deny everything;
+  it now saturates (and asserts in debug builds).
+- 08 (round 10): design finding, not a code bug — `ReservationId` is a
+  per-process counter restarting at 1, so it must never be persisted;
+  `restart.rs` keys durable records on `OpId`/`DurableResId` instead.
+- 08 (round 11): the new cross-validation caught a real default error
+  (Embedded DTN max bundle 1 MiB > hard frame limit 256 KiB, i.e. a
+  bundle that could be accepted by policy but never received).
+- 08 (round 12), found while writing the Definition-of-Done tests: (a)
+  `PeerQuota::for_trust_class` was device-independent, so one trusted
+  peer's quota could exceed a whole Embedded node's stream budget — added
+  `clamped_to`; (b) §191 requires separate durable/cache/staging/relay
+  quotas but no cache quota or class ledger existed — added
+  `storage_classes`; (c) `ResourceError` lacked most of §169's variants.
+  Adding variants to `ResourceError` can break exhaustive `match`es in
+  callers (compile-time, easy to fix).
 Not touched: the three open reconciliation questions above.
 
 ---

@@ -85,8 +85,10 @@ impl<T> AgingQueue<T> {
         idx.saturating_sub(steps).max(floor)
     }
 
-    pub fn dequeue(&mut self, now_millis: u64) -> Option<T> {
-        let mut best: Option<(usize, u64, usize)> = None; // (rank, enqueued, tier)
+    /// The tier whose head should go next: (effective rank, enqueue time,
+    /// tier index), smallest first.
+    fn best_tier(&self, now_millis: u64) -> Option<usize> {
+        let mut best: Option<(usize, u64, usize)> = None;
         for (idx, tier) in self.tiers.iter().enumerate() {
             if let Some(&(enq, _)) = tier.front() {
                 let cand = (self.effective_rank(idx, enq, now_millis), enq, idx);
@@ -95,8 +97,31 @@ impl<T> AgingQueue<T> {
                 }
             }
         }
-        let (_, _, tier) = best?;
+        best.map(|(_, _, tier)| tier)
+    }
+
+    pub fn dequeue(&mut self, now_millis: u64) -> Option<T> {
+        let tier = self.best_tier(now_millis)?;
         self.tiers[tier].pop_front().map(|(_, v)| v)
+    }
+
+    /// Offer the best head to `f` (typically "try to acquire its
+    /// permits"). Only if `f` returns `Some` is the item removed; if it
+    /// returns `None` the queue is left exactly as it was — no pop and
+    /// re-insert, so the item keeps its place and its original enqueue
+    /// time (and therefore its aging credit). Strict head-of-line: a
+    /// blocked head is *not* skipped in favour of a lesser one, which is
+    /// what keeps a large job from being starved by a stream of small
+    /// ones. Returns the item, `f`'s result, and when it was enqueued.
+    pub fn dequeue_with<R>(
+        &mut self,
+        now_millis: u64,
+        f: impl FnOnce(&T) -> Option<R>,
+    ) -> Option<(T, R, u64)> {
+        let tier = self.best_tier(now_millis)?;
+        let r = f(&self.tiers[tier].front()?.1)?;
+        let (enq, item) = self.tiers[tier].pop_front()?;
+        Some((item, r, enq))
     }
 
     /// §99: the priority tier whose head has waited longest past
@@ -172,6 +197,28 @@ mod tests {
         assert_eq!(q.dequeue(1_000_000), Some("crit"));
         assert_eq!(q.dequeue(1_000_000), Some("ctl"));
         assert_eq!(q.dequeue(1_000_000), Some("ancient"));
+    }
+
+    #[test]
+    fn dequeue_with_leaves_a_refused_head_untouched_and_keeps_its_age() {
+        let mut q = q();
+        q.enqueue(Bulk, "big", true, 0);
+        q.enqueue(Normal, "small", true, 10);
+        // At t=1000 the aged bulk head is best; refuse it.
+        assert_eq!(q.dequeue_with(1_000, |_| None::<()>), None);
+        assert_eq!(q.len(), 2, "nothing removed");
+        // Still the best candidate afterwards (original enqueue time kept).
+        let (item, r, enq) = q.dequeue_with(1_000, |i| Some(i.len())).unwrap();
+        assert_eq!((item, r, enq), ("big", 3, 0));
+    }
+
+    #[test]
+    fn dequeue_with_does_not_skip_a_blocked_head() {
+        let mut q = q();
+        q.enqueue(Interactive, "blocked", true, 0);
+        q.enqueue(Normal, "easy", true, 0);
+        let got = q.dequeue_with(0, |i| (*i != "blocked").then_some(()));
+        assert!(got.is_none(), "strict head-of-line: no overtaking");
     }
 
     #[test]

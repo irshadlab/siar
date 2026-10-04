@@ -69,8 +69,18 @@ impl BoundedCounter {
         }
     }
 
+    /// Saturating: an accounting bug that over-releases must not wrap
+    /// the counter to ~`u64::MAX` (which would deny every later request).
     pub(crate) fn release(&self, amount: u64) {
-        self.allocated.fetch_sub(amount, Ordering::AcqRel);
+        let r = self
+            .allocated
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
+                Some(cur.saturating_sub(amount))
+            });
+        debug_assert!(
+            r.is_ok_and(|prev| prev >= amount),
+            "released more than was reserved"
+        );
     }
 
     pub(crate) fn in_use(&self) -> u64 {
@@ -215,6 +225,27 @@ impl StreamPermit {
 impl Drop for StreamPermit {
     fn drop(&mut self) {
         self.counter.release(1);
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn over_release_saturates_at_zero() {
+        let c = BoundedCounter::new(10);
+        c.release(5);
+        assert_eq!(c.in_use(), 0);
+        assert!(c.try_reserve(10));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "released more than was reserved")]
+    fn over_release_is_loud_in_debug_builds() {
+        BoundedCounter::new(10).release(5);
     }
 }
 

@@ -14,6 +14,7 @@ use crate::storage::PressureState;
 
 /// Why something is not happening right now (internal vocabulary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ResourceCause {
     StorageReservationDenied,
     NoUnmeteredNetwork,
@@ -27,6 +28,7 @@ pub enum ResourceCause {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum UserMessage {
     WaitingForStorage,
     WaitingForWifi,

@@ -5,6 +5,24 @@
 //! scoped, tested slice per pass, tracked honestly against the spec's
 //! own section numbers.
 //!
+//! ## Round 13 — §187-188 facade, fixes
+//!
+//! - [`runtime`] — `ResourceRuntime` (§187-188): one validated object
+//!   that wires the budget, pools, slots, storage reservations and class
+//!   ledger, outbox, per-peer quotas/gates, pressure control and metrics
+//!   behind `admit` / `messaging()` / `files()` / `dtn()`; permits are
+//!   RAII and each acquisition step unwinds if a later one fails.
+//! - Fixed: `OutboxAccounting` counted critical entries in the reserve
+//!   against *normal* capacity (freeing a normal slot did not give one
+//!   back); `plan_recovery`/`restore_reservations` could put one durable
+//!   id in two buckets and restore the wrong record when ids repeated;
+//!   `fuzz_entry` initially needed a dev-only dependency in normal builds
+//!   (now behind the `fuzzing` feature); `Retryability`, `RetryClass`,
+//!   `ResourceError`, `ResourceCause` and `UserMessage` are now
+//!   `#[non_exhaustive]` so adding variants is not a breaking change.
+//! - `fuzz/` — a real cargo-fuzz layout over [`fuzz_entry`]; see
+//!   `README.md` for the §186 → module map and §190 phase table.
+//!
 //! ## Round 12 — §45, 169-171, 172-185, 189, 191 (verification & completion)
 //!
 //! - [`storage_classes`] — durable / cache / staging / relay quotas with a
@@ -402,6 +420,9 @@ pub mod fanout;
 pub mod feature_limits;
 pub mod feedback;
 pub mod frame;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzz_entry;
 pub mod inbound;
 pub mod metrics;
 pub mod modes;
@@ -418,6 +439,7 @@ pub mod queue;
 pub mod reservation;
 pub mod restart;
 pub mod routing_limits;
+pub mod runtime;
 pub mod safety;
 pub mod scheduler;
 pub mod sharded;

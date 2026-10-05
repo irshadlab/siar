@@ -7,7 +7,10 @@ use crate::reservation::ReservationError;
 use crate::safety::SafetyError;
 use crate::types::ResourceKind;
 
+/// `#[non_exhaustive]`: new causes will appear; downstream `match`es
+/// must carry a wildcard arm so adding one is not a breaking change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Retryability {
     /// Retrying the same request cannot succeed.
     Never,
@@ -20,6 +23,7 @@ pub enum Retryability {
 /// §170's four classes, distinct from [`Retryability`] (which says *when*
 /// an automatic retry makes sense): this says *who* has to act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RetryClass {
     /// Capacity or rate will come back; retrying is reasonable.
     Retryable,
@@ -33,6 +37,7 @@ pub enum RetryClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ResourceError {
     // ---- §169's nine named variants (the first block) ----
     #[error("hard limit exceeded")]

@@ -144,3 +144,42 @@ fn library_code_does_not_panic_on_peer_controlled_paths_via_unwrap() {
             .join("\n")
     );
 }
+
+#[test]
+fn readme_module_map_names_only_modules_that_exist() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    let mut checked = 0;
+    for line in readme
+        .lines()
+        .filter(|l| l.starts_with('|') && l.contains('`'))
+    {
+        // third column onwards holds module names; first holds spec file names
+        let cols: Vec<&str> = line.split('|').collect();
+        if cols.len() < 3 {
+            continue;
+        }
+        let last = cols[cols.len() - 2];
+        for part in last.split('`').skip(1).step_by(2) {
+            if part.contains("::") || part.contains(' ') || part.contains('/') || part.contains('(')
+            {
+                continue;
+            }
+            let name = part.trim();
+            // skip empties and type names (CamelCase), which the tables list beside modules
+            if name.is_empty() || name.chars().next().is_some_and(char::is_uppercase) {
+                continue;
+            }
+            // phase table also lists tests/fuzz/benches directories
+            if ["tests", "fuzz", "benches"].contains(&name) {
+                continue;
+            }
+            assert!(
+                root.join("src").join(format!("{name}.rs")).exists(),
+                "README maps to a module that does not exist: `{name}`"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 40, "only {checked} module references checked");
+}

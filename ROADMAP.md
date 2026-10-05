@@ -42,7 +42,7 @@ table is a live pointer, not a duplicate of that detail.
 | 05 | siar-blob-manifest | 🟡 **~102/210** | `docs/docs/05-robust-file-blob-subsystem-architecture.md` |
 | 06 | siar-dtn-bundle | 🟡 **~83/192** (+18 in round 5: §29-31, 37-39, 71-72, 80-81, 107-108, 142-144, 154-156; 119 tests) | `docs/docs/06-dtn-store-carry-forward-architecture.md` |
 | 07 | siar-capability | 🟡 **recount pending** — the old ~19/164 predates rounds N+1/N+2; +~18 in N+2 (§13-15, 40-44, 89-93, 108-111, 136-138; 76 tests) | `docs/docs/07-capability-negotiation-architecture.md` |
-| 08 | siar-resource-limits | 🟡 **~189/193 — Definition of Done (§191) is executable and passing** (round 12: §45, 169-171, 172-185, 189, 191 — storage classes, error classes, property/concurrency/scenario/fuzz tests, benchmarks; remaining: §187-188 public facade/integration API once the wiring settles, plus prose-only §1-2, 186, 190, 192-193; +13 in round 11: §113-120, 123, 129-130, 156-157 — per-feature limits, pre-allocation frame decoder, unknown-peer + connection admission pipelines, sharded scheduler; +15 in round 10: §80, 105-110, 137-140, 165-168 — snapshot, bounded-cardinality metrics, user/dev feedback, batched events + journal filter, restart/crash recovery planning; +13 in round 9: §86-89, 121-122, 146-152 — CPU/thermal/energy, effective limits + runtime tightening, composable runtime modes; +15 in round 8: §68, 70-77, 82, 84-85, 127-128, 131 — routing/discovery/negotiation limits, event-log/projection/outbox pressure, IPC/FFI/plugin fan-out queues, verification budget + handshake pools, OS memory pressure; +14 in round 7: §28, 98, 144-145, 153-155, 158-164 — account tree/tenant isolation, fair semaphore, preemption+safe pause, cancel scopes, task registry, supervisor, sharded stats; +14 in round 6: §5-7, 9-16, 141-143 — layers/hard+soft limits, global budget + borrowing, profiles, config validation, dynamic config; +~15 in round 5: §42-43, 62-67, 78-79, 111-112, 132-136; round 4 added §58-61, 69, 81/83/87, 91-97, 99-104, 124-126, 129, 169-171; 415 tests across unit/property/concurrency/scenario/fuzz/audit/DoD) | `docs/docs/08-resource-limits-backpressure-architecture.md` |
+| 08 | siar-resource-limits | ✅ **~192/193 — §187-188 facade (`ResourceRuntime`) done, Definition of Done (§191) executable and passing; §186/190 mapped in the crate README** (round 13: facade + 4 fixes, real cargo-fuzz harness, multi-sample benchmark; round 12: §45, 169-171, 172-185, 189, 191 — storage classes, error classes, property/concurrency/scenario/fuzz tests, benchmarks; remaining: §187-188 public facade/integration API once the wiring settles, plus prose-only §1-2, 186, 190, 192-193; +13 in round 11: §113-120, 123, 129-130, 156-157 — per-feature limits, pre-allocation frame decoder, unknown-peer + connection admission pipelines, sharded scheduler; +15 in round 10: §80, 105-110, 137-140, 165-168 — snapshot, bounded-cardinality metrics, user/dev feedback, batched events + journal filter, restart/crash recovery planning; +13 in round 9: §86-89, 121-122, 146-152 — CPU/thermal/energy, effective limits + runtime tightening, composable runtime modes; +15 in round 8: §68, 70-77, 82, 84-85, 127-128, 131 — routing/discovery/negotiation limits, event-log/projection/outbox pressure, IPC/FFI/plugin fan-out queues, verification budget + handshake pools, OS memory pressure; +14 in round 7: §28, 98, 144-145, 153-155, 158-164 — account tree/tenant isolation, fair semaphore, preemption+safe pause, cancel scopes, task registry, supervisor, sharded stats; +14 in round 6: §5-7, 9-16, 141-143 — layers/hard+soft limits, global budget + borrowing, profiles, config validation, dynamic config; +~15 in round 5: §42-43, 62-67, 78-79, 111-112, 132-136; round 4 added §58-61, 69, 81/83/87, 91-97, 99-104, 124-126, 129, 169-171; 434 tests across unit/property/concurrency/scenario/fuzz/audit/DoD/facade) | `docs/docs/08-resource-limits-backpressure-architecture.md` |
 | 09 | siar-crash-recovery | 🟡 **~15/186** (earliest-stage of the nine) | `docs/docs/09-crash-recovery-architecture.md` |
 
 **Three real, unresolved reconciliation questions**, deliberately not
@@ -203,6 +203,17 @@ had 1697 passing / 0 failing at last count. Defects fixed:
   `storage_classes`; (c) `ResourceError` lacked most of §169's variants.
   Adding variants to `ResourceError` can break exhaustive `match`es in
   callers (compile-time, easy to fix).
+- 08 (round 13): `OutboxAccounting` charged critical entries sitting in
+  the reserve against *normal* capacity (freeing a normal slot gave none
+  back); `plan_recovery`/`restore_reservations` could place one durable id
+  in two buckets and restore the wrong record when ids repeated (found by
+  the new fuzz target on its first corpus run); `fuzz_entry` needed a
+  dev-only dependency in normal builds (found by building the real fuzz
+  targets — test/clippy `--all-targets` builds mask missing normal deps,
+  so a plain `cargo check --workspace` is now part of the checklist).
+  `ResourceError`, `Retryability`, `RetryClass`, `ResourceCause` and
+  `UserMessage` are `#[non_exhaustive]`: downstream exhaustive `match`es
+  need a wildcard arm once.
 Not touched: the three open reconciliation questions above.
 
 ---

@@ -230,6 +230,8 @@ pub struct OutboxAccounting {
     bytes: u64,
     bulk_count: usize,
     bulk_bytes: u64,
+    critical_count: usize,
+    critical_bytes: u64,
 }
 
 impl OutboxAccounting {
@@ -242,6 +244,8 @@ impl OutboxAccounting {
             bytes: 0,
             bulk_count: 0,
             bulk_bytes: 0,
+            critical_count: 0,
+            critical_bytes: 0,
         }
     }
 
@@ -258,9 +262,20 @@ impl OutboxAccounting {
         }
         let open_count = l.max_count.saturating_sub(l.critical_reserve_count);
         let open_bytes = l.max_bytes.saturating_sub(l.critical_reserve_bytes);
-        let (count_cap, bytes_cap) = match class {
-            OutboxClass::Critical => (l.max_count, l.max_bytes),
-            OutboxClass::Normal | OutboxClass::Bulk => (open_count, open_bytes),
+        // Critical entries live in the reserve first, so only their
+        // *overflow* past the reserve occupies the open space normal and
+        // bulk compete for. (Counting them in full would make a used
+        // reserve shrink normal's capacity a second time.)
+        let reserve_used_count = self.critical_count.min(l.critical_reserve_count);
+        let reserve_used_bytes = self.critical_bytes.min(l.critical_reserve_bytes);
+        let (used_count, count_cap, used_bytes, bytes_cap) = match class {
+            OutboxClass::Critical => (self.count, l.max_count, self.bytes, l.max_bytes),
+            OutboxClass::Normal | OutboxClass::Bulk => (
+                self.count - reserve_used_count,
+                open_count,
+                self.bytes - reserve_used_bytes,
+                open_bytes,
+            ),
         };
         let new_bytes = self
             .bytes
@@ -275,10 +290,10 @@ impl OutboxAccounting {
                 return Err(OutboxReject::BulkFull);
             }
         }
-        if self.count + 1 > count_cap {
+        if used_count + 1 > count_cap {
             return Err(OutboxReject::CountFull);
         }
-        if new_bytes > bytes_cap {
+        if used_bytes.checked_add(bytes).is_none_or(|n| n > bytes_cap) {
             return Err(OutboxReject::BytesFull);
         }
         let id = self.next_id;
@@ -297,6 +312,10 @@ impl OutboxAccounting {
             self.bulk_count += 1;
             self.bulk_bytes += bytes;
         }
+        if class == OutboxClass::Critical {
+            self.critical_count += 1;
+            self.critical_bytes += bytes;
+        }
         Ok(id)
     }
 
@@ -310,6 +329,10 @@ impl OutboxAccounting {
         if e.class == OutboxClass::Bulk {
             self.bulk_count -= 1;
             self.bulk_bytes -= e.bytes;
+        }
+        if e.class == OutboxClass::Critical {
+            self.critical_count -= 1;
+            self.critical_bytes -= e.bytes;
         }
         true
     }
@@ -461,6 +484,39 @@ mod tests {
             OutboxReject::CountFull
         );
         assert_eq!(o.len(), 10);
+    }
+
+    #[test]
+    fn critical_use_of_the_reserve_does_not_shrink_normal_capacity() {
+        let mut o = OutboxAccounting::new(ol()); // 10 items; reserve 2 -> open 8
+        let mut normal = Vec::new();
+        while let Ok(id) = o.try_add(OutboxClass::Normal, 10, 1_000, 0) {
+            normal.push(id);
+        }
+        assert_eq!(normal.len(), 8);
+        let c1 = o.try_add(OutboxClass::Critical, 10, 1_000, 0).unwrap();
+        let _c2 = o.try_add(OutboxClass::Critical, 10, 1_000, 0).unwrap();
+        // Normal is still full (the reserve is not normal's space) ...
+        assert_eq!(
+            o.try_add(OutboxClass::Normal, 10, 1_000, 0).unwrap_err(),
+            OutboxReject::CountFull
+        );
+        // ... freeing ONE normal entry gives normal exactly one slot back,
+        // even though both reserve slots are in use by critical entries.
+        o.remove(normal.pop().unwrap());
+        assert!(o.try_add(OutboxClass::Normal, 10, 1_000, 0).is_ok());
+        assert_eq!(
+            o.try_add(OutboxClass::Normal, 10, 1_000, 0).unwrap_err(),
+            OutboxReject::CountFull
+        );
+        // Releasing a critical entry does not hand normal extra space either,
+        o.remove(c1);
+        assert_eq!(
+            o.try_add(OutboxClass::Normal, 10, 1_000, 0).unwrap_err(),
+            OutboxReject::CountFull
+        );
+        // and the reserve slot is available to critical again.
+        assert!(o.try_add(OutboxClass::Critical, 10, 1_000, 0).is_ok());
     }
 
     #[test]

@@ -91,6 +91,20 @@ pub struct RecoveryPlan {
     pub drop_stale_active: Vec<OpId>,
     /// Needs storage but holds no live reservation: re-reserve (or defer).
     pub needs_reservation: Vec<OpId>,
+    /// Ids that appeared on more than one record. A durable id is a
+    /// primary key, so this is corruption: only the first record (in a
+    /// fixed, input-order-independent ordering) is considered and the id
+    /// lands in exactly one bucket above; the applier should treat the
+    /// rest as damage to investigate, not act on them.
+    pub duplicate_ids: Vec<DurableResId>,
+}
+
+/// The one ordering both planning and restoring use to pick a winner
+/// among records that share an id.
+fn canonical_order(records: &[DurableReservation]) -> Vec<&DurableReservation> {
+    let mut v: Vec<&DurableReservation> = records.iter().collect();
+    v.sort_by_key(|r| (r.id, r.op, r.bytes, r.expires_at_millis));
+    v
 }
 
 pub fn plan_recovery(input: &RecoveryInput, now_millis: u64) -> RecoveryPlan {
@@ -103,9 +117,13 @@ pub fn plan_recovery(input: &RecoveryInput, now_millis: u64) -> RecoveryPlan {
     let mut orphans = BTreeSet::new();
     let mut has_live_reservation: HashSet<OpId> = HashSet::new();
 
-    let mut by_id: Vec<&DurableReservation> = input.reservations.iter().collect();
-    by_id.sort_by_key(|r| r.id); // deterministic: lowest id wins duplicates
-    for r in by_id {
+    let mut seen: HashSet<DurableResId> = HashSet::new();
+    let mut duplicates = BTreeSet::new();
+    for r in canonical_order(&input.reservations) {
+        if !seen.insert(r.id) {
+            duplicates.insert(r.id);
+            continue;
+        }
         let Some(op) = r.op.filter(|op| known.contains(op)) else {
             orphans.insert(r.id);
             continue;
@@ -154,6 +172,7 @@ pub fn plan_recovery(input: &RecoveryInput, now_millis: u64) -> RecoveryPlan {
         reset_active_to_queued: reset.into_iter().collect(),
         drop_stale_active: stale.into_iter().collect(),
         needs_reservation: needs.into_iter().collect(),
+        duplicate_ids: duplicates.into_iter().collect(),
     }
 }
 
@@ -173,8 +192,11 @@ pub fn restore_reservations(
     plan: &RecoveryPlan,
     now_millis: u64,
 ) -> RestoreOutcome {
-    let by_id: HashMap<DurableResId, &DurableReservation> =
-        records.iter().map(|r| (r.id, r)).collect();
+    // Same winner-per-id rule as planning (first in canonical order).
+    let mut by_id: HashMap<DurableResId, &DurableReservation> = HashMap::new();
+    for r in canonical_order(records) {
+        by_id.entry(r.id).or_insert(r);
+    }
     let mut out = RestoreOutcome::default();
     for id in &plan.restore {
         let Some(r) = by_id.get(id) else { continue };
@@ -352,6 +374,52 @@ mod tests {
             vec![OpId(20), OpId(30)],
             "sorted and deduplicated"
         );
+    }
+
+    #[test]
+    fn a_duplicated_id_lands_in_exactly_one_bucket_and_is_reported() {
+        // Same id twice: one record live, one expired. The old behaviour put
+        // the id in both `restore` and `release_expired`.
+        let input = RecoveryInput {
+            reservations: vec![res(7, Some(1), 10, 9_999), res(7, Some(1), 10, 5)],
+            work_queue: vec![work(1, true)],
+            ..Default::default()
+        };
+        let p = plan_recovery(&input, 1_000);
+        let id = DurableResId(7);
+        let buckets = [
+            p.restore.contains(&id),
+            p.release_expired.contains(&id),
+            p.release_orphans.contains(&id),
+        ];
+        assert_eq!(buckets.iter().filter(|b| **b).count(), 1, "{p:?}");
+        assert_eq!(p.duplicate_ids, vec![id]);
+        let mut rev = input.clone();
+        rev.reservations.reverse();
+        assert_eq!(plan_recovery(&rev, 1_000), p, "independent of input order");
+    }
+
+    #[test]
+    fn restoring_uses_the_same_winner_planning_chose() {
+        let a = res(7, Some(1), 100, 9_999);
+        let b = res(7, Some(1), 400, 9_999);
+        for order in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
+            let input = RecoveryInput {
+                reservations: order.clone(),
+                work_queue: vec![work(1, true)],
+                ..Default::default()
+            };
+            let plan = plan_recovery(&input, 0);
+            let mut store =
+                StorageReservations::new(1_000, CriticalStorageReserve { reserved_bytes: 0 });
+            let out = restore_reservations(&mut store, &order, &plan, 0);
+            assert_eq!(out.restored.len(), 1);
+            assert_eq!(
+                store.reserved_bytes(),
+                100,
+                "the canonical (smaller) record, whatever the input order"
+            );
+        }
     }
 
     #[test]

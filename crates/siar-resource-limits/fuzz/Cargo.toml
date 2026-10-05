@@ -1,0 +1,74 @@
+[package]
+name = "siar-resource-limits-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+siar-resource-limits = { path = "..", features = ["fuzzing"] }
+
+# Kept out of the main workspace: run with `cargo +nightly fuzz run <target>`
+# from the crate directory (needs `cargo install cargo-fuzz`).
+[workspace]
+
+
+[[bin]]
+name = "frame_decoder"
+path = "fuzz_targets/frame_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persisted_settings"
+path = "fuzz_targets/persisted_settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "quota_update"
+path = "fuzz_targets/quota_update.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "admission_request"
+path = "fuzz_targets/admission_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "negotiation_offer"
+path = "fuzz_targets/negotiation_offer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file_offer"
+path = "fuzz_targets/file_offer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unknown_hello"
+path = "fuzz_targets/unknown_hello.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "recovery_plan"
+path = "fuzz_targets/recovery_plan.rs"
+test = false
+doc = false
+bench = false
+

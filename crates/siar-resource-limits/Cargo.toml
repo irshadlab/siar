@@ -9,9 +9,14 @@ rust-version.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 blake3.workspace = true
+postcard = { workspace = true, optional = true }
 siar-domain = { path = "../siar-domain" }
 siar-protocol-ext = { path = "../siar-protocol-ext" }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[features]
+# Exposes `fuzz_entry` (used by the cargo-fuzz harness in `fuzz/`).
+fuzzing = ["dep:postcard"]
 
 [dev-dependencies]
 postcard.workspace = true

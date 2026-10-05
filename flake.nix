@@ -1,5 +1,5 @@
 {
-  description = "SIAR - Sovereign, Interoperable, Asynchronous, Resilient Communications System";
+  description = "SIAR - Survival Identity & Autonomous Routing Communications System";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

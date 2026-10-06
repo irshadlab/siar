@@ -8,7 +8,37 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — file transfer recovery (§18-21)
+//! ## This pass — §22-33 (blob/temp-file safety, DTN, identity)
+//!
+//! - [`atomic_rename`] — §22: [`atomic_rename::rename_viability`] makes
+//!   "never assume atomicity across filesystems" a check that must pass
+//!   (unknown filesystem identity is *refused*, not assumed);
+//!   [`atomic_rename::publish_atomic`] is the real rename + parent-dir
+//!   fsync.
+//! - [`temp_scan`] — §23 opaque temp ids + five-way classification,
+//!   §24 cleanup policy built from the three levers the spec names
+//!   (ownership metadata, age threshold, runtime generation). Corrupt
+//!   files are quarantined, never silently deleted; unknown-owner files
+//!   survive until hard expiry.
+//! - [`blob_refs`] — §25 rebuild/audit/repair of derived reference
+//!   counts (drift classified, undercount flagged dangerous) and §26
+//!   staged-GC recovery decided from *observed facts*, not from the
+//!   persisted stage (a stale "rechecked" is never trusted).
+//! - [`dtn_recovery`] — §27 restore plan (expire, restore budgets
+//!   without resetting them, honour live tombstones, scheduler last),
+//!   §28 relay dedup-and-re-ACK, §29 owed-until-confirmed destination
+//!   ACKs with idempotent origin-side apply, §30 bounded forward
+//!   history that can only ever make forwarding *more* permissive when
+//!   data is missing. Uses the real `siar_dtn_bundle::BundleId`.
+//! - [`identity_recovery`] — §31 five-check verdict that fails closed
+//!   (unverifiable = failed), §32 fork detection with no auto-merge
+//!   path (only a user-confirmed `ExplicitReconciliation`), §33
+//!   post-commit revocation recovery plus the one honestly-surfaced
+//!   case where a pre-commit crash needs re-approval.
+//!
+//! ## Earlier passes
+//!
+//! ### File transfer recovery (§18-21)
 //!
 //! - [`chunk_recovery`] — §18 "File Transfer Recovery", §19 "Chunk
 //!   Commit Ordering", §20 "Chunk State Ambiguity":
@@ -31,7 +61,7 @@
 //!   tested against each named scenario individually rather than
 //!   only the cases the spec happened to call out.
 //!
-//! ## Earlier this pass — messaging recovery (§14-17)
+//! ### Messaging recovery (§14-17)
 //!
 //! - [`messaging_recovery`] — §14 "Messaging Recovery", §15
 //!   "Ambiguous Send Result", §16 "Delivery Receipt Recovery", §17
@@ -54,7 +84,7 @@
 //!   name already exist as concrete types elsewhere in this
 //!   workspace.
 //!
-//! ## Earlier this pass — §11-13
+//! ### §11-13
 //!
 //! - [`staged_intent`] — §11 "WAL Is Not Enough", §12 "Cross-Store
 //!   Atomicity": [`staged_intent::StagedOperationState`] (§12's
@@ -74,7 +104,7 @@
 //!   still get wrong at each call site: a missing record is always
 //!   treated as incomplete, never as implied success.
 //!
-//! ## Earlier this pass — §6-9
+//! ### §6-9
 //!
 //! - [`shutdown_marker`] — §6 "Clean Shutdown Marker":
 //!   [`shutdown_marker::ShutdownMarker`]/[`shutdown_marker::ShutdownMarkerStore`]
@@ -116,30 +146,52 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §21 — atomic
-//! rename/temp-file/orphan cleanup (§22-24), blob reference recovery
-//! (§25+), DTN/gateway recovery, and the rest of this 100+ section
-//! spec — is not attempted this pass.
+//! which this doc comment now does. Everything past §33 (session,
+//! capability, routing, resource, outbox, projection, corruption,
+//! backup, and the rest of this 186-section spec) is not yet attempted.
 
+pub mod atomic_rename;
+pub mod blob_refs;
 pub mod chunk_recovery;
+pub mod dtn_recovery;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
+pub mod identity_recovery;
 pub mod messaging_recovery;
 pub mod operation_state;
 pub mod shutdown_marker;
 pub mod staged_intent;
 pub mod state_machine;
+pub mod temp_scan;
 pub mod transaction_group;
 
+pub use atomic_rename::{
+    filesystem_id_of, publish_atomic, rename_viability, FilesystemId, PublishError, RenameViability,
+};
+pub use blob_refs::{
+    audit_ref_counts, authoritative_count, rebuild_ref_counts, reconcile_gc, repair_ref_counts,
+    DriftKind, GcFacts, GcRecoveryAction, GcStage, RefCountDrift, RefCounts,
+};
 pub use chunk_recovery::{
     reconcile_chunk_on_restart, ChunkRecoveryAction, ChunkRecoveryMap, ChunkRecoveryState,
     TransferId,
+};
+pub use dtn_recovery::{
+    plan_dtn_restore, restore_budget, AckApply, AckStatus, BudgetRestore, DestinationAckLedger,
+    DestinationReceive, DtnRestorePlan, DtnRestoreStep, ForwardHistory, ForwardRecord,
+    OriginAckTracker, RelayLedger, RelayReceiveOutcome, StoredBundle, Tombstone,
 };
 pub use finalization_recovery::{
     reconcile_finalization, FinalizationRecoveryAction, FinalizationState,
 };
 pub use idempotent_steps::{
     run_recovery, RecoveryLedger, RecoveryStep, RecoveryStepError, RecoveryStepId,
+};
+pub use identity_recovery::{
+    detect_identity_forks, recover_revocation, sessions_to_invalidate, verify_identity,
+    AccountStateSummary, CheckOutcome, ExplicitReconciliation, IdentityEvidence, IdentityFailure,
+    IdentityForkDetected, IdentityVerdict, ReconciliationError, RevocationFacts,
+    RevocationRecovery, RevocationStage,
 };
 pub use messaging_recovery::{
     apply_receipt, reload_outbox, Deduplicator, DiscardReason, InboundReceiveOutcome,
@@ -153,4 +205,8 @@ pub use shutdown_marker::{
 };
 pub use staged_intent::{reconcile, ReconciliationAction, StagedOperationState};
 pub use state_machine::{InvalidTransition, RecoveryState, RecoveryStateMachine};
+pub use temp_scan::{
+    classify_temp_file, cleanup_decision, plan_cleanup, CleanupDecision, CleanupPolicy, KeepReason,
+    OpaqueTempId, ScanContext, TempArea, TempClass, TempFileEntry, TempOwnership,
+};
 pub use transaction_group::{TransactionGroup, TransactionStep};

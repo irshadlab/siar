@@ -46,11 +46,13 @@ impl Default for StalenessPolicy {
     }
 }
 
+#[derive(Debug)]
 struct Entry {
     view: PeerCapabilityView,
     observed_at_millis: u64,
 }
 
+#[derive(Debug)]
 pub struct CapabilityCache {
     entries: HashMap<PeerKey, Entry>,
     max_entries: usize,

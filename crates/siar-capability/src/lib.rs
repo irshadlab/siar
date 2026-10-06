@@ -6,6 +6,37 @@
 //! against the spec's own section numbers rather than a shallow first
 //! pass across all 164 sections.
 //!
+//! ## Round N+3 — §57-60, 75-76, 84-86, 97-98, 104-107
+//!
+//! - [`ui_adapter`] — the spec's five-boolean `UiCapabilities`, derived
+//!   from negotiated state (authoritative), a cache (a *fresh* absence
+//!   disables an action; stale/missing never does — §58), or nothing
+//!   (everything stays enabled). User-facing text is a closed fieldless
+//!   enum with stable l10n keys; technical detail lives only in
+//!   `diagnostic_detail`.
+//! - [`lazy`] — hierarchical/lazy negotiation: a tiny per-extension
+//!   summary at connect time, the full set exchanged on first use, with
+//!   per-extension state so one failing extension cannot disturb another.
+//! - [`failure`] — consequence policy: security-class failures end the
+//!   session; everything else disables only the extension it happened in.
+//! - [`direction`] — send/receive capabilities as a two-bit set with a
+//!   *cross* negotiation rule. (The generic bitset AND would have kept
+//!   "send" alive between two send-only devices; a test pins the
+//!   difference.)
+//! - [`trust`] — type-level separation of contract vs hint: directory
+//!   hints and relay self-reports (clamped) cannot back a security
+//!   decision; attestation never gates negotiation.
+//! - [`resume`] — reconnect always renegotiates; the optional shortcut is
+//!   off by default and needs policy, mutual support, an authenticated
+//!   session and a matching hash.
+//!
+//! Defect fixed during the round: `HierarchicalSession::finish` accepted
+//! a result for an extension that was never begun or that the peer does
+//! not support, so a stray `Ok` made an unsupported extension *usable* and
+//! a forged fatal `Err` could terminate a healthy session (found by a
+//! property test; results are now honoured only for a negotiation in
+//! flight). `CapabilityCache` also gained `Debug`.
+//!
 //! ## Round N+2 — §13-15, §40-44, §89-93, §108-111, §136-138
 //!
 //! - [`advertisement`] — authenticated, session-bound, replay-resistant
@@ -152,23 +183,29 @@ pub mod advertisement;
 pub mod cache;
 pub mod descriptor;
 pub mod device_view;
+pub mod direction;
 pub mod dtn_extension;
 pub mod epoch;
 pub mod error;
 pub mod extension;
+pub mod failure;
 pub mod files_extension;
 pub mod guard;
 pub mod hash;
 pub mod health;
 pub mod id;
+pub mod lazy;
 pub mod media_extension;
 pub mod negotiate;
 pub mod policy;
 pub mod privacy;
 pub mod registry;
+pub mod resume;
 pub mod security;
 pub mod set;
 pub mod transcript;
+pub mod trust;
+pub mod ui_adapter;
 pub mod version;
 
 pub use advertisement::{

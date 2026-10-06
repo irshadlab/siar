@@ -7218,6 +7218,7 @@ dependencies = [
  "siar-domain",
  "siar-dtn-bundle",
  "siar-event-log",
+ "siar-routing-policy",
  "thiserror 2.0.19",
  "uuid",
  "workspace-hack",

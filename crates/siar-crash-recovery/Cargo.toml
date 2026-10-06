@@ -12,6 +12,7 @@ siar-domain = { path = "../siar-domain" }
 siar-event-log = { path = "../siar-event-log" }
 siar-blob-manifest = { path = "../siar-blob-manifest" }
 siar-dtn-bundle = { path = "../siar-dtn-bundle" }
+siar-routing-policy = { path = "../siar-routing-policy" }
 uuid.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 

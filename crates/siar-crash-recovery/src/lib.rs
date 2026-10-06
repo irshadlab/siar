@@ -8,7 +8,30 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §22-33 (blob/temp-file safety, DTN, identity)
+//! ## This pass — §34-46 (sessions, routes, reservations, derived state)
+//!
+//! - [`session_recovery`] — §34 [`session_recovery::SessionHandle`]
+//!   carries its runtime generation, so every pre-crash session is
+//!   invalid by construction (and deliberately not `Serialize`); §35
+//!   resumption-ticket gate (expiry, revocation, account-generation
+//!   and secure-storage binding) that defaults to *Disabled*, with the
+//!   secret redacted from `Debug`; §36 `CapabilityHint` that can be
+//!   displayed but never promoted to a negotiated contract.
+//! - [`route_resource_recovery`] — §37 persisted route hints can only
+//!   produce `UnvalidatedCandidate`s; the sole way to a
+//!   `ValidatedCandidate` is a live check. §38 restart treatment per
+//!   resource class. §39 reservation reconciliation (restore / hold /
+//!   defer-to-orphan-cleanup / release) with byte totals.
+//! - [`derived_recovery`] — §40 outbox↔event-state reconciliation
+//!   (unknown outbox rows are flagged, never deleted), §41 projection
+//!   checkpoint/replay/rebuild plan, §42 corruption response (derived →
+//!   rebuild, authoritative → halt into `ManualRepairRequired`), §43
+//!   search-index lifecycle, §44 recent-first chat-list rebuild order.
+//! - [`progressive`] — §45 phases and §46 priority tiers as a `Copy`
+//!   bitmask machine: usable once critical tiers are done, secondary
+//!   work refused until then.
+//!
+//! ## Previous pass — §22-33
 //!
 //! - [`atomic_rename`] — §22: [`atomic_rename::rename_viability`] makes
 //!   "never assume atomicity across filesystems" a check that must pass
@@ -146,19 +169,23 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §33 (session,
-//! capability, routing, resource, outbox, projection, corruption,
-//! backup, and the rest of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §46 (read-only/degraded/fatal modes, corruption
+//! classification, backup/restore, idempotent receivers, and the rest
+//! of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod blob_refs;
 pub mod chunk_recovery;
+pub mod derived_recovery;
 pub mod dtn_recovery;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
 pub mod identity_recovery;
 pub mod messaging_recovery;
 pub mod operation_state;
+pub mod progressive;
+pub mod route_resource_recovery;
+pub mod session_recovery;
 pub mod shutdown_marker;
 pub mod staged_intent;
 pub mod state_machine;
@@ -175,6 +202,12 @@ pub use blob_refs::{
 pub use chunk_recovery::{
     reconcile_chunk_on_restart, ChunkRecoveryAction, ChunkRecoveryMap, ChunkRecoveryState,
     TransferId,
+};
+pub use derived_recovery::{
+    chat_list_rebuild_order, plan_projection, reconcile_outbox, reconcile_outbox_entry,
+    respond_to_corruption, CorruptionResponse, OutboxAction, ProjectionCheckpoint, ProjectionPlan,
+    RebuildReason, SearchIndexRecovery, SearchIndexState, SemanticMessageState, StoreClass,
+    StreamActivity,
 };
 pub use dtn_recovery::{
     plan_dtn_restore, restore_budget, AckApply, AckStatus, BudgetRestore, DestinationAckLedger,
@@ -199,6 +232,16 @@ pub use messaging_recovery::{
     ReceiptApplyOutcome,
 };
 pub use operation_state::{is_definitely_complete, FileOperationState};
+pub use progressive::{ProgressError, ProgressiveRecovery, RecoveryPhase, RecoveryTier};
+pub use route_resource_recovery::{
+    bootstrap_candidates, reconcile_reservation, reconcile_reservations, restart_treatment,
+    ReservationAction, ReservationId, ReservationKind, ReservationPlan, ResourceClass,
+    RestartTreatment, RouteHints, StorageReservation, UnvalidatedCandidate, ValidatedCandidate,
+};
+pub use session_recovery::{
+    validate_ticket, CapabilityHint, ResumptionContext, ResumptionPolicy, ResumptionTicket,
+    SessionHandle, TicketRejection,
+};
 pub use shutdown_marker::{
     classify_startup, recommended_scope, InMemoryShutdownMarkerStore, RecoveryScope,
     RuntimeGeneration, ShutdownMarker, ShutdownMarkerStore, StartupKind,

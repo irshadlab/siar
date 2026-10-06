@@ -7216,6 +7216,7 @@ dependencies = [
  "serde",
  "siar-blob-manifest",
  "siar-domain",
+ "siar-dtn-bundle",
  "siar-event-log",
  "thiserror 2.0.19",
  "uuid",

@@ -190,6 +190,10 @@ pub struct CoordinatorOutcome {
     pub halted_at: Option<(CleanupPhase, &'static str)>,
     /// Subsystem names in the order they actually ran.
     pub ran: Vec<&'static str>,
+    /// Worst severity seen per phase, indexed like `CleanupPhase::ORDER`.
+    /// `None` = no subsystem ran in that phase (none registered, the
+    /// phase was skipped, or recovery halted before reaching it).
+    pub phase_severity: [Option<RecoverySeverity>; 6],
 }
 
 #[derive(Default)]
@@ -223,22 +227,26 @@ impl RecoveryCoordinator {
         let mut ran = Vec::new();
         let mut halted_at = None;
         let mut phases_completed = 0;
+        let mut phase_severity: [Option<RecoverySeverity>; 6] = [None; 6];
 
         'phases: for phase in CleanupPhase::ORDER {
             // Destructive GC/temp cleanup never runs in read-only mode.
             let skip =
                 phase == CleanupPhase::CacheAndTempCleanup && ctx.mode == RecoveryMode::ReadOnly;
             if !skip {
+                let slot = phase as usize;
                 for s in self.subsystems.iter().filter(|s| s.phase() == phase) {
                     ran.push(s.name());
                     match s.recover(ctx).await {
                         Ok(r) => {
                             acc.record(r.severity);
+                            phase_severity[slot] = phase_severity[slot].max(Some(r.severity));
                             report.repaired_items.extend(r.actions);
                             report.warnings.extend(r.warnings);
                         }
                         Err(e) => {
                             acc.record(e.severity);
+                            phase_severity[slot] = phase_severity[slot].max(Some(e.severity));
                             report.warnings.push(RecoveryWarning {
                                 code: WarningCode::SubsystemRecoveryFailed,
                                 count: 1,
@@ -267,6 +275,7 @@ impl RecoveryCoordinator {
             phases_completed,
             halted_at,
             ran,
+            phase_severity,
         }
     }
 }

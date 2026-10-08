@@ -8,7 +8,34 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §136-150 (coordination, maintenance, restore, security)
+//! ## This pass — §151-165 (keys, config, extensions, runtime API)
+//!
+//! - [`key_recovery`] — §151 non-exportable device keys always mean a
+//!   *new device identity* (never a pretend restore), with the user-
+//!   facing wording; §152 `PERSISTED_SESSION_KEYS_ALLOWED = false` and
+//!   a session-key plan that resumes only through the §35 ticket
+//!   checks; §153 group keys that are missing or behind always request
+//!   an authorized resync (there is no derive-locally outcome), and
+//!   resync offers get the §147 security check.
+//! - [`config_durability`] — §154 per-class config fallback
+//!   (security-critical settings fall to *safe mode*, never a
+//!   permissive default; corrupt file preserved, user data untouched),
+//!   §155 real atomic config writes and `write_config_keeping_lkg`,
+//!   §156 strict load decision (malformed/invalid/version), §157 an
+//!   8-byte versioned header for durable values and a decode plan that
+//!   only decodes directly on an exact version match.
+//! - [`extensions`] — §158 descriptors must declare durable-state
+//!   version, recovery hook and resource cleanup; §159 repeated
+//!   recovery failure quarantines an extension (reusing the
+//!   supervisor's windowed tracker); the core always starts, and a
+//!   disabled *core-adjacent* extension makes the start read-only.
+//! - [`runtime_api`] — §160 `Runtime::recover()` as the single entry
+//!   point, §161 `recovery_report()`, §162 `RuntimeHealth` derived per
+//!   phase (never-verified components are `Unavailable`), §163 a
+//!   lock-free `AdmissionGate` (defer durable work during recovery,
+//!   then defer to the severity gate), §164/§165 `ListenerBarrier`.
+//!
+//! ## Previous pass — §136-150
 //!
 //! - [`coordinator`] — §136 `RecoverableSubsystem` (native `async fn`
 //!   in a trait) owned by each subsystem; `RecoveryCoordinator` runs
@@ -359,16 +386,18 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §150 (key backup policy §151, session/group key
-//! recovery, config/RON/Postcard durability, extensions, the runtime
-//! API, and the closing definition-of-done sections — the remaining
-//! ~35 sections of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §165 (lazy secondary recovery §166, versioned
+//! recovery protocol, relay cluster/multipath/battery/proximity/
+//! linking/emergency notes, FFI/WASM/interop, crate structure, error
+//! model, scope, phases and definition-of-done — the remaining ~21
+//! sections of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod backup_restore;
 pub mod blob_refs;
 pub mod chunk_recovery;
 pub mod cleanup_quarantine;
+pub mod config_durability;
 pub mod coordinator;
 pub mod corruption;
 pub mod crash_injection;
@@ -379,6 +408,7 @@ pub mod effect_journal;
 pub mod effects_io;
 pub mod ephemeral_recovery;
 pub mod ephemeral_state;
+pub mod extensions;
 pub mod failpoint;
 pub mod fault_policy;
 pub mod fault_scenarios;
@@ -389,6 +419,7 @@ pub mod identity_recovery;
 pub mod integrity_maintenance;
 #[cfg(test)]
 mod invariants;
+pub mod key_recovery;
 pub mod local_first;
 pub mod locks;
 pub mod messaging_recovery;
@@ -405,6 +436,7 @@ pub mod repair_tools;
 pub mod reporting;
 pub mod restore_scope;
 pub mod route_resource_recovery;
+pub mod runtime_api;
 pub mod session_recovery;
 pub mod shutdown_marker;
 pub mod staged_intent;
@@ -432,6 +464,12 @@ pub use chunk_recovery::{
 };
 pub use cleanup_quarantine::{
     CleanupPhase, CleanupSequencer, OutOfOrder, Quarantine, QuarantineEntry, QuarantineOutcome,
+};
+pub use config_durability::{
+    config_load_decision, decode_plan, encode_durable_header, last_known_good_path,
+    on_config_parse_failure, parse_durable_header, write_config_atomic, write_config_keeping_lkg,
+    ConfigFallback, ConfigLoad, ConfigRecovery, DecodePlan, HeaderError, SettingClass,
+    DURABLE_HEADER_LEN,
 };
 pub use coordinator::{
     check_depth, full_check_due, startup_mode, CheckDepth, CoordinatorOutcome,
@@ -477,6 +515,11 @@ pub use ephemeral_state::{
     storage_pressure, CapabilityRecovery, DiscoveredEntry, DiscoveryRecovery, DynamicCapability,
     PressureKind, PressureLevel, PressureSource, StorageThresholds,
 };
+pub use extensions::{
+    validate_descriptor, Criticality, ExtensionDescriptor, ExtensionId, ExtensionStartPlan,
+    ExtensionState, ExtensionSupervisor, MissingDeclaration,
+    QuarantineOutcome as ExtensionQuarantine,
+};
 pub use failpoint::{FailAction, Triggered};
 pub use fault_policy::{
     chunk_may_be_marked_complete, cleanup_ran, disk_full_response, fail_fast, recovery_required,
@@ -505,6 +548,11 @@ pub use integrity_maintenance::{
     scrub_sample_size, select_scrub_sample, BackupDrill, BackupTrust, BitRotPlan,
     BitRotRepairSource, DrillError, DrillStep, NoSafeBackupMethod, RawCopyFacts,
     RepairAvailability, ScrubPolicy, SqliteBackupMethod,
+};
+pub use key_recovery::{
+    accept_resync_offer, device_restore_plan, group_key_action, session_key_plan, DeviceKeyPolicy,
+    DeviceRestorePlan, GroupKeyAction, GroupKeyFacts, ResyncReason, SessionKeyPlan,
+    PERSISTED_SESSION_KEYS_ALLOWED,
 };
 pub use local_first::{
     cleanup_phase_requires_network, is_usable, open_state, peer_repair_plan, tier_requires_network,
@@ -570,6 +618,10 @@ pub use route_resource_recovery::{
     bootstrap_candidates, reconcile_reservation, reconcile_reservations, restart_treatment,
     ReservationAction, ReservationId, ReservationKind, ReservationPlan, ResourceClass,
     RestartTreatment, RouteHints, StorageReservation, UnvalidatedCandidate, ValidatedCandidate,
+};
+pub use runtime_api::{
+    Admission, AdmissionGate, HealthState, ListenerBarrier, ListenerStage, RecoverError, Runtime,
+    RuntimeHealth, RuntimeState,
 };
 pub use session_recovery::{
     validate_ticket, CapabilityHint, ResumptionContext, ResumptionPolicy, ResumptionTicket,

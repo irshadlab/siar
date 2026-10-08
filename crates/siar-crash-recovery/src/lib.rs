@@ -8,7 +8,33 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §61-75 (effect journal, platforms, supervision)
+//! ## This pass — §76-90 (faults, migrations, metadata, locks)
+//!
+//! - [`fault_policy`] — §76 scope→strategy (only worker-local
+//!   violations restart a worker; shared-state or durable-write risk
+//!   aborts the process) with `fail_fast`; §77 OOM counts as a crash
+//!   with no cleanup; §78-80 one `disk_full_response` per stage:
+//!   never claim acceptance or progress, transfer lands in
+//!   `FailedStorage`, user action stays available; a chunk is
+//!   complete only after a durable write.
+//! - [`migration_recovery`] — §81 deterministic migration-crash
+//!   decision (mark-complete / rerun / rollback-from-backup / manual
+//!   repair, never a guess), §82 only the lock-holding daemon
+//!   migrates, §83 backup-vs-checkpoint by size for destructive steps,
+//!   §84 event content is immutable, §85 open-compatibility
+//!   (current / migrate / too-new / too-old), §86
+//!   `min_reader`/`min_writer` downgrade check (reject, read-only, or
+//!   read-write).
+//! - [`recovery_metadata`] — §87 `RecoveryMetadata`, §88 generation
+//!   bumped per successful start (checked, never wraps), §89
+//!   `OwnershipStamp` classification (current operation / stale orphan
+//!   / unclaimed / from-the-future-never-delete).
+//! - [`locks`] — §90 a real OS file lock (`File::try_lock`, released
+//!   by the kernel on process death) plus `lock_is_stale`, which
+//!   needs PID *and* process start time and never steals from an
+//!   undeterminable owner.
+//!
+//! ## Previous pass — §61-75
 //!
 //! - [`effect_journal`] — §61 five-state journal with validated
 //!   transitions; §62/§63 `InFlight` → `UnknownOutcome` after a crash
@@ -217,9 +243,9 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §75 (process-wide panic strategy, OOM, disk-full,
-//! migrations, versioning, locks, timers, scheduler, SOS and
-//! re-evaluation sections, and the rest of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §90 (monotonic-vs-wall time, retry timers, backoff,
+//! thundering herd, recovery scheduler, SOS and re-evaluation
+//! sections, and the rest of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod backup_restore;
@@ -231,13 +257,17 @@ pub mod dtn_recovery;
 pub mod effect_identity;
 pub mod effect_journal;
 pub mod effects_io;
+pub mod fault_policy;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
 pub mod identity_recovery;
+pub mod locks;
 pub mod messaging_recovery;
+pub mod migration_recovery;
 pub mod operation_state;
 pub mod platform_recovery;
 pub mod progressive;
+pub mod recovery_metadata;
 pub mod recovery_mode;
 pub mod route_resource_recovery;
 pub mod session_recovery;
@@ -290,6 +320,11 @@ pub use effects_io::{
     plan_export_recovery, unique_numbered_name, ExportFacts, ExportPolicy, ExportRecoveryAction,
     NotificationDeduper, NotificationKey, NotificationOutcome,
 };
+pub use fault_policy::{
+    chunk_may_be_marked_complete, cleanup_ran, disk_full_response, fail_fast, recovery_required,
+    strategy_for, ChunkWriteResult, DiskFullOutcome, DiskFullStage, ExitKind, PanicStrategy,
+    SpaceAction, TransferStorageState, ViolationScope,
+};
 pub use finalization_recovery::{
     reconcile_finalization, FinalizationRecoveryAction, FinalizationState,
 };
@@ -302,10 +337,17 @@ pub use identity_recovery::{
     IdentityForkDetected, IdentityVerdict, ReconciliationError, RevocationFacts,
     RevocationRecovery, RevocationStage,
 };
+pub use locks::{lock_is_stale, LockError, LockOwner, ProcessLock, ProcessProbe};
 pub use messaging_recovery::{
     apply_receipt, reload_outbox, Deduplicator, DiscardReason, InboundReceiveOutcome,
     InboundReceiveState, OutboundMessageState, OutboundRecoveryAction, PendingOutboundMessage,
     ReceiptApplyOutcome,
+};
+pub use migration_recovery::{
+    check_downgrade, check_open_compatibility, db_migration_may_change, may_migrate,
+    plan_migration_recovery, pre_migration_backup, BackupPolicy, DbAccess, DowngradeRejected,
+    MigrationDenied, MigrationFacts, MigrationRecoveryAction, MigrationState, OpenCompatibility,
+    PreMigrationBackup, SchemaChange, VersionRequirements,
 };
 pub use operation_state::{is_definitely_complete, FileOperationState};
 pub use platform_recovery::{
@@ -314,6 +356,9 @@ pub use platform_recovery::{
     WorkItem,
 };
 pub use progressive::{ProgressError, ProgressiveRecovery, RecoveryPhase, RecoveryTier};
+pub use recovery_metadata::{
+    classify_ownership, GenerationExhausted, OwnerStatus, OwnershipStamp, RecoveryMetadata,
+};
 pub use recovery_mode::{
     capabilities, gate, terminal_state_for, Capabilities, DegradedSubsystem, Operation,
     OperationDenied, RecoverySeverity, SeverityAccumulator,

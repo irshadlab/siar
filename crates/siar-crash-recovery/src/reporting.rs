@@ -41,6 +41,7 @@ pub enum WarningCode {
     IdentityForkDetected,
     DowngradeReadOnly,
     QuarantineFull,
+    SubsystemRecoveryFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -8,7 +8,36 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §121-135 (test infrastructure, local-first, catalog)
+//! ## This pass — §136-150 (coordination, maintenance, restore, security)
+//!
+//! - [`coordinator`] — §136 `RecoverableSubsystem` (native `async fn`
+//!   in a trait) owned by each subsystem; `RecoveryCoordinator` runs
+//!   them phase by phase in §109 order via `CleanupSequencer`, merges
+//!   reports, halts at the first `ReadOnly`-or-worse result (no blind
+//!   continuation) and skips destructive cleanup in read-only mode.
+//!   §137 `RecoveryContext`, §138 `RecoveryMode` + `startup_mode`
+//!   precedence (read-only > repair > unclean→thorough > normal), §139
+//!   `check_depth` (fast / targeted thorough / full) with periodic
+//!   `full_check_due`.
+//! - [`integrity_maintenance`] — §140 scheduled, capped, deterministic
+//!   distinct-index scrub sampling (coverage tested), §141 bit-rot
+//!   repair sources in the spec's order, §142 backup-method gate (raw
+//!   copy only with quiesced writers and a checkpointed WAL), §143
+//!   ordered `BackupDrill` and `BackupTrust` (untested ⇒ not a plan).
+//! - [`restore_scope`] — §144 disaster recovery is a gated restore,
+//!   crash recovery is not; §145 bootstrap only after identity
+//!   authorization, own device before local backup, no server assumed;
+//!   §146 partial history is policy not corruption, with
+//!   `verify_restored_window` so a deliberate window isn't flagged as
+//!   a gap.
+//! - [`recovery_security`] — §147 `accept_repair` (identity,
+//!   authorization, integrity, version — all required, first failure
+//!   reported), §148 rollback detection from any independent witness,
+//!   §149 `MonotonicAnchor<S: AnchorStorage>` that can only rise,
+//!   §150 data-vs-key completeness (`fully_recovered` is false while
+//!   any existing data lacks its key).
+//!
+//! ## Previous pass — §121-135
 //!
 //! - [`mod@failpoint`] — §121 `failpoint!("name")` macro over a
 //!   **thread-local** registry (parallel tests can't interfere), RAII
@@ -330,15 +359,17 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §135 (ownership §136, the closing architecture,
-//! migration-plan and definition-of-done sections — the remaining
-//! ~50 sections of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §150 (key backup policy §151, session/group key
+//! recovery, config/RON/Postcard durability, extensions, the runtime
+//! API, and the closing definition-of-done sections — the remaining
+//! ~35 sections of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod backup_restore;
 pub mod blob_refs;
 pub mod chunk_recovery;
 pub mod cleanup_quarantine;
+pub mod coordinator;
 pub mod corruption;
 pub mod crash_injection;
 pub mod derived_recovery;
@@ -355,6 +386,7 @@ pub mod fault_sim;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
 pub mod identity_recovery;
+pub mod integrity_maintenance;
 #[cfg(test)]
 mod invariants;
 pub mod local_first;
@@ -367,9 +399,11 @@ pub mod progressive;
 pub mod recovery_metadata;
 pub mod recovery_mode;
 pub mod recovery_scheduler;
+pub mod recovery_security;
 pub mod reevaluation;
 pub mod repair_tools;
 pub mod reporting;
+pub mod restore_scope;
 pub mod route_resource_recovery;
 pub mod session_recovery;
 pub mod shutdown_marker;
@@ -398,6 +432,11 @@ pub use chunk_recovery::{
 };
 pub use cleanup_quarantine::{
     CleanupPhase, CleanupSequencer, OutOfOrder, Quarantine, QuarantineEntry, QuarantineOutcome,
+};
+pub use coordinator::{
+    check_depth, full_check_due, startup_mode, CheckDepth, CoordinatorOutcome,
+    RecoverableSubsystem, RecoveryContext, RecoveryCoordinator, RecoveryError, RecoveryErrorKind,
+    RecoveryMode, StartupFacts, SubsystemRecoveryReport,
 };
 pub use corruption::{
     mechanism_for, plan_blob_corruption, rebuild_journal_progress, response_for, restore_sources,
@@ -461,6 +500,12 @@ pub use identity_recovery::{
     IdentityForkDetected, IdentityVerdict, ReconciliationError, RevocationFacts,
     RevocationRecovery, RevocationStage,
 };
+pub use integrity_maintenance::{
+    backup_trust, choose_backup_method, plan_bit_rot_repair, raw_copy_is_safe, scrub_due,
+    scrub_sample_size, select_scrub_sample, BackupDrill, BackupTrust, BitRotPlan,
+    BitRotRepairSource, DrillError, DrillStep, NoSafeBackupMethod, RawCopyFacts,
+    RepairAvailability, ScrubPolicy, SqliteBackupMethod,
+};
 pub use local_first::{
     cleanup_phase_requires_network, is_usable, open_state, peer_repair_plan, tier_requires_network,
     OpenState, PeerRepairKind,
@@ -495,6 +540,11 @@ pub use recovery_scheduler::{
     jitter_millis, plan_resume, sos_decision, AdmissionConfig, PendingOp, RecoveryClass,
     ResumePlan, SafetyChecks, SosDecision, SosState,
 };
+pub use recovery_security::{
+    accept_repair, assess_keys, detect_rollback, usability, AnchorStorage, KeyCompleteness,
+    MemoryAnchor, MonotonicAnchor, ObjectFacts, ObjectUsability, RepairOffer, RepairRejection,
+    RollbackVerdict,
+};
 pub use reevaluation::{
     assign_missing_to_paths, capability_decision, choose_path_after_restart, queued_to_reevaluate,
     reevaluate_policy, sends_may_resume, CapabilityDecision, CurrentPolicy, DeliveryIntent,
@@ -510,6 +560,11 @@ pub use reporting::{
     log_rule, may_log, should_block_ui, ux_message, DeveloperDiagnostics, LogField, LogRule,
     MetricEvent, RecoveryAction, RecoveryActionKind, RecoveryMetrics, RecoveryReport,
     RecoveryWarning, UxMessage, WarningCode,
+};
+pub use restore_scope::{
+    bootstrap_plan, classify_recovery, completeness, fetch_blob_now, history_access,
+    restore_gate_for, verify_restored_window, BlobRestore, BootstrapFacts, BootstrapPlan,
+    HistoryAccess, HistoryCompleteness, RecoveryKind, RestorePolicy,
 };
 pub use route_resource_recovery::{
     bootstrap_candidates, reconcile_reservation, reconcile_reservations, restart_treatment,

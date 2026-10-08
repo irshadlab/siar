@@ -8,7 +8,30 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §76-90 (faults, migrations, metadata, locks)
+//! ## This pass — §91-105 (time, scheduling, re-evaluation, ephemeral state)
+//!
+//! - [`timing_recovery`] — §91 persisted `WallMillis` with skew
+//!   tolerance (`age_millis`, three-valued `expiry_state`,
+//!   `check_clock`) and an in-process `MonotonicDeadline` that is
+//!   deliberately not `Serialize`; §92 `RetryState` eligibility after
+//!   restart; §93 backoff that continues from the persisted attempt
+//!   count and never pulls `next_attempt_at` earlier.
+//! - [`recovery_scheduler`] — §94 `plan_resume`: bounded batches,
+//!   resource admission, deterministic jitter, spread deferred waves
+//!   (10 000 pending ops start 50 at a time); §95 the five
+//!   `RecoveryClass` priorities; §96 SOS resumes first once identity
+//!   and storage checks pass.
+//! - [`reevaluation`] — §97 revocations before sends, §98 policy
+//!   re-check (revoked > size > mobile-data), §99 capabilities only
+//!   from the current session, §100 `DeliveryIntent` with no path
+//!   field, §101 DTN→direct upgrade keeping `MessageId`/`BundleId`,
+//!   §102 persisted `VerifiedChunks` bitset with path assignment
+//!   rebuilt from current paths.
+//! - [`ephemeral_recovery`] — §103 live calls become `Interrupted`
+//!   (no resume outcome exists), §104 `CallInterrupted` history event,
+//!   §105 presence/typing never persisted, stale entries discarded.
+//!
+//! ## Previous pass — §76-90
 //!
 //! - [`fault_policy`] — §76 scope→strategy (only worker-local
 //!   violations restart a worker; shared-state or durable-write risk
@@ -243,9 +266,10 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §90 (monotonic-vs-wall time, retry timers, backoff,
-//! thundering herd, recovery scheduler, SOS and re-evaluation
-//! sections, and the rest of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §105 (discovery, mesh, DTN-specific and
+//! relay-specific recovery, group/MLS state, observability, testing
+//! and definition-of-done sections — the rest of this 186-section
+//! spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod backup_restore;
@@ -257,6 +281,7 @@ pub mod dtn_recovery;
 pub mod effect_identity;
 pub mod effect_journal;
 pub mod effects_io;
+pub mod ephemeral_recovery;
 pub mod fault_policy;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
@@ -269,6 +294,8 @@ pub mod platform_recovery;
 pub mod progressive;
 pub mod recovery_metadata;
 pub mod recovery_mode;
+pub mod recovery_scheduler;
+pub mod reevaluation;
 pub mod route_resource_recovery;
 pub mod session_recovery;
 pub mod shutdown_marker;
@@ -276,6 +303,7 @@ pub mod staged_intent;
 pub mod state_machine;
 pub mod supervision;
 pub mod temp_scan;
+pub mod timing_recovery;
 pub mod transaction_group;
 
 pub use atomic_rename::{
@@ -320,6 +348,11 @@ pub use effects_io::{
     plan_export_recovery, unique_numbered_name, ExportFacts, ExportPolicy, ExportRecoveryAction,
     NotificationDeduper, NotificationKey, NotificationOutcome,
 };
+pub use ephemeral_recovery::{
+    history_event_for_recovery, is_persistable, may_resume_media_session, recover_call,
+    recover_presence, CallHistoryEvent, CallId, CallRecovery, CallState, EphemeralKind,
+    PresenceRecovery,
+};
 pub use fault_policy::{
     chunk_may_be_marked_complete, cleanup_ran, disk_full_response, fail_fast, recovery_required,
     strategy_for, ChunkWriteResult, DiskFullOutcome, DiskFullStage, ExitKind, PanicStrategy,
@@ -363,6 +396,16 @@ pub use recovery_mode::{
     capabilities, gate, terminal_state_for, Capabilities, DegradedSubsystem, Operation,
     OperationDenied, RecoverySeverity, SeverityAccumulator,
 };
+pub use recovery_scheduler::{
+    jitter_millis, plan_resume, sos_decision, AdmissionConfig, PendingOp, RecoveryClass,
+    ResumePlan, SafetyChecks, SosDecision, SosState,
+};
+pub use reevaluation::{
+    assign_missing_to_paths, capability_decision, choose_path_after_restart, queued_to_reevaluate,
+    reevaluate_policy, sends_may_resume, CapabilityDecision, CurrentPolicy, DeliveryIntent,
+    PathKind, PathPlan, PendingWorkFacts, PolicyCancel, PolicyDecision, SendResumeStage,
+    VerifiedChunks,
+};
 pub use route_resource_recovery::{
     bootstrap_candidates, reconcile_reservation, reconcile_reservations, restart_treatment,
     ReservationAction, ReservationId, ReservationKind, ReservationPlan, ResourceClass,
@@ -384,5 +427,11 @@ pub use supervision::{
 pub use temp_scan::{
     classify_temp_file, cleanup_decision, plan_cleanup, CleanupDecision, CleanupPolicy, KeepReason,
     OpaqueTempId, ScanContext, TempArea, TempClass, TempFileEntry, TempOwnership,
+};
+pub use timing_recovery::{
+    age_millis, backoff_delay, check_clock, coarse_level, eligibility, expiry_state,
+    first_delay_after_restart, next_attempt_after_restart, persistable_wall_deadline, AgeEstimate,
+    BackoffPolicy, ClockSanity, Eligibility, ExpiryState, MonotonicDeadline, RetryState,
+    WallMillis,
 };
 pub use transaction_group::{TransactionGroup, TransactionStep};

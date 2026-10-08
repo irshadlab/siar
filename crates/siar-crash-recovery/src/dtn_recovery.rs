@@ -146,6 +146,26 @@ pub fn plan_dtn_restore(
     plan
 }
 
+/// §127 "tombstone lost and rebuilt": the delivered/acknowledged
+/// bundle ids are the ground truth a lost tombstone set can be rebuilt
+/// from. Each rebuilt tombstone is retained for `retention_millis`
+/// from `now`.
+pub fn rebuild_tombstones(
+    delivered: &[BundleId],
+    now_millis: u64,
+    retention_millis: u64,
+) -> Vec<Tombstone> {
+    let mut ids: Vec<BundleId> = delivered.to_vec();
+    ids.sort_by_key(|b| *b.as_bytes());
+    ids.dedup();
+    ids.into_iter()
+        .map(|id| Tombstone {
+            id,
+            retain_until_millis: now_millis.saturating_add(retention_millis),
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------
 // §28
 // ---------------------------------------------------------------------
@@ -418,7 +438,13 @@ impl ForwardHistory {
                 last_forward_millis: t,
             })
             .collect();
-        v.sort_by_key(|r| r.last_forward_millis);
+        v.sort_by_key(|r| {
+            (
+                r.last_forward_millis,
+                r.peer.as_uuid(),
+                *r.bundle.as_bytes(),
+            )
+        });
         v
     }
 

@@ -8,7 +8,44 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §106-120 (ephemeral state, repair, reporting, injection)
+//! ## This pass — §121-135 (test infrastructure, local-first, catalog)
+//!
+//! - [`mod@failpoint`] — §121 `failpoint!("name")` macro over a
+//!   **thread-local** registry (parallel tests can't interfere), RAII
+//!   `ArmedGuard`, fire-once-on-nth-hit, enabled only for tests/debug
+//!   builds/`crash-injection`; an inlined `Ok(())` in release.
+//! - `tests/process_kill.rs` — §122 a real child process publishing
+//!   files via `publish_atomic`, a real `SIGKILL` (`Child::kill`), and
+//!   inspection of the real filesystem: every final-named file is
+//!   complete, finals are a gap-free prefix, any leftover is a
+//!   recognisable temp file the §23/§24 scan classifies correctly.
+//! - [`fault_sim`] — §123 `SimFs`, a deterministic filesystem that
+//!   models separate durability for file contents and directory
+//!   entries with `power_loss(torn_keep)`; proves the
+//!   write → fsync → rename → fsync-dir publish order is atomic at
+//!   *every* power-loss point and shows the missing-data-fsync bug.
+//!   §126 file faults (short/partial write, rename failure, permission
+//!   change, vanishing source) and §124 `classify_db_fault`
+//!   (busy / I/O / disk-full / corrupt page / migration failure, none
+//!   ever claims acceptance).
+//! - [`fault_scenarios`] — §125/§127/§128 fault catalogs
+//!   (`NetworkFault`, `DtnFault`, `IdentityFault`), each driven through
+//!   the real recovery pieces. Added `dtn_recovery::rebuild_tombstones`
+//!   for §127's "tombstone lost and rebuilt".
+//! - `invariants` (test-only) — §129 projection crash between row
+//!   update and checkpoint, §130 `proptest` properties for the
+//!   spec's seven invariants, §131 order-independence. **The §131
+//!   properties failed on first run** and exposed three functions
+//!   returning hash-order results; all now sort.
+//! - [`local_first`] — §132 no recovery tier or cleanup phase needs the
+//!   network and `open_state` is independent of connectivity; §133
+//!   peer repair only after local recovery, always locally verified.
+//! - [`storage_catalog`] — §134 classes and §135 the `const` catalog
+//!   (12 data sets × the six questions) with structural rules enforced
+//!   by tests: authoritative ⇒ encrypted, not rebuildable, verified not
+//!   dropped; reconstructible ⇒ names a source, never backed up.
+//!
+//! ## Previous pass — §106-120
 //!
 //! - [`ephemeral_state`] — §106 only trusted long-lived peers survive
 //!   (rescan always), §107 dynamic capabilities are re-queried, §108
@@ -293,9 +330,9 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §120 (failpoint framework §121 onward, fuzzing,
-//! simulated-disk and property tests, and the definition-of-done
-//! sections — the rest of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §135 (ownership §136, the closing architecture,
+//! migration-plan and definition-of-done sections — the remaining
+//! ~50 sections of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod backup_restore;
@@ -311,10 +348,16 @@ pub mod effect_journal;
 pub mod effects_io;
 pub mod ephemeral_recovery;
 pub mod ephemeral_state;
+pub mod failpoint;
 pub mod fault_policy;
+pub mod fault_scenarios;
+pub mod fault_sim;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
 pub mod identity_recovery;
+#[cfg(test)]
+mod invariants;
+pub mod local_first;
 pub mod locks;
 pub mod messaging_recovery;
 pub mod migration_recovery;
@@ -332,6 +375,7 @@ pub mod session_recovery;
 pub mod shutdown_marker;
 pub mod staged_intent;
 pub mod state_machine;
+pub mod storage_catalog;
 pub mod supervision;
 pub mod temp_scan;
 pub mod timing_recovery;
@@ -367,6 +411,7 @@ pub use derived_recovery::{
     RebuildReason, SearchIndexRecovery, SearchIndexState, SemanticMessageState, StoreClass,
     StreamActivity,
 };
+pub use dtn_recovery::rebuild_tombstones;
 pub use dtn_recovery::{
     plan_dtn_restore, restore_budget, AckApply, AckStatus, BudgetRestore, DestinationAckLedger,
     DestinationReceive, DtnRestorePlan, DtnRestoreStep, ForwardHistory, ForwardRecord,
@@ -393,10 +438,16 @@ pub use ephemeral_state::{
     storage_pressure, CapabilityRecovery, DiscoveredEntry, DiscoveryRecovery, DynamicCapability,
     PressureKind, PressureLevel, PressureSource, StorageThresholds,
 };
+pub use failpoint::{FailAction, Triggered};
 pub use fault_policy::{
     chunk_may_be_marked_complete, cleanup_ran, disk_full_response, fail_fast, recovery_required,
     strategy_for, ChunkWriteResult, DiskFullOutcome, DiskFullStage, ExitKind, PanicStrategy,
     SpaceAction, TransferStorageState, ViolationScope,
+};
+pub use fault_scenarios::{DtnFault, IdentityFault, NetworkFault};
+pub use fault_sim::{
+    classify_db_fault, publish_correct, write_all, DbFault, DbFaultAction, DbFaultResponse,
+    FsError, FsFault, SimFs,
 };
 pub use finalization_recovery::{
     reconcile_finalization, FinalizationRecoveryAction, FinalizationState,
@@ -409,6 +460,10 @@ pub use identity_recovery::{
     AccountStateSummary, CheckOutcome, ExplicitReconciliation, IdentityEvidence, IdentityFailure,
     IdentityForkDetected, IdentityVerdict, ReconciliationError, RevocationFacts,
     RevocationRecovery, RevocationStage,
+};
+pub use local_first::{
+    cleanup_phase_requires_network, is_usable, open_state, peer_repair_plan, tier_requires_network,
+    OpenState, PeerRepairKind,
 };
 pub use locks::{lock_is_stale, LockError, LockOwner, ProcessLock, ProcessProbe};
 pub use messaging_recovery::{
@@ -471,6 +526,10 @@ pub use shutdown_marker::{
 };
 pub use staged_intent::{reconcile, ReconciliationAction, StagedOperationState};
 pub use state_machine::{InvalidTransition, RecoveryState, RecoveryStateMachine};
+pub use storage_catalog::{
+    entry_for, store_class, CatalogEntry, DataClass, DataSet, RebuildSource, RecoveryMethod,
+    Retention, CATALOG,
+};
 pub use supervision::{
     catch_boundary, PanicReport, RestartDecision, RestartPolicy, RestartTracker, Supervisor, Worker,
 };

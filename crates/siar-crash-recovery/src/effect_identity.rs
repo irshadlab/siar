@@ -32,6 +32,17 @@ impl Default for DeviceEventId {
     }
 }
 
+impl DeviceEventId {
+    #[cfg(test)]
+    pub(crate) fn new_for_tests(n: u16) -> Self {
+        Self(uuid::Uuid::from_u128(n as u128 + 1))
+    }
+
+    pub const fn as_uuid(&self) -> uuid::Uuid {
+        self.0
+    }
+}
+
 /// Stable identity of one external effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EffectId {
@@ -39,6 +50,19 @@ pub enum EffectId {
     Transfer(TransferId),
     Bundle(BundleId),
     DeviceEvent(DeviceEventId),
+}
+
+impl EffectId {
+    /// Total, stable ordering key (kind tag, then id bytes) so recovery
+    /// output never depends on hash-map iteration order (§131).
+    pub fn sort_key(&self) -> (u8, [u8; 16]) {
+        match self {
+            EffectId::Message(m) => (0, *m.as_uuid().as_bytes()),
+            EffectId::Transfer(t) => (1, *t.as_uuid().as_bytes()),
+            EffectId::Bundle(b) => (2, *b.as_bytes()),
+            EffectId::DeviceEvent(d) => (3, *d.as_uuid().as_bytes()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -8,7 +8,31 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §34-46 (sessions, routes, reservations, derived state)
+//! ## This pass — §47-60 (modes, corruption, restore, duplicate effects)
+//!
+//! - [`recovery_mode`] — §50 `RecoverySeverity` verbatim, plus a fixed
+//!   capability set per severity and one [`recovery_mode::gate`] every
+//!   operation goes through: ReadOnly allows exactly §47's four read
+//!   capabilities, Fatal allows diagnostics only and never starts
+//!   network (§49), Degraded runs fully and lists what is down (§48).
+//!   Capabilities never widen as severity rises (tested).
+//! - [`corruption`] — §51 domain→detection-mechanism map, §52
+//!   scope→response table (six distinct outcomes, "do not treat all
+//!   corruption the same"), §53 blob plan, §54 journal rebuild from
+//!   verifiable chunks only, §55 `verify_contiguous` (a gap is an
+//!   error, never skipped) and restore-source order, §56 secure-store
+//!   failure = viewable but no trusted comms. Reconciles §49's "fatal"
+//!   example with §56 in the doc comment of `response_for`.
+//! - [`backup_restore`] — §57 authenticated/versioned/integrity-
+//!   checked backup validation, §58 `RestoreGate` that cannot say
+//!   "ready" until expiry, delivery, revocation and peer state are all
+//!   re-evaluated, and a restored-operation decision where revocation
+//!   outranks everything.
+//! - [`effect_identity`] — §59 `Effect::retry` keeps the id (no API
+//!   mints a new one), §60 `IdempotentReceiver` over all five listed
+//!   kinds, reusing the existing `Deduplicator`.
+//!
+//! ## Previous pass — §34-46
 //!
 //! - [`session_recovery`] — §34 [`session_recovery::SessionHandle`]
 //!   carries its runtime generation, so every pre-crash session is
@@ -169,21 +193,25 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §46 (read-only/degraded/fatal modes, corruption
-//! classification, backup/restore, idempotent receivers, and the rest
-//! of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §60 (side-effect journal, unknown-outcome
+//! semantics, network/export effect recovery, and the rest of this
+//! 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
+pub mod backup_restore;
 pub mod blob_refs;
 pub mod chunk_recovery;
+pub mod corruption;
 pub mod derived_recovery;
 pub mod dtn_recovery;
+pub mod effect_identity;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
 pub mod identity_recovery;
 pub mod messaging_recovery;
 pub mod operation_state;
 pub mod progressive;
+pub mod recovery_mode;
 pub mod route_resource_recovery;
 pub mod session_recovery;
 pub mod shutdown_marker;
@@ -195,6 +223,10 @@ pub mod transaction_group;
 pub use atomic_rename::{
     filesystem_id_of, publish_atomic, rename_viability, FilesystemId, PublishError, RenameViability,
 };
+pub use backup_restore::{
+    reevaluate_restored, validate_backup, BackupHeader, BackupRejection, Reevaluation, RestoreGate,
+    RestoredDecision, RestoredOperation,
+};
 pub use blob_refs::{
     audit_ref_counts, authoritative_count, rebuild_ref_counts, reconcile_gc, repair_ref_counts,
     DriftKind, GcFacts, GcRecoveryAction, GcStage, RefCountDrift, RefCounts,
@@ -202,6 +234,11 @@ pub use blob_refs::{
 pub use chunk_recovery::{
     reconcile_chunk_on_restart, ChunkRecoveryAction, ChunkRecoveryMap, ChunkRecoveryState,
     TransferId,
+};
+pub use corruption::{
+    mechanism_for, plan_blob_corruption, rebuild_journal_progress, response_for, restore_sources,
+    verify_contiguous, BlobCorruptionPlan, BlobTrust, ChunkVerification, CorruptionAction,
+    CorruptionScope, DataDomain, DetectionMechanism, JournalRebuild, RestoreSource, SequenceGap,
 };
 pub use derived_recovery::{
     chat_list_rebuild_order, plan_projection, reconcile_outbox, reconcile_outbox_entry,
@@ -213,6 +250,9 @@ pub use dtn_recovery::{
     plan_dtn_restore, restore_budget, AckApply, AckStatus, BudgetRestore, DestinationAckLedger,
     DestinationReceive, DtnRestorePlan, DtnRestoreStep, ForwardHistory, ForwardRecord,
     OriginAckTracker, RelayLedger, RelayReceiveOutcome, StoredBundle, Tombstone,
+};
+pub use effect_identity::{
+    DeviceEventId, Effect, EffectId, IdempotentReceiver, ReceiveKey, ReceiveOutcome,
 };
 pub use finalization_recovery::{
     reconcile_finalization, FinalizationRecoveryAction, FinalizationState,
@@ -233,6 +273,10 @@ pub use messaging_recovery::{
 };
 pub use operation_state::{is_definitely_complete, FileOperationState};
 pub use progressive::{ProgressError, ProgressiveRecovery, RecoveryPhase, RecoveryTier};
+pub use recovery_mode::{
+    capabilities, gate, terminal_state_for, Capabilities, DegradedSubsystem, Operation,
+    OperationDenied, RecoverySeverity, SeverityAccumulator,
+};
 pub use route_resource_recovery::{
     bootstrap_candidates, reconcile_reservation, reconcile_reservations, restart_treatment,
     ReservationAction, ReservationId, ReservationKind, ReservationPlan, ResourceClass,

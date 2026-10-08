@@ -8,7 +8,41 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §151-165 (keys, config, extensions, runtime API)
+//! ## This pass — §166-179 (startup policy, linking, seams, interop)
+//!
+//! - [`startup_policy`] — §166 only *isolated, non-critical* recovery
+//!   may continue after the network is up; §171 battery/thermal are
+//!   re-read after restart, harsher-of-the-two throttle, a ramp-up
+//!   (⅛ of the batch, doubling per wave) instead of full throughput;
+//!   §172 proximity state discarded, DTN store kept, forwarding
+//!   resumes on the next encounter; §175 `emergency_ordering_holds`
+//!   invariant, checked by a property test over arbitrary queues,
+//!   limits and throttle levels. **That test found a real bug** in my
+//!   first `plan_resume_throttled` (planning emergency and ordinary
+//!   work as two queues let ordinary work start while emergency work
+//!   waited); it now plans once in priority order and throttles only
+//!   non-critical starts.
+//! - [`device_linking`] — §173/§174 a device is authorized by the
+//!   *committed* certificate event and nothing else; every
+//!   uncommitted attempt resolves to resume-safely or expire/restart,
+//!   never half-authorized (all 8 fact combinations are enumerated in
+//!   a test).
+//! - [`compat_boundaries`] — §167 recovery-protocol negotiation
+//!   (same major, min minor, feature *intersection*, so a GUI can't
+//!   assume what an older daemon lacks); §168 rolling-upgrade
+//!   compatibility, which needs **read-ahead** (a release must read
+//!   N+1 before anything writes it); §169 relays never persist
+//!   plaintext or user keys; §176 diagnostics view
+//!   (recovered / resumed / paused / still degraded); §177 a crashed
+//!   FFI host reattaches via snapshot like any IPC client; §178
+//!   WASM persistence contract (model unchanged, intent survival
+//!   not promised without durable storage).
+//! - [`interop`] — §179 `InteropEndpoint` + `run_case` for the three
+//!   cross-implementation scenarios, a reference implementation, and
+//!   two deliberately broken ones that prove the harness catches
+//!   forgotten dedup state, lost transfer progress, and missing dedup.
+//!
+//! ## Previous pass — §151-165
 //!
 //! - [`key_recovery`] — §151 non-exportable device keys always mean a
 //!   *new device identity* (never a pretend restore), with the user-
@@ -386,10 +420,9 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §165 (lazy secondary recovery §166, versioned
-//! recovery protocol, relay cluster/multipath/battery/proximity/
-//! linking/emergency notes, FFI/WASM/interop, crate structure, error
-//! model, scope, phases and definition-of-done — the remaining ~21
+//! which this doc comment now does. Everything past §179 (§180 suggested crate structure, §181 error
+//! model, §182 production scope, §183 phases, §184 definition of
+//! done, §185 relationships, §186 final principle — the closing 7
 //! sections of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
@@ -397,11 +430,13 @@ pub mod backup_restore;
 pub mod blob_refs;
 pub mod chunk_recovery;
 pub mod cleanup_quarantine;
+pub mod compat_boundaries;
 pub mod config_durability;
 pub mod coordinator;
 pub mod corruption;
 pub mod crash_injection;
 pub mod derived_recovery;
+pub mod device_linking;
 pub mod dtn_recovery;
 pub mod effect_identity;
 pub mod effect_journal;
@@ -417,6 +452,7 @@ pub mod finalization_recovery;
 pub mod idempotent_steps;
 pub mod identity_recovery;
 pub mod integrity_maintenance;
+pub mod interop;
 #[cfg(test)]
 mod invariants;
 pub mod key_recovery;
@@ -440,6 +476,7 @@ pub mod runtime_api;
 pub mod session_recovery;
 pub mod shutdown_marker;
 pub mod staged_intent;
+pub mod startup_policy;
 pub mod state_machine;
 pub mod storage_catalog;
 pub mod supervision;
@@ -465,6 +502,12 @@ pub use chunk_recovery::{
 pub use cleanup_quarantine::{
     CleanupPhase, CleanupSequencer, OutOfOrder, Quarantine, QuarantineEntry, QuarantineOutcome,
 };
+pub use compat_boundaries::{
+    can_read, diagnostics_view, mutually_compatible, negotiate, relay_may_persist,
+    rolling_upgrade_ok, wasm_contract, DiagnosticsView, FeatureSet, FfiHostSession, FormatSupport,
+    MajorMismatch, Negotiated, PersistenceSemantics, ProtocolHello, RecoveryFeature,
+    RelayDurableKind, WasmRecoveryContract, HOST_CRASH_CHANGES_DURABLE_STATE,
+};
 pub use config_durability::{
     config_load_decision, decode_plan, encode_durable_header, last_known_good_path,
     on_config_parse_failure, parse_durable_header, write_config_atomic, write_config_keeping_lkg,
@@ -488,6 +531,7 @@ pub use derived_recovery::{
     RebuildReason, SearchIndexRecovery, SearchIndexState, SemanticMessageState, StoreClass,
     StreamActivity,
 };
+pub use device_linking::{authorization, recover_link, Authorization, LinkFacts, LinkRecovery};
 pub use dtn_recovery::rebuild_tombstones;
 pub use dtn_recovery::{
     plan_dtn_restore, restore_budget, AckApply, AckStatus, BudgetRestore, DestinationAckLedger,
@@ -548,6 +592,10 @@ pub use integrity_maintenance::{
     scrub_sample_size, select_scrub_sample, BackupDrill, BackupTrust, BitRotPlan,
     BitRotRepairSource, DrillError, DrillStep, NoSafeBackupMethod, RawCopyFacts,
     RepairAvailability, ScrubPolicy, SqliteBackupMethod,
+};
+pub use interop::{
+    run_all as run_all_interop_cases, run_case as run_interop_case, ForgetfulEndpoint, InteropCase,
+    InteropEndpoint, InteropFailure, NoDedupEndpoint, ReferenceEndpoint,
 };
 pub use key_recovery::{
     accept_resync_offer, device_restore_plan, group_key_action, session_key_plan, DeviceKeyPolicy,
@@ -632,6 +680,12 @@ pub use shutdown_marker::{
     RuntimeGeneration, ShutdownMarker, ShutdownMarkerStore, StartupKind,
 };
 pub use staged_intent::{reconcile, ReconciliationAction, StagedOperationState};
+pub use startup_policy::{
+    adjust_admission, emergency_ordering_holds, exempt_from_throttle,
+    forwarding_resumes_on_encounter, may_run_after_network, plan_resume_throttled,
+    proximity_recovery, ramp_up_batch, throttle_level, DeviceConditions, ProximityRecovery,
+    ThermalLevel, ThrottleLevel,
+};
 pub use state_machine::{InvalidTransition, RecoveryState, RecoveryStateMachine};
 pub use storage_catalog::{
     entry_for, store_class, CatalogEntry, DataClass, DataSet, RebuildSource, RecoveryMethod,

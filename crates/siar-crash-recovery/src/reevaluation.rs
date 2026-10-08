@@ -210,6 +210,20 @@ impl VerifiedChunks {
         self.words.iter().map(|w| w.count_ones()).sum()
     }
 
+    /// Verified chunk indexes, ascending.
+    pub fn verified_indexes(&self) -> Vec<u32> {
+        let mut v = Vec::with_capacity(self.count() as usize);
+        for (w, word) in self.words.iter().enumerate() {
+            let mut bits = *word;
+            while bits != 0 {
+                let b = bits.trailing_zeros();
+                v.push(w as u32 * 64 + b);
+                bits &= bits - 1;
+            }
+        }
+        v
+    }
+
     pub fn missing(&self, total_chunks: u32) -> Vec<u32> {
         (0..total_chunks)
             .filter(|c| !self.is_verified(*c))
@@ -331,6 +345,7 @@ mod tests {
         assert!(v.is_verified(64) && !v.is_verified(65));
         assert!(!v.is_verified(10_000));
         assert_eq!(v.missing(4), vec![2, 3]);
+        assert_eq!(v.verified_indexes(), vec![0, 1, 63, 64, 130]);
         v.mark_verified(1);
         assert_eq!(v.count(), 5, "marking twice is idempotent");
     }

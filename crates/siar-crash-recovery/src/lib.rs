@@ -8,7 +8,34 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §91-105 (time, scheduling, re-evaluation, ephemeral state)
+//! ## This pass — §106-120 (ephemeral state, repair, reporting, injection)
+//!
+//! - [`ephemeral_state`] — §106 only trusted long-lived peers survive
+//!   (rescan always), §107 dynamic capabilities are re-queried, §108
+//!   pressure is never persisted as authoritative; storage pressure is
+//!   derived from disk numbers in overflow-safe integer math, with
+//!   untrustworthy figures treated as critical.
+//! - [`cleanup_quarantine`] — §109 `CleanupSequencer` enforces the
+//!   six-phase order and `gc_allowed` stays false until every
+//!   reference-establishing phase is done; §110 size-bounded
+//!   `Quarantine` (oldest evicted first, oversize refused rather than
+//!   deleted).
+//! - [`repair_tools`] — §111 admin commands, §112 the seven doctor
+//!   checks (a missing check makes the run incomplete, never healthy),
+//!   §113 bounded + dry-run + backup-aware + logged repair gate, §114
+//!   automatic-vs-admin authority per `RepairAction`.
+//! - [`reporting`] — §115 `RecoveryReport` whose only payload types
+//!   are enum codes and counts (no secret can be put in it), §116 UX
+//!   messages with the spec wording and a block-only-if-necessary
+//!   rule, §117 exact developer panel, §118 saturating metrics, §119
+//!   per-field logging rules.
+//! - [`crash_injection`] — §120 the nine `CrashPoint`s and a
+//!   deterministic `CrashInjector` that is a zero-sized no-op unless
+//!   the `crash-injection` feature (or `cfg(test)`) is on, plus the
+//!   crash matrix: the send pipeline is crashed at every point and
+//!   must apply exactly once iff the DB commit happened.
+//!
+//! ## Previous pass — §91-105
 //!
 //! - [`timing_recovery`] — §91 persisted `WallMillis` with skew
 //!   tolerance (`age_millis`, three-valued `expiry_state`,
@@ -266,22 +293,24 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §105 (discovery, mesh, DTN-specific and
-//! relay-specific recovery, group/MLS state, observability, testing
-//! and definition-of-done sections — the rest of this 186-section
-//! spec) is not yet attempted.
+//! which this doc comment now does. Everything past §120 (failpoint framework §121 onward, fuzzing,
+//! simulated-disk and property tests, and the definition-of-done
+//! sections — the rest of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod backup_restore;
 pub mod blob_refs;
 pub mod chunk_recovery;
+pub mod cleanup_quarantine;
 pub mod corruption;
+pub mod crash_injection;
 pub mod derived_recovery;
 pub mod dtn_recovery;
 pub mod effect_identity;
 pub mod effect_journal;
 pub mod effects_io;
 pub mod ephemeral_recovery;
+pub mod ephemeral_state;
 pub mod fault_policy;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
@@ -296,6 +325,8 @@ pub mod recovery_metadata;
 pub mod recovery_mode;
 pub mod recovery_scheduler;
 pub mod reevaluation;
+pub mod repair_tools;
+pub mod reporting;
 pub mod route_resource_recovery;
 pub mod session_recovery;
 pub mod shutdown_marker;
@@ -321,11 +352,15 @@ pub use chunk_recovery::{
     reconcile_chunk_on_restart, ChunkRecoveryAction, ChunkRecoveryMap, ChunkRecoveryState,
     TransferId,
 };
+pub use cleanup_quarantine::{
+    CleanupPhase, CleanupSequencer, OutOfOrder, Quarantine, QuarantineEntry, QuarantineOutcome,
+};
 pub use corruption::{
     mechanism_for, plan_blob_corruption, rebuild_journal_progress, response_for, restore_sources,
     verify_contiguous, BlobCorruptionPlan, BlobTrust, ChunkVerification, CorruptionAction,
     CorruptionScope, DataDomain, DetectionMechanism, JournalRebuild, RestoreSource, SequenceGap,
 };
+pub use crash_injection::{CrashInjector, CrashPoint, InjectedCrash};
 pub use derived_recovery::{
     chat_list_rebuild_order, plan_projection, reconcile_outbox, reconcile_outbox_entry,
     respond_to_corruption, CorruptionResponse, OutboxAction, ProjectionCheckpoint, ProjectionPlan,
@@ -352,6 +387,11 @@ pub use ephemeral_recovery::{
     history_event_for_recovery, is_persistable, may_resume_media_session, recover_call,
     recover_presence, CallHistoryEvent, CallId, CallRecovery, CallState, EphemeralKind,
     PresenceRecovery,
+};
+pub use ephemeral_state::{
+    persisted_as_authoritative, pressure_source, recover_discovery, recover_dynamic_capability,
+    storage_pressure, CapabilityRecovery, DiscoveredEntry, DiscoveryRecovery, DynamicCapability,
+    PressureKind, PressureLevel, PressureSource, StorageThresholds,
 };
 pub use fault_policy::{
     chunk_may_be_marked_complete, cleanup_ran, disk_full_response, fail_fast, recovery_required,
@@ -405,6 +445,16 @@ pub use reevaluation::{
     reevaluate_policy, sends_may_resume, CapabilityDecision, CurrentPolicy, DeliveryIntent,
     PathKind, PathPlan, PendingWorkFacts, PolicyCancel, PolicyDecision, SendResumeStage,
     VerifiedChunks,
+};
+pub use repair_tools::{
+    authorize_repair, may_run_automatically, plan_repair, repair_authority, AdminCommand,
+    CheckStatus, DoctorCheck, DoctorFinding, DoctorReport, RepairAction, RepairAuthority,
+    RepairLog, RepairLogEntry, RepairMode, RepairRefusal, RepairRequest,
+};
+pub use reporting::{
+    log_rule, may_log, should_block_ui, ux_message, DeveloperDiagnostics, LogField, LogRule,
+    MetricEvent, RecoveryAction, RecoveryActionKind, RecoveryMetrics, RecoveryReport,
+    RecoveryWarning, UxMessage, WarningCode,
 };
 pub use route_resource_recovery::{
     bootstrap_candidates, reconcile_reservation, reconcile_reservations, restart_treatment,

@@ -8,7 +8,31 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §47-60 (modes, corruption, restore, duplicate effects)
+//! ## This pass — §61-75 (effect journal, platforms, supervision)
+//!
+//! - [`effect_journal`] — §61 five-state journal with validated
+//!   transitions; §62/§63 `InFlight` → `UnknownOutcome` after a crash
+//!   (never `Failed`), `EffectRecoveryState` verbatim, evidence-only
+//!   resolution (`Inconclusive` stays unknown); §64 retry-same-id as
+//!   the preferred action, verify or wait otherwise.
+//! - [`effects_io`] — §65 export recovery table (temp+atomic commit by
+//!   default, or numbered visible duplicates, never overwrite) and
+//!   `unique_numbered_name`; §66 notification dedup that is explicitly
+//!   non-authoritative.
+//! - [`platform_recovery`] — §67 `UiSuccess` requires a
+//!   `DurableReceipt`; §68/§69 `remaining_work` /
+//!   `select_for_opportunity` (platform callbacks are only execution
+//!   opportunities, priority-ordered); §70 only the daemon may repair
+//!   storage; §71 `IpcClient` reconnect → fresh snapshot → resubscribe
+//!   with daemon-epoch checks so stale streams are rejected; §72
+//!   headless outcome (never prompts, only key/corruption cases need
+//!   an admin).
+//! - [`supervision`] — §73 five supervised workers, §74 bounded
+//!   exponential backoff with windowed give-up (degraded-stop, no
+//!   restart storm), per-worker isolation; §75 `catch_boundary` for
+//!   panic containment at FFI/service edges.
+//!
+//! ## Previous pass — §47-60
 //!
 //! - [`recovery_mode`] — §50 `RecoverySeverity` verbatim, plus a fixed
 //!   capability set per severity and one [`recovery_mode::gate`] every
@@ -193,9 +217,9 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §60 (side-effect journal, unknown-outcome
-//! semantics, network/export effect recovery, and the rest of this
-//! 186-section spec) is not yet attempted.
+//! which this doc comment now does. Everything past §75 (process-wide panic strategy, OOM, disk-full,
+//! migrations, versioning, locks, timers, scheduler, SOS and
+//! re-evaluation sections, and the rest of this 186-section spec) is not yet attempted.
 
 pub mod atomic_rename;
 pub mod backup_restore;
@@ -205,11 +229,14 @@ pub mod corruption;
 pub mod derived_recovery;
 pub mod dtn_recovery;
 pub mod effect_identity;
+pub mod effect_journal;
+pub mod effects_io;
 pub mod finalization_recovery;
 pub mod idempotent_steps;
 pub mod identity_recovery;
 pub mod messaging_recovery;
 pub mod operation_state;
+pub mod platform_recovery;
 pub mod progressive;
 pub mod recovery_mode;
 pub mod route_resource_recovery;
@@ -217,6 +244,7 @@ pub mod session_recovery;
 pub mod shutdown_marker;
 pub mod staged_intent;
 pub mod state_machine;
+pub mod supervision;
 pub mod temp_scan;
 pub mod transaction_group;
 
@@ -254,6 +282,14 @@ pub use dtn_recovery::{
 pub use effect_identity::{
     DeviceEventId, Effect, EffectId, IdempotentReceiver, ReceiveKey, ReceiveOutcome,
 };
+pub use effect_journal::{
+    classify_after_crash, decide_unknown, resolve_unknown, retry_is_safe, EffectJournal,
+    EffectRecoveryState, EffectState, JournalError, RemoteEvidence, UnknownOutcomeAction,
+};
+pub use effects_io::{
+    plan_export_recovery, unique_numbered_name, ExportFacts, ExportPolicy, ExportRecoveryAction,
+    NotificationDeduper, NotificationKey, NotificationOutcome,
+};
 pub use finalization_recovery::{
     reconcile_finalization, FinalizationRecoveryAction, FinalizationState,
 };
@@ -272,6 +308,11 @@ pub use messaging_recovery::{
     ReceiptApplyOutcome,
 };
 pub use operation_state::{is_definitely_complete, FileOperationState};
+pub use platform_recovery::{
+    headless_outcome, may_repair_storage, remaining_work, select_for_opportunity, DurableReceipt,
+    HeadlessHealth, HeadlessOutcome, IpcClient, IpcClientState, IpcError, ProcessRole, UiSuccess,
+    WorkItem,
+};
 pub use progressive::{ProgressError, ProgressiveRecovery, RecoveryPhase, RecoveryTier};
 pub use recovery_mode::{
     capabilities, gate, terminal_state_for, Capabilities, DegradedSubsystem, Operation,
@@ -292,6 +333,9 @@ pub use shutdown_marker::{
 };
 pub use staged_intent::{reconcile, ReconciliationAction, StagedOperationState};
 pub use state_machine::{InvalidTransition, RecoveryState, RecoveryStateMachine};
+pub use supervision::{
+    catch_boundary, PanicReport, RestartDecision, RestartPolicy, RestartTracker, Supervisor, Worker,
+};
 pub use temp_scan::{
     classify_temp_file, cleanup_decision, plan_cleanup, CleanupDecision, CleanupPolicy, KeepReason,
     OpaqueTempId, ScanContext, TempArea, TempClass, TempFileEntry, TempOwnership,

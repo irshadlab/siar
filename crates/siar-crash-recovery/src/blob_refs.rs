@@ -62,7 +62,7 @@ impl RefCountDrift {
 }
 
 /// Compares the cache to the rebuilt truth. Consistent entries yield
-/// nothing; output order is unspecified.
+/// nothing; output is sorted by blob id so it is deterministic (§131).
 pub fn audit_ref_counts(cached: &RefCounts, authoritative: &RefCounts) -> Vec<RefCountDrift> {
     let mut out = Vec::new();
     for (&blob, &auth) in authoritative {
@@ -98,6 +98,7 @@ pub fn audit_ref_counts(cached: &RefCounts, authoritative: &RefCounts) -> Vec<Re
             });
         }
     }
+    out.sort_by_key(|d| *d.blob.as_bytes());
     out
 }
 

@@ -156,18 +156,24 @@ impl EffectJournal {
     /// `InFlight` entries are *reported* as unknown; they move on only
     /// via evidence or a deliberate retry.
     pub fn recover_after_crash(&self) -> Vec<(EffectId, EffectRecoveryState)> {
-        self.entries
+        let mut v: Vec<_> = self
+            .entries
             .iter()
             .map(|(id, s)| (*id, classify_after_crash(*s)))
-            .collect()
+            .collect();
+        v.sort_by_key(|(id, _)| id.sort_key());
+        v
     }
 
     pub fn unknown_outcomes(&self) -> Vec<EffectId> {
-        self.entries
+        let mut v: Vec<_> = self
+            .entries
             .iter()
             .filter(|(_, s)| **s == EffectState::InFlight)
             .map(|(id, _)| *id)
-            .collect()
+            .collect();
+        v.sort_by_key(EffectId::sort_key);
+        v
     }
 }
 

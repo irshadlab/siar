@@ -34,6 +34,15 @@ impl TransferId {
     pub fn new() -> Self {
         Self(uuid::Uuid::new_v4())
     }
+
+    pub const fn as_uuid(&self) -> uuid::Uuid {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_tests(n: u16) -> Self {
+        Self(uuid::Uuid::from_u128(n as u128 + 1))
+    }
 }
 
 impl Default for TransferId {

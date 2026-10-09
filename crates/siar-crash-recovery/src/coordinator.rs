@@ -14,6 +14,7 @@
 //! subsystems are heterogeneous, and none of this is on a hot path.
 
 use crate::cleanup_quarantine::{CleanupPhase, CleanupSequencer};
+use crate::error_model::RecoveryFailure;
 use crate::recovery_mode::{RecoverySeverity, SeverityAccumulator};
 use crate::reporting::{RecoveryAction, RecoveryReport, RecoveryWarning, WarningCode};
 use crate::timing_recovery::WallMillis;
@@ -111,21 +112,22 @@ pub const fn check_depth(mode: RecoveryMode, full_check_due: bool) -> CheckDepth
 // §136
 // ---------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecoveryErrorKind {
-    Storage,
-    Identity,
-    Integrity,
-    Timeout,
-    Other,
-}
-
 /// Code-only error (no free text → no secret can leak into it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("subsystem recovery failed ({kind:?}, severity {severity:?})")]
+#[error("subsystem recovery failed ({failure}, severity {severity:?})")]
 pub struct RecoveryError {
-    pub kind: RecoveryErrorKind,
+    pub failure: RecoveryFailure,
     pub severity: RecoverySeverity,
+}
+
+impl RecoveryError {
+    /// A failure at its default severity (§181).
+    pub const fn of(failure: RecoveryFailure) -> Self {
+        Self {
+            failure,
+            severity: failure.default_severity(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,7 +338,7 @@ mod tests {
 
     fn err(sev: RecoverySeverity) -> Result<SubsystemRecoveryReport, RecoveryError> {
         Err(RecoveryError {
-            kind: RecoveryErrorKind::Integrity,
+            failure: RecoveryFailure::IntegrityFailure,
             severity: sev,
         })
     }

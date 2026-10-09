@@ -338,9 +338,9 @@ mod tests {
     use super::*;
     use crate::cleanup_quarantine::CleanupPhase;
     use crate::coordinator::{
-        RecoverableSubsystem, RecoveryError, RecoveryErrorKind, RecoveryMode,
-        SubsystemRecoveryReport,
+        RecoverableSubsystem, RecoveryError, RecoveryMode, SubsystemRecoveryReport,
     };
+    use crate::error_model::RecoveryFailure;
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
 
@@ -377,7 +377,7 @@ mod tests {
                     warnings: vec![],
                 }),
                 Err(severity) => Err(RecoveryError {
-                    kind: RecoveryErrorKind::Integrity,
+                    failure: RecoveryFailure::IntegrityFailure,
                     severity,
                 }),
             }

@@ -8,7 +8,27 @@
 //! SQLite backend, the same constraint every other crate in this
 //! series already documents).
 //!
-//! ## This pass — §166-179 (startup policy, linking, seams, interop)
+//! ## This pass — §180-186 (closing: structure, errors, scope, DoD)
+//!
+//! - [`error_model`] — §181 `RecoveryFailure`, the spec's ten
+//!   variants verbatim (it replaced the coordinator's five-variant
+//!   `RecoveryErrorKind`), with a default severity per variant and
+//!   conversions from this crate's other rejection types; tests tie
+//!   the table to `corruption::response_for` and rollback severity.
+//! - [`scope_and_phases`] — §180/§182/§183/§185 as *checked data*:
+//!   the suggested 15-file layout mapped to real modules, the 14
+//!   "implement first" items and 7 phases each with evidence, the 3
+//!   deferred items recorded, and the §185 relationship table, whose
+//!   tests verify every module exists, every source file is
+//!   documented, every claimed dependency is in `Cargo.toml` **and
+//!   used**, and every "modelled" part is *not* a dependency.
+//! - [`definition_of_done`] — §184's 20 criteria as an executable
+//!   audit (`audit()`): 16 `Done`, 4 `PartiallyDone` with the missing
+//!   piece named; plus `measure_wiring`, which scans the workspace and
+//!   reports that **no other crate depends on this one yet**; and
+//!   §186's four-clause final principle, each clause verified.
+//!
+//! ## Previous pass — §166-179
 //!
 //! - [`startup_policy`] — §166 only *isolated, non-critical* recovery
 //!   may continue after the network is up; §171 battery/thermal are
@@ -420,10 +440,10 @@
 //! implement log semantics already provided by database engine unless
 //! needed"), not a design this crate could implement. There is nothing
 //! to build faithfully to that section beyond noting the decision,
-//! which this doc comment now does. Everything past §179 (§180 suggested crate structure, §181 error
-//! model, §182 production scope, §183 phases, §184 definition of
-//! done, §185 relationships, §186 final principle — the closing 7
-//! sections of this 186-section spec) is not yet attempted.
+//! which this doc comment now does. All 186 sections of the spec are now implemented, or consciously not
+//! built (§10's WAL is a documented do-not-build decision; §182's
+//! three deferrals are recorded in [`scope_and_phases`]). See
+//! [`definition_of_done`] for the honest audit.
 
 pub mod atomic_rename;
 pub mod backup_restore;
@@ -435,6 +455,7 @@ pub mod config_durability;
 pub mod coordinator;
 pub mod corruption;
 pub mod crash_injection;
+pub mod definition_of_done;
 pub mod derived_recovery;
 pub mod device_linking;
 pub mod dtn_recovery;
@@ -443,6 +464,7 @@ pub mod effect_journal;
 pub mod effects_io;
 pub mod ephemeral_recovery;
 pub mod ephemeral_state;
+pub mod error_model;
 pub mod extensions;
 pub mod failpoint;
 pub mod fault_policy;
@@ -473,6 +495,7 @@ pub mod reporting;
 pub mod restore_scope;
 pub mod route_resource_recovery;
 pub mod runtime_api;
+pub mod scope_and_phases;
 pub mod session_recovery;
 pub mod shutdown_marker;
 pub mod staged_intent;
@@ -516,8 +539,8 @@ pub use config_durability::{
 };
 pub use coordinator::{
     check_depth, full_check_due, startup_mode, CheckDepth, CoordinatorOutcome,
-    RecoverableSubsystem, RecoveryContext, RecoveryCoordinator, RecoveryError, RecoveryErrorKind,
-    RecoveryMode, StartupFacts, SubsystemRecoveryReport,
+    RecoverableSubsystem, RecoveryContext, RecoveryCoordinator, RecoveryError, RecoveryMode,
+    StartupFacts, SubsystemRecoveryReport,
 };
 pub use corruption::{
     mechanism_for, plan_blob_corruption, rebuild_journal_progress, response_for, restore_sources,
@@ -525,6 +548,10 @@ pub use corruption::{
     CorruptionScope, DataDomain, DetectionMechanism, JournalRebuild, RestoreSource, SequenceGap,
 };
 pub use crash_injection::{CrashInjector, CrashPoint, InjectedCrash};
+pub use definition_of_done::{
+    audit, final_principle_holds, measure_wiring, AuditItem, AuditReport, AuditStatus,
+    PrincipleClause, Wiring, FINAL_PRINCIPLE,
+};
 pub use derived_recovery::{
     chat_list_rebuild_order, plan_projection, reconcile_outbox, reconcile_outbox_entry,
     respond_to_corruption, CorruptionResponse, OutboxAction, ProjectionCheckpoint, ProjectionPlan,
@@ -559,6 +586,7 @@ pub use ephemeral_state::{
     storage_pressure, CapabilityRecovery, DiscoveredEntry, DiscoveryRecovery, DynamicCapability,
     PressureKind, PressureLevel, PressureSource, StorageThresholds,
 };
+pub use error_model::{failure_for_open, RecoveryFailure};
 pub use extensions::{
     validate_descriptor, Criticality, ExtensionDescriptor, ExtensionId, ExtensionStartPlan,
     ExtensionState, ExtensionSupervisor, MissingDeclaration,

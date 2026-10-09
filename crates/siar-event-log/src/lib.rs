@@ -103,6 +103,25 @@
 //!   why pairing a durable projection with an in-memory checkpoint
 //!   would be actively wrong, not just less thorough.
 //!
+//! ## Phase 5: outbox, effects, retry, recovery
+//!
+//! - [`outbox`] — §14/§15/§31: deterministic [`outbox::OperationId`]s,
+//!   the [`outbox::Outbox`] queue (leases, idempotent enqueue), and
+//!   [`outbox::TransactionalOutbox`] — events and outbox rows committed
+//!   in one transaction by both [`InMemoryEventStore`] and
+//!   [`StoolapEventStore`].
+//! - [`stoolap_outbox`] — the durable table, sharing the event store's
+//!   database and write lock; behaviourally identical to the in-memory
+//!   reference (property-tested).
+//! - [`command_flow`] — §13/§29/§30: pure `Decider`, `EffectPlanner`,
+//!   and `CommandFlow` (decide → plan → atomic commit → project; effects
+//!   only ever run later).
+//! - [`effects`] — §30/§32/§45/§46: `EffectProcessor`, `BackoffPolicy`,
+//!   attempt metrics vs. meaningful-transition sink, and the
+//!   `ReplayMode` gate that keeps projection replay from running effects.
+//! - [`outbox_reconcile`] — §48/§47: rebuild a lost or drifted outbox
+//!   from history with the original operation ids.
+//!
 //! Every module above is covered by tests exercising real behavior —
 //! actual concurrent-writer rejection, actual duplicate-event
 //! deduplication, actual gap detection on the spec's own worked
@@ -113,10 +132,9 @@
 //!
 //! ## What's explicitly NOT here
 //!
-//! Everything past Phase 4: §9's versioned-schema upcasting machinery,
-//! §13/§14's local-first command flow and transactional outbox
-//! (application-level patterns this crate's trait *enables* but doesn't
-//! itself implement — Phase 5), §23 the full remote-ingestion pipeline
+//! Everything past Phase 5 (Phases 6-7: replication scopes, snapshots,
+//! compaction, migration tests), plus §9's versioned-schema upcasting machinery,
+//! §23 the full remote-ingestion pipeline
 //! (protocol/identity/authorization validation — this crate has no
 //! dependency on `siar-identity-multidevice` or `siar-protocol-ext` for
 //! that reason; only [`gap::detect_gap`] serves that path), §25's
@@ -142,17 +160,22 @@
 //! — `stoolap_checkpoint_store` exists ahead of that caller, per that
 //! module's own doc comment on why.
 
+pub mod command_flow;
 pub mod durability;
+pub mod effects;
 pub mod envelope;
 pub mod fault_injection;
 pub mod gap;
 pub mod ids;
 pub mod memory_store;
 pub mod metrics;
+pub mod outbox;
+pub mod outbox_reconcile;
 pub mod projection;
 pub mod read_only;
 pub mod retry;
 pub mod stoolap_checkpoint_store;
+pub mod stoolap_outbox;
 pub mod stoolap_store;
 pub mod store;
 

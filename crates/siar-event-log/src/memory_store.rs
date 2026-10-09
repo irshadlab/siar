@@ -279,6 +279,11 @@ impl EventStore for InMemoryEventStore {
             .collect())
     }
 
+    async fn stream_head(&self, stream: StreamId) -> Result<u64, EventStoreError> {
+        let inner = self.inner.lock().expect("InMemoryEventStore lock poisoned");
+        Ok(inner.streams.get(&stream).map_or(0, |e| e.len() as u64))
+    }
+
     async fn read_log(
         &self,
         from_offset: LocalLogOffset,

@@ -122,6 +122,23 @@
 //! - [`outbox_reconcile`] — §48/§47: rebuild a lost or drifted outbox
 //!   from history with the original operation ids.
 //!
+//! ## Phase 6: replication scopes, cursors, ordered intake
+//!
+//! - [`replication`] — §49-52: [`replication::ReplicationScope`] with
+//!   a fail-closed [`replication::ScopeTable`], the §51
+//!   [`replication::ReplicationAuthorizer`] seam (`Allow`/`Skip`/`Defer`),
+//!   the separate wire type [`replication::ReplicationEventV1`], and
+//!   [`replication::next_outbound_batch`]. Includes the stream-layout
+//!   rule found while testing: a replicated stream must contain only
+//!   replicable events, enforced by `OutboundBatch::has_version_holes`.
+//! - [`sync_cursor`] — §53: monotonic, acknowledgement-driven cursors,
+//!   in-memory and `stoolap`-backed.
+//! - [`reassembly`] — §25/§26: hold-then-apply out-of-order intake with
+//!   bounded buffers that refuse loudly rather than drop, and
+//!   divergence reported rather than resolved (§54).
+//! - [`store::EventStore::stream_head`] — a provided method (O(1) in
+//!   both real backends), so adding it broke no implementor.
+//!
 //! Every module above is covered by tests exercising real behavior —
 //! actual concurrent-writer rejection, actual duplicate-event
 //! deduplication, actual gap detection on the spec's own worked
@@ -173,11 +190,14 @@ pub mod outbox;
 pub mod outbox_reconcile;
 pub mod projection;
 pub mod read_only;
+pub mod reassembly;
+pub mod replication;
 pub mod retry;
 pub mod stoolap_checkpoint_store;
 pub mod stoolap_outbox;
 pub mod stoolap_store;
 pub mod store;
+pub mod sync_cursor;
 
 pub use durability::DurabilityClass;
 pub use envelope::{EventEnvelope, EventOrigin};

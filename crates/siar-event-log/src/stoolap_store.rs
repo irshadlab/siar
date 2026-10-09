@@ -579,6 +579,27 @@ impl EventStore for StoolapEventStore {
         self.append_inner(request, Vec::new())
     }
 
+    async fn stream_head(&self, stream: StreamId) -> Result<u64, EventStoreError> {
+        let _guard = self
+            .append_lock
+            .lock()
+            .expect("StoolapEventStore append lock poisoned");
+        let mut rows = self
+            .db
+            .query(
+                "SELECT current_version FROM stream_heads WHERE stream_id = $1",
+                (hex_encode(stream.as_bytes()),),
+            )
+            .map_err(backend_err)?;
+        match rows.next() {
+            Some(row) => Ok(row
+                .map_err(backend_err)?
+                .get::<i64>(0)
+                .map_err(backend_err)? as u64),
+            None => Ok(0),
+        }
+    }
+
     async fn read_stream(
         &self,
         stream: StreamId,

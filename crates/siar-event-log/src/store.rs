@@ -180,4 +180,26 @@ pub trait EventStore: Send + Sync {
         from_offset: LocalLogOffset,
         limit: usize,
     ) -> Result<Vec<StoredEvent>, EventStoreError>;
+
+    /// Current version of `stream` (0 if it has no events) — the value
+    /// §12's `expected_version` must equal for the next append.
+    ///
+    /// A provided method so adding it breaks no existing implementor or
+    /// wrapper: the default pages through `read_stream`, which is
+    /// correct for any backend but O(stream length). Real backends
+    /// override it with an O(1) lookup ([`crate::memory_store::
+    /// InMemoryEventStore`] and [`crate::stoolap_store::
+    /// StoolapEventStore`] both do). Wrappers that don't forward it
+    /// (metrics, read-only, ...) simply fall back to the default.
+    async fn stream_head(&self, stream: StreamId) -> Result<u64, EventStoreError> {
+        const PAGE: usize = 1024;
+        let mut head = 0u64;
+        loop {
+            let page = self.read_stream(stream, head, PAGE).await?;
+            match page.last() {
+                Some(last) => head = last.envelope.stream_version,
+                None => return Ok(head),
+            }
+        }
+    }
 }

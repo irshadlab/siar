@@ -13,7 +13,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::envelope::EventEnvelope;
-use crate::ids::{EventId, LocalLogOffset, StreamId};
+use crate::ids::{EventId, LocalLogOffset, StreamId, Timestamp};
+use crate::outbox::{
+    outbox_err_to_store, EnqueueOutcome, OperationId, Outbox, OutboxCounts, OutboxEntry,
+    OutboxError, OutboxTable, TransactionalOutbox,
+};
 use crate::store::{
     validate_payload_size, AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent,
 };
@@ -23,6 +27,10 @@ struct Inner {
     streams: HashMap<StreamId, Vec<StoredEvent>>,
     log: Vec<StoredEvent>,
     seen_event_ids: HashSet<EventId>,
+    /// §14: the outbox lives under the SAME lock as the log, which is
+    /// what lets [`TransactionalOutbox::append_with_outbox`] commit
+    /// both together.
+    outbox: OutboxTable,
 }
 
 #[derive(Default)]
@@ -59,19 +67,29 @@ impl InMemoryEventStore {
     }
 }
 
-#[async_trait]
-impl EventStore for InMemoryEventStore {
-    /// §11's transaction, made real: the whole batch is evaluated
-    /// under one lock acquisition (this crate's stand-in for "BEGIN...
-    /// COMMIT" — a real SQLite backend would use an actual DB
-    /// transaction here instead), so a concurrent `append` from
-    /// another task never observes a half-applied batch.
-    async fn append(&self, request: AppendRequest) -> Result<AppendResult, EventStoreError> {
+impl InMemoryEventStore {
+    /// A view of this store's embedded outbox (§14). Operations on it
+    /// take the same lock as `append`, so it is consistent with the
+    /// log at every instant.
+    pub fn outbox(&self) -> EmbeddedOutbox<'_> {
+        EmbeddedOutbox { store: self }
+    }
+
+    fn append_inner(
+        &self,
+        request: AppendRequest,
+        entries: Vec<OutboxEntry>,
+    ) -> Result<AppendResult, EventStoreError> {
         // §55: checked before touching any state at all — a whole
         // batch containing one oversized event is rejected outright,
         // never partially applied.
         for new_event in &request.events {
             validate_payload_size(new_event.event_type, new_event.payload.len())?;
+        }
+        // Same discipline for the outbox half of the transaction: an
+        // invalid entry must not leave its events behind.
+        for entry in &entries {
+            crate::outbox::validate_entry(entry).map_err(outbox_err_to_store)?;
         }
 
         let mut inner = self.inner.lock().expect("InMemoryEventStore lock poisoned");
@@ -148,11 +166,102 @@ impl EventStore for InMemoryEventStore {
             local_offsets.push(Some(offset));
         }
 
+        // Cannot fail: every entry was validated above, and `insert`'s
+        // only error is that same validation.
+        for entry in entries {
+            inner.outbox.insert(entry).map_err(outbox_err_to_store)?;
+        }
+
         Ok(AppendResult {
             stream_id: request.stream_id,
             new_version,
             local_offsets,
         })
+    }
+}
+
+/// See [`InMemoryEventStore::outbox`].
+pub struct EmbeddedOutbox<'a> {
+    store: &'a InMemoryEventStore,
+}
+
+impl EmbeddedOutbox<'_> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.store
+            .inner
+            .lock()
+            .expect("InMemoryEventStore lock poisoned")
+    }
+}
+
+impl Outbox for EmbeddedOutbox<'_> {
+    async fn enqueue(&self, entry: OutboxEntry) -> Result<EnqueueOutcome, OutboxError> {
+        self.lock().outbox.insert(entry)
+    }
+    async fn claim_due(
+        &self,
+        now: Timestamp,
+        lease_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<OutboxEntry>, OutboxError> {
+        Ok(self.lock().outbox.claim_due(now, lease_ms, limit))
+    }
+    async fn complete(&self, id: OperationId, now: Timestamp) -> Result<(), OutboxError> {
+        self.lock().outbox.complete(id, now)
+    }
+    async fn reschedule(
+        &self,
+        id: OperationId,
+        not_before: Timestamp,
+        error: Option<String>,
+        now: Timestamp,
+    ) -> Result<(), OutboxError> {
+        self.lock().outbox.reschedule(id, not_before, error, now)
+    }
+    async fn dead_letter(
+        &self,
+        id: OperationId,
+        reason: String,
+        now: Timestamp,
+    ) -> Result<(), OutboxError> {
+        self.lock().outbox.dead_letter(id, reason, now)
+    }
+    async fn get(&self, id: OperationId) -> Result<Option<OutboxEntry>, OutboxError> {
+        Ok(self.lock().outbox.get(id))
+    }
+    async fn list_open(&self, limit: usize) -> Result<Vec<OutboxEntry>, OutboxError> {
+        Ok(self.lock().outbox.list_open(limit))
+    }
+    async fn release_all_in_flight(&self, now: Timestamp) -> Result<u64, OutboxError> {
+        Ok(self.lock().outbox.release_all_in_flight(now))
+    }
+    async fn purge_done(&self, before: Timestamp) -> Result<u64, OutboxError> {
+        Ok(self.lock().outbox.purge_done(before))
+    }
+    async fn counts(&self) -> Result<OutboxCounts, OutboxError> {
+        Ok(self.lock().outbox.counts())
+    }
+}
+
+impl TransactionalOutbox for InMemoryEventStore {
+    async fn append_with_outbox(
+        &self,
+        request: AppendRequest,
+        entries: Vec<OutboxEntry>,
+    ) -> Result<AppendResult, EventStoreError> {
+        self.append_inner(request, entries)
+    }
+}
+
+#[async_trait]
+impl EventStore for InMemoryEventStore {
+    /// §11's transaction, made real: the whole batch is evaluated
+    /// under one lock acquisition (this crate's stand-in for "BEGIN...
+    /// COMMIT" — a real SQLite backend would use an actual DB
+    /// transaction here instead), so a concurrent `append` from
+    /// another task never observes a half-applied batch.
+    async fn append(&self, request: AppendRequest) -> Result<AppendResult, EventStoreError> {
+        self.append_inner(request, Vec::new())
     }
 
     async fn read_stream(

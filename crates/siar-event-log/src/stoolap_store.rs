@@ -80,9 +80,8 @@
 //! §92 Phase 2 itself, made real (SQLite/stoolap backend, stream
 //! versioning, global local offset, unique event ids, batch append) —
 //! not the phases after it. In particular: no snapshots (§38-39, Phase
-//! 7), no outbox table (§14, Phase 5 — this module is a plain
-//! [`EventStore`], not the transactional-outbox hybrid that section
-//! describes), no projection/checkpoint machinery (§16-18, Phase 4), no
+//! 7), the §14 outbox is a separate table in this same database
+//! (see [`crate::stoolap_outbox`] and [`TransactionalOutbox`]), no projection/checkpoint machinery (§16-18, Phase 4), no
 //! retention/compaction (§40), no migrations beyond `CREATE TABLE IF
 //! NOT EXISTS` (§57's own schema has no version column yet — a real gap
 //! for whoever adds the first breaking schema change), and no crash-
@@ -90,7 +89,7 @@
 //! durability test (see this module's own tests), which exercises real
 //! disk persistence but not an actual killed process.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -98,6 +97,8 @@ use stoolap::Database;
 
 use crate::envelope::{EventEnvelope, EventOrigin};
 use crate::ids::{CorrelationId, EventId, EventTypeId, LocalLogOffset, StreamId, Timestamp};
+use crate::outbox::{outbox_err_to_store, OutboxEntry, TransactionalOutbox};
+use crate::stoolap_outbox::{apply_outbox_schema, insert_if_absent, StoolapOutbox};
 use crate::store::{
     validate_payload_size, AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent,
 };
@@ -114,7 +115,11 @@ pub struct StoolapEventStore {
     // own methods take `&self`); it exists purely to serialize the
     // multi-statement check-then-write critical section in
     // [`Self::append`].
-    append_lock: Mutex<()>,
+    //
+    // `Arc` so the §14 outbox (see [`StoolapOutbox`]) can serialize
+    // against the very same lock: its writes and this store's appends
+    // must never overlap on one database.
+    append_lock: Arc<Mutex<()>>,
 }
 
 impl StoolapEventStore {
@@ -141,8 +146,17 @@ impl StoolapEventStore {
         apply_schema(&db)?;
         Ok(Self {
             db,
-            append_lock: Mutex::new(()),
+            append_lock: Arc::new(Mutex::new(())),
         })
+    }
+
+    /// §14's outbox over this store's own database and write lock —
+    /// the handle to give an [`crate::effects::EffectProcessor`] or
+    /// [`crate::outbox_reconcile::reconcile_outbox`]. Rows enqueued via
+    /// [`TransactionalOutbox::append_with_outbox`] are visible here.
+    pub fn outbox(&self) -> Result<StoolapOutbox, EventStoreError> {
+        StoolapOutbox::from_database(self.db.clone(), Arc::clone(&self.append_lock))
+            .map_err(outbox_err_to_store)
     }
 }
 
@@ -198,6 +212,10 @@ fn apply_schema(db: &Database) -> Result<(), EventStoreError> {
         (),
     )
     .map_err(backend_err)?;
+
+    // §14: the outbox lives in the same database so its rows can commit
+    // in the same transaction as the events that cause them.
+    apply_outbox_schema(db).map_err(outbox_err_to_store)?;
 
     Ok(())
 }
@@ -361,17 +379,34 @@ fn row_to_stored_event(row: &stoolap::ResultRow) -> Result<StoredEvent, EventSto
     })
 }
 
-#[async_trait]
-impl EventStore for StoolapEventStore {
-    /// §11/§12/§21/§24 — see the module doc's "Atomic append" section
-    /// for why the `Mutex` is here alongside `stoolap`'s own
-    /// transaction.
-    async fn append(&self, request: AppendRequest) -> Result<AppendResult, EventStoreError> {
+impl TransactionalOutbox for StoolapEventStore {
+    /// §14: events and outbox rows commit in ONE `stoolap` transaction.
+    /// A conflict, size rejection, or any backend failure rolls back
+    /// both; an outbox row that already exists (resubmitted command) is
+    /// a no-op, same as a duplicate `EventId` (§24).
+    async fn append_with_outbox(
+        &self,
+        request: AppendRequest,
+        entries: Vec<OutboxEntry>,
+    ) -> Result<AppendResult, EventStoreError> {
+        self.append_inner(request, entries)
+    }
+}
+
+impl StoolapEventStore {
+    fn append_inner(
+        &self,
+        request: AppendRequest,
+        entries: Vec<OutboxEntry>,
+    ) -> Result<AppendResult, EventStoreError> {
         // §55: checked before acquiring the lock or opening a
         // transaction at all — no reason to touch the database for a
         // batch that's going to be rejected regardless.
         for new_event in &request.events {
             validate_payload_size(new_event.event_type, new_event.payload.len())?;
+        }
+        for entry in &entries {
+            crate::outbox::validate_entry(entry).map_err(outbox_err_to_store)?;
         }
 
         let _guard = self
@@ -491,18 +526,25 @@ impl EventStore for StoolapEventStore {
             }
 
             if new_version != current_version {
-                self.db
-                    .execute(
-                        "DELETE FROM stream_heads WHERE stream_id = $1",
-                        (stream_id_hex.clone(),),
-                    )
-                    .map_err(backend_err)?;
-                self.db
-                    .execute(
-                        "INSERT INTO stream_heads (stream_id, current_version) VALUES ($1, $2)",
-                        (stream_id_hex.clone(), new_version as i64),
-                    )
-                    .map_err(backend_err)?;
+                if current_version == 0 {
+                    self.db
+                        .execute(
+                            "INSERT INTO stream_heads (stream_id, current_version) VALUES ($1, $2)",
+                            (stream_id_hex.clone(), new_version as i64),
+                        )
+                        .map_err(backend_err)?;
+                } else {
+                    self.db
+                        .execute(
+                            "UPDATE stream_heads SET current_version = $1 WHERE stream_id = $2",
+                            (new_version as i64, stream_id_hex.clone()),
+                        )
+                        .map_err(backend_err)?;
+                }
+            }
+
+            for entry in &entries {
+                insert_if_absent(&self.db, entry).map_err(outbox_err_to_store)?;
             }
 
             Ok(AppendResult {
@@ -525,6 +567,16 @@ impl EventStore for StoolapEventStore {
                 Err(e)
             }
         }
+    }
+}
+
+#[async_trait]
+impl EventStore for StoolapEventStore {
+    /// §11/§12/§21/§24 — see the module doc's "Atomic append" section
+    /// for why the `Mutex` is here alongside `stoolap`'s own
+    /// transaction.
+    async fn append(&self, request: AppendRequest) -> Result<AppendResult, EventStoreError> {
+        self.append_inner(request, Vec::new())
     }
 
     async fn read_stream(

@@ -241,6 +241,16 @@ pub enum ReplayMode {
     Live,
 }
 
+impl ReplayMode {
+    /// §46: "only recovery/live mode may schedule external work
+    /// according to durable pending state." The single place that rule
+    /// is written down — [`ProjectionRunner::catch_up_with_mode`] and
+    /// [`crate::effects::EffectProcessor::run_once`] both consult it.
+    pub const fn may_schedule_external_work(self) -> bool {
+        matches!(self, Self::Recovery | Self::Live)
+    }
+}
+
 /// [`ProjectionRunner::catch_up_with_mode`]'s own return type — same
 /// `applied` [`ProjectionRunner::catch_up`] already returns, plus the
 /// one real thing [`ReplayMode`] currently decides. See
@@ -357,7 +367,7 @@ impl<'a> ProjectionRunner<'a> {
         let applied = self.catch_up(projection, batch_size).await?;
         Ok(CatchUpOutcome {
             applied,
-            may_schedule_external_work: matches!(mode, ReplayMode::Recovery | ReplayMode::Live),
+            may_schedule_external_work: mode.may_schedule_external_work(),
         })
     }
 }

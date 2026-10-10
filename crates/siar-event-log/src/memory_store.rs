@@ -18,9 +18,7 @@ use crate::outbox::{
     outbox_err_to_store, EnqueueOutcome, OperationId, Outbox, OutboxCounts, OutboxEntry,
     OutboxError, OutboxTable, TransactionalOutbox,
 };
-use crate::store::{
-    validate_payload_size, AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent,
-};
+use crate::store::{AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent};
 
 #[derive(Default)]
 struct Inner {
@@ -31,6 +29,8 @@ struct Inner {
     /// what lets [`TransactionalOutbox::append_with_outbox`] commit
     /// both together.
     outbox: OutboxTable,
+    /// §40/§41 tombstones — see [`crate::redaction`].
+    redacted: HashSet<EventId>,
 }
 
 #[derive(Default)]
@@ -41,11 +41,20 @@ pub struct InMemoryEventStore {
     /// existing caller's behavior before this round untouched. See
     /// [`Self::with_capacity`].
     max_total_events: Option<usize>,
+    /// §55 per-type size limits — see [`crate::limits`].
+    limits: crate::limits::EventLimits,
 }
 
 impl InMemoryEventStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// §55: per-event-type payload limits. Default: the flat
+    /// [`crate::store::DEFAULT_MAX_EVENT_PAYLOAD_BYTES`] for everything.
+    pub fn with_limits(mut self, limits: crate::limits::EventLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// §68, verbatim: "if storage is full, do not report 'queued'
@@ -63,11 +72,28 @@ impl InMemoryEventStore {
         Self {
             inner: Mutex::default(),
             max_total_events: Some(max_total_events),
+            limits: crate::limits::EventLimits::default(),
         }
     }
 }
 
 impl InMemoryEventStore {
+    /// Test hook: overwrite a stored payload in place, bypassing every
+    /// guarantee — simulates an attacker (or bit-rot) editing the
+    /// database.
+    #[cfg(test)]
+    pub(crate) fn tamper_payload(&self, id: EventId, payload: Vec<u8>) {
+        let mut inner = self.inner.lock().expect("InMemoryEventStore lock poisoned");
+        for e in inner.log.iter_mut().filter(|e| e.envelope.event_id == id) {
+            e.envelope.payload = payload.clone();
+        }
+        for events in inner.streams.values_mut() {
+            for e in events.iter_mut().filter(|e| e.envelope.event_id == id) {
+                e.envelope.payload = payload.clone();
+            }
+        }
+    }
+
     /// A view of this store's embedded outbox (§14). Operations on it
     /// take the same lock as `append`, so it is consistent with the
     /// log at every instant.
@@ -84,7 +110,8 @@ impl InMemoryEventStore {
         // batch containing one oversized event is rejected outright,
         // never partially applied.
         for new_event in &request.events {
-            validate_payload_size(new_event.event_type, new_event.payload.len())?;
+            self.limits
+                .validate(new_event.event_type, new_event.payload.len())?;
         }
         // Same discipline for the outbox half of the transaction: an
         // invalid entry must not leave its events behind.
@@ -240,6 +267,52 @@ impl Outbox for EmbeddedOutbox<'_> {
     }
     async fn counts(&self) -> Result<OutboxCounts, OutboxError> {
         Ok(self.lock().outbox.counts())
+    }
+    async fn scrub(
+        &self,
+        ids: &[OperationId],
+        reason: &str,
+        now: Timestamp,
+    ) -> Result<u64, OutboxError> {
+        Ok(self.lock().outbox.scrub(ids, reason, now))
+    }
+}
+
+impl crate::redaction::RedactableStore for InMemoryEventStore {
+    async fn redact_payloads(
+        &self,
+        event_ids: &[EventId],
+    ) -> Result<crate::redaction::RedactionReport, EventStoreError> {
+        let mut inner = self.inner.lock().expect("InMemoryEventStore lock poisoned");
+        let mut report = crate::redaction::RedactionReport::default();
+        for id in event_ids {
+            if !inner.seen_event_ids.contains(id) {
+                report.not_found += 1;
+            } else if inner.redacted.contains(id) {
+                report.already_redacted += 1;
+            } else {
+                inner.redacted.insert(*id);
+                for e in inner.log.iter_mut().filter(|e| e.envelope.event_id == *id) {
+                    e.envelope.payload.clear();
+                }
+                for events in inner.streams.values_mut() {
+                    for e in events.iter_mut().filter(|e| e.envelope.event_id == *id) {
+                        e.envelope.payload.clear();
+                    }
+                }
+                report.redacted += 1;
+            }
+        }
+        Ok(report)
+    }
+
+    async fn is_redacted(&self, event_id: EventId) -> Result<bool, EventStoreError> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("InMemoryEventStore lock poisoned")
+            .redacted
+            .contains(&event_id))
     }
 }
 

@@ -384,6 +384,7 @@ enum Op {
     DeadLetter { n: u8 },
     Release,
     Purge { before: u64 },
+    Scrub { ns: Vec<u8> },
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -399,6 +400,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         (0u8..6).prop_map(|n| Op::DeadLetter { n }),
         Just(Op::Release),
         (0u64..400).prop_map(|before| Op::Purge { before }),
+        proptest::collection::vec(0u8..6, 0..4).prop_map(|ns| Op::Scrub { ns }),
     ]
 }
 
@@ -436,6 +438,10 @@ async fn apply<O: Outbox>(o: &O, op: &Op, clock: u64) -> String {
         Op::DeadLetter { n } => format!("{:?}", o.dead_letter(id_of(*n), "dead".into(), now).await),
         Op::Release => format!("{:?}", o.release_all_in_flight(now).await),
         Op::Purge { before } => format!("{:?}", o.purge_done(Timestamp(*before)).await),
+        Op::Scrub { ns } => {
+            let ids: Vec<OperationId> = ns.iter().map(|n| id_of(*n)).collect();
+            format!("{:?}", o.scrub(&ids, "scrubbed", now).await)
+        }
     }
 }
 

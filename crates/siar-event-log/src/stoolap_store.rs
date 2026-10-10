@@ -99,9 +99,7 @@ use crate::envelope::{EventEnvelope, EventOrigin};
 use crate::ids::{CorrelationId, EventId, EventTypeId, LocalLogOffset, StreamId, Timestamp};
 use crate::outbox::{outbox_err_to_store, OutboxEntry, TransactionalOutbox};
 use crate::stoolap_outbox::{apply_outbox_schema, insert_if_absent, StoolapOutbox};
-use crate::store::{
-    validate_payload_size, AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent,
-};
+use crate::store::{AppendRequest, AppendResult, EventStore, EventStoreError, StoredEvent};
 use async_trait::async_trait;
 use siar_domain::DeviceId;
 use uuid::Uuid;
@@ -120,6 +118,8 @@ pub struct StoolapEventStore {
     // against the very same lock: its writes and this store's appends
     // must never overlap on one database.
     append_lock: Arc<Mutex<()>>,
+    /// §55 per-type size limits — see [`crate::limits`].
+    limits: crate::limits::EventLimits,
 }
 
 impl StoolapEventStore {
@@ -137,6 +137,12 @@ impl StoolapEventStore {
     /// In-memory store — for tests, and for any caller that wants this
     /// trait's real transactional/idempotency behavior without a file
     /// on disk (mirrors `siar-storage::open_in_memory`).
+    /// §55: per-event-type payload limits (default: the flat ceiling).
+    pub fn with_limits(mut self, limits: crate::limits::EventLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
     pub fn open_in_memory() -> Result<Self, EventStoreError> {
         let db = Database::open_in_memory().map_err(|e| EventStoreError::Backend(e.to_string()))?;
         Self::from_database(db)
@@ -147,6 +153,7 @@ impl StoolapEventStore {
         Ok(Self {
             db,
             append_lock: Arc::new(Mutex::new(())),
+            limits: crate::limits::EventLimits::default(),
         })
     }
 
@@ -209,6 +216,18 @@ fn apply_schema(db: &Database) -> Result<(), EventStoreError> {
     .map_err(backend_err)?;
     db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_stream_heads_id ON stream_heads (stream_id)",
+        (),
+    )
+    .map_err(backend_err)?;
+
+    // §40/§41: tombstone markers — see `crate::redaction`.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS redactions (event_id TEXT NOT NULL)",
+        (),
+    )
+    .map_err(backend_err)?;
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_redactions_event ON redactions (event_id)",
         (),
     )
     .map_err(backend_err)?;
@@ -379,6 +398,121 @@ fn row_to_stored_event(row: &stoolap::ResultRow) -> Result<StoredEvent, EventSto
     })
 }
 
+impl crate::redaction::RedactableStore for StoolapEventStore {
+    async fn redact_payloads(
+        &self,
+        event_ids: &[EventId],
+    ) -> Result<crate::redaction::RedactionReport, EventStoreError> {
+        let _guard = self
+            .append_lock
+            .lock()
+            .expect("StoolapEventStore append lock poisoned");
+        self.db.execute("BEGIN", ()).map_err(backend_err)?;
+        let run = || -> Result<crate::redaction::RedactionReport, EventStoreError> {
+            let mut report = crate::redaction::RedactionReport::default();
+            for id in event_ids {
+                let id_str = id.as_uuid().to_string();
+                let already = self
+                    .db
+                    .query(
+                        "SELECT 1 FROM redactions WHERE event_id = $1",
+                        (id_str.clone(),),
+                    )
+                    .map_err(backend_err)?
+                    .next()
+                    .is_some();
+                if already {
+                    report.already_redacted += 1;
+                    continue;
+                }
+                // Identity columns only: redaction must work even on a
+                // row whose old payload no longer verifies.
+                let fields = {
+                    let mut rows = self
+                        .db
+                        .query(
+                            "SELECT stream_id, stream_version, event_type, schema_version,
+                                    created_at, origin, correlation_id, causation_id
+                             FROM events WHERE event_id = $1",
+                            (id_str.clone(),),
+                        )
+                        .map_err(backend_err)?;
+                    match rows.next() {
+                        None => None,
+                        Some(row) => {
+                            let row = row.map_err(backend_err)?;
+                            Some((
+                                row.get::<String>(0).map_err(backend_err)?,
+                                row.get::<i64>(1).map_err(backend_err)?,
+                                row.get::<i64>(2).map_err(backend_err)?,
+                                row.get::<i64>(3).map_err(backend_err)?,
+                                row.get::<i64>(4).map_err(backend_err)?,
+                                row.get::<String>(5).map_err(backend_err)?,
+                                row.get::<Option<String>>(6).map_err(backend_err)?,
+                                row.get::<Option<String>>(7).map_err(backend_err)?,
+                            ))
+                        }
+                    }
+                };
+                let Some((stream, version, ty, schema, created, origin, corr, caus)) = fields
+                else {
+                    report.not_found += 1;
+                    continue;
+                };
+                let checksum = compute_checksum(
+                    &id_str,
+                    &stream,
+                    version as u64,
+                    ty as u32,
+                    schema as u16,
+                    created as u64,
+                    &origin,
+                    corr.as_deref(),
+                    caus.as_deref(),
+                    "",
+                );
+                self.db
+                    .execute(
+                        "UPDATE events SET payload = '', checksum = $1 WHERE event_id = $2",
+                        (checksum, id_str.clone()),
+                    )
+                    .map_err(backend_err)?;
+                self.db
+                    .execute("INSERT INTO redactions (event_id) VALUES ($1)", (id_str,))
+                    .map_err(backend_err)?;
+                report.redacted += 1;
+            }
+            Ok(report)
+        };
+        match run() {
+            Ok(r) => {
+                self.db.execute("COMMIT", ()).map_err(backend_err)?;
+                Ok(r)
+            }
+            Err(e) => {
+                let _ = self.db.execute("ROLLBACK", ());
+                Err(e)
+            }
+        }
+    }
+
+    async fn is_redacted(&self, event_id: EventId) -> Result<bool, EventStoreError> {
+        let _guard = self
+            .append_lock
+            .lock()
+            .expect("StoolapEventStore append lock poisoned");
+        Ok(self
+            .db
+            .query(
+                "SELECT 1 FROM redactions WHERE event_id = $1",
+                (event_id.as_uuid().to_string(),),
+            )
+            .map_err(backend_err)?
+            .next()
+            .is_some())
+    }
+}
+
 impl TransactionalOutbox for StoolapEventStore {
     /// §14: events and outbox rows commit in ONE `stoolap` transaction.
     /// A conflict, size rejection, or any backend failure rolls back
@@ -403,7 +537,8 @@ impl StoolapEventStore {
         // transaction at all — no reason to touch the database for a
         // batch that's going to be rejected regardless.
         for new_event in &request.events {
-            validate_payload_size(new_event.event_type, new_event.payload.len())?;
+            self.limits
+                .validate(new_event.event_type, new_event.payload.len())?;
         }
         for entry in &entries {
             crate::outbox::validate_entry(entry).map_err(outbox_err_to_store)?;

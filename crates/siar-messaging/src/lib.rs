@@ -10,6 +10,7 @@
 //! meant to survive past Phase 1.
 
 mod blob_bridge;
+pub mod event_policy;
 pub mod events;
 mod group_service;
 mod key_package_directory;

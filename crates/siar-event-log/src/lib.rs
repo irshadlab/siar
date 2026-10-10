@@ -20,12 +20,10 @@
 //!   `async-trait`, already a real workspace dependency for exactly
 //!   this — see that module's own doc comment), plus §21's batch
 //!   `AppendRequest`/`AppendResult`, §12's `expected_version`
-//!   optimistic-concurrency guard, and §55's own
-//!   [`store::validate_payload_size`] — one uniform size ceiling
-//!   (§55 itself invites a per-event-type registry; none exists yet
-//!   anywhere in this workspace, so this is a real, if simple, first
-//!   cut — see that function's own doc comment), enforced by every
-//!   real backend before a write is even attempted.
+//!   optimistic-concurrency guard, and §55's flat
+//!   [`store::validate_payload_size`] backstop (per-type limits are
+//!   [`limits::EventLimits`]), enforced by every real backend before a
+//!   write is even attempted.
 //! - [`memory_store`] — [`memory_store::InMemoryEventStore`], a real,
 //!   fully-tested implementation of the trait above: §11 atomic batch
 //!   append (all-or-nothing under one lock), §12 concurrency-conflict
@@ -139,6 +137,25 @@
 //! - [`store::EventStore::stream_head`] — a provided method (O(1) in
 //!   both real backends), so adding it broke no implementor.
 //!
+//! ## Phase 7: snapshots, retention, deletion, backup, migration
+//!
+//! - [`redaction`] — the single physical-removal primitive: empties a
+//!   payload, keeps the envelope (so §24 idempotency, §12 versions,
+//!   §53 cursors and the §22 checksum all still hold).
+//! - [`retention`] — §40: `RetentionClass`, fail-keep `RetentionTable`,
+//!   `plan_compaction`/`apply_compaction`, outbox-aware protection.
+//! - [`snapshot`] — §38/§39: checksummed snapshots; `load_state` is
+//!   provably equivalent to full replay and discards anything it can't
+//!   trust.
+//! - [`deletion`] — §41/§42: `execute_deletion` across log, snapshots
+//!   and outbox; `SealedPayload`/`PayloadSealer` seam for crypto-erasure
+//!   with key management kept outside the store.
+//! - [`backup`] — §70/§71: hash-chained incremental export, verified
+//!   restore, and `restore_outbox` with a `RestoreGuard` so restore
+//!   never blindly resends.
+//! - [`upcast`] — §9: deterministic, explicit `V(n)→V(n+1)` upcasting
+//!   that refuses future versions and never rewrites the log.
+//!
 //! Every module above is covered by tests exercising real behavior —
 //! actual concurrent-writer rejection, actual duplicate-event
 //! deduplication, actual gap detection on the spec's own worked
@@ -147,57 +164,81 @@
 //! actual version-bump-triggers-a-full-rebuild run — not just type
 //! shapes.
 //!
-//! ## What's explicitly NOT here
+//! ## Phase 7b: closing the §55-66 gaps
 //!
-//! Everything past Phase 5 (Phases 6-7: replication scopes, snapshots,
-//! compaction, migration tests), plus §9's versioned-schema upcasting machinery,
-//! §23 the full remote-ingestion pipeline
-//! (protocol/identity/authorization validation — this crate has no
-//! dependency on `siar-identity-multidevice` or `siar-protocol-ext` for
-//! that reason; only [`gap::detect_gap`] serves that path), §25's
-//! hold-for-dependency out-of-order handling (`detect_gap` reports a
-//! gap; it doesn't hold or reorder anything), §27 hybrid logical clocks
-//! beyond what `stream_version` already provides, §29-32 pure decision
-//! functions/effect processing conventions (a pattern this crate's
-//! trait supports but doesn't enforce or provide a type for), §38-39
-//! snapshotting (Phase 7), §40-41 compaction/
-//! retention/deletion, §49-54 replication scope/sync cursors, §56
-//! durability classes as an actual type,
-//! §62-65 unknown-event handling/namespacing/multi-tenant isolation,
-//! §70-71 backup/restore, §81-88 diagnostics/metrics/property-fuzz-
-//! crash-injection test harnesses, §89's own suggested finer-grained
-//! module split (`codec.rs`/`registry.rs`/`retention.rs`/`replay.rs`/
-//! `diagnostics.rs`/`error.rs` as separate files — this crate keeps
-//! `store.rs`'s `EventStoreError` as the one error type rather than
-//! splitting it out yet), and the schema-migration story
-//! `stoolap_store`/`stoolap_checkpoint_store` don't have (their
-//! `CREATE TABLE IF NOT EXISTS` has no version column — a real gap for
-//! whoever makes the first breaking schema change to either). A
-//! durable `Projection` implementation itself doesn't exist yet either
-//! — `stoolap_checkpoint_store` exists ahead of that caller, per that
-//! module's own doc comment on why.
+//! - [`limits`] — §55 per-event-type size limits with an absolute hard
+//!   ceiling; both stores take them via `with_limits`.
+//! - [`unknown`] — §62 `Apply` / `StoreAndIgnore` / `Block` policy; an
+//!   unknown event blocks by default.
+//! - [`namespace`] — §64/§65 isolation by separate stores per
+//!   namespace (a shared log cannot be filtered back to one tenant),
+//!   filesystem-safe `NamespaceId`s, and a registry that hands each
+//!   tenant only its own handle.
+//! - [`integrity`] — §66 rollback and tamper detection via hash chains
+//!   and externally stored anchors; the module doc maps every §66 threat
+//!   to the mechanism that answers it.
+//!
+//! §58 (indexes), §59 (bounded replay) and §60 (projection isolation)
+//! needed no new module: the indexes §58 names exist in
+//! [`stoolap_store`]; every reader in this crate pages with an explicit
+//! limit (`ProjectionRunner`, [`reassembly`], [`backup::export_since`],
+//! [`retention::plan_compaction`], [`snapshot::load_state`]); and
+//! [`command_flow::CommandFlow::commit_and_project`] shows a failing
+//! secondary projection leaving the durable commit untouched.
+//!
+//! ## What's still NOT here
+//!
+//! - §23's remote-ingestion pipeline itself — protocol, identity and
+//!   authorization checks live in `siar-remote-ingestion`; this crate
+//!   has no dependency on `siar-identity-multidevice` or
+//!   `siar-protocol-ext` for that reason.
+//! - §27 hybrid logical clocks beyond `stream_version` (the spec itself
+//!   says "later"), §43 blob references (Part 05), §44 search as a
+//!   projection, §72+ analytics separation.
+//! - Per-stream projection checkpoints (checkpoints are per log offset,
+//!   which is why [`unknown::triage`] blocks globally rather than per
+//!   stream).
+//! - Real implementations of the domain-supplied seams
+//!   ([`replication::ReplicationAuthorizer`],
+//!   [`backup::RestoreGuard`], [`deletion::PayloadSealer`]) — only the
+//!   fail-closed placeholders exist here; `siar-messaging::event_policy`
+//!   supplies messaging's guard and planner.
+//! - A cargo-fuzz harness and criterion benchmarks.
+//! - A schema-version column for `stoolap_store`'s own tables: their
+//!   `CREATE TABLE IF NOT EXISTS` has no version, a real gap for
+//!   whoever makes the first breaking change to one.
 
+pub mod backup;
 pub mod command_flow;
+pub mod deletion;
 pub mod durability;
 pub mod effects;
 pub mod envelope;
 pub mod fault_injection;
 pub mod gap;
 pub mod ids;
+pub mod integrity;
+pub mod limits;
 pub mod memory_store;
 pub mod metrics;
+pub mod namespace;
 pub mod outbox;
 pub mod outbox_reconcile;
 pub mod projection;
 pub mod read_only;
 pub mod reassembly;
+pub mod redaction;
 pub mod replication;
+pub mod retention;
 pub mod retry;
+pub mod snapshot;
 pub mod stoolap_checkpoint_store;
 pub mod stoolap_outbox;
 pub mod stoolap_store;
 pub mod store;
 pub mod sync_cursor;
+pub mod unknown;
+pub mod upcast;
 
 pub use durability::DurabilityClass;
 pub use envelope::{EventEnvelope, EventOrigin};

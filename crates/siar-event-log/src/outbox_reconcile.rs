@@ -114,6 +114,57 @@ pub enum ReconcileError {
     Outbox(#[from] OutboxError),
 }
 
+/// What replaying the log says is owed — see the module doc's
+/// "pending according to history". Shared with [`crate::backup`]'s
+/// restore path.
+pub(crate) struct History {
+    pub(crate) opened: HashMap<OperationId, OutboxEntry>,
+    pub(crate) closed: HashSet<OperationId>,
+    pub(crate) events_scanned: u64,
+}
+
+pub(crate) async fn scan_history<S, P>(store: &S, planner: &P) -> Result<History, ReconcileError>
+where
+    S: EventStore + ?Sized,
+    P: EffectPlanner + ?Sized,
+{
+    let mut history = History {
+        opened: HashMap::new(),
+        closed: HashSet::new(),
+        events_scanned: 0,
+    };
+    let mut from = LocalLogOffset(0);
+    loop {
+        let batch = store.read_log(from, RECONCILE_SCAN_BATCH).await?;
+        let Some(last) = batch.last() else { break };
+        from = last.local_offset;
+        for stored in &batch {
+            history.events_scanned += 1;
+            let view = EventRef::from_stored(stored);
+            for intent in planner.plan(&view) {
+                let entry = OutboxEntry::new(
+                    view.event_id,
+                    view.stream_id,
+                    intent.kind,
+                    intent.slot,
+                    intent.payload,
+                    // The obligation dates from the event, not from
+                    // this recovery run.
+                    view.created_at,
+                )?;
+                if !history.closed.contains(&entry.operation_id) {
+                    history.opened.insert(entry.operation_id, entry);
+                }
+            }
+            for id in planner.closes(&view) {
+                history.opened.remove(&id);
+                history.closed.insert(id);
+            }
+        }
+    }
+    Ok(history)
+}
+
 /// See the module doc.
 pub async fn reconcile_outbox<S, O, P>(
     store: &S,
@@ -128,39 +179,12 @@ where
     P: EffectPlanner + ?Sized,
 {
     let mut report = OutboxReconciliation::default();
-    let mut opened: HashMap<OperationId, OutboxEntry> = HashMap::new();
-    let mut closed: HashSet<OperationId> = HashSet::new();
-
-    // 1. Replay history.
-    let mut from = LocalLogOffset(0);
-    loop {
-        let batch = store.read_log(from, RECONCILE_SCAN_BATCH).await?;
-        let Some(last) = batch.last() else { break };
-        from = last.local_offset;
-        for stored in &batch {
-            report.events_scanned += 1;
-            let view = EventRef::from_stored(stored);
-            for intent in planner.plan(&view) {
-                let entry = OutboxEntry::new(
-                    view.event_id,
-                    view.stream_id,
-                    intent.kind,
-                    intent.slot,
-                    intent.payload,
-                    // The obligation dates from the event, not from
-                    // this recovery run.
-                    view.created_at,
-                )?;
-                if !closed.contains(&entry.operation_id) {
-                    opened.insert(entry.operation_id, entry);
-                }
-            }
-            for id in planner.closes(&view) {
-                opened.remove(&id);
-                closed.insert(id);
-            }
-        }
-    }
+    let History {
+        mut opened,
+        closed,
+        events_scanned,
+    } = scan_history(store, planner).await?;
+    report.events_scanned = events_scanned;
 
     // 2. History says owed, table disagrees.
     let mut open_ids: Vec<OperationId> = opened.keys().copied().collect();

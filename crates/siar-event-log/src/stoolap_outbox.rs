@@ -423,6 +423,50 @@ impl Outbox for StoolapOutbox {
         })
     }
 
+    async fn scrub(
+        &self,
+        ids: &[OperationId],
+        reason: &str,
+        now: Timestamp,
+    ) -> Result<u64, OutboxError> {
+        let reason = truncate_error(reason.to_string());
+        self.txn(|db| {
+            let mut changed = 0u64;
+            for id in ids {
+                let Some(e) = Self::fetch(db, *id)? else {
+                    continue;
+                };
+                let mut touched = false;
+                if !e.payload.is_empty() {
+                    db.execute(
+                        "UPDATE outbox SET payload = '' WHERE operation_id = $1",
+                        (id.to_hex(),),
+                    )
+                    .map_err(be)?;
+                    touched = true;
+                }
+                if e.state.is_open() {
+                    db.execute(
+                        "UPDATE outbox SET state = 3, lease_until = NULL, last_error = $1
+                         WHERE operation_id = $2",
+                        (reason.clone(), id.to_hex()),
+                    )
+                    .map_err(be)?;
+                    touched = true;
+                }
+                if touched {
+                    db.execute(
+                        "UPDATE outbox SET updated_at = $1 WHERE operation_id = $2",
+                        (now.0 as i64, id.to_hex()),
+                    )
+                    .map_err(be)?;
+                    changed += 1;
+                }
+            }
+            Ok(changed)
+        })
+    }
+
     async fn counts(&self) -> Result<OutboxCounts, OutboxError> {
         let _guard = self.lock.lock().expect("outbox write lock poisoned");
         let mut c = OutboxCounts::default();

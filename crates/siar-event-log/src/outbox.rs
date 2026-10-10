@@ -451,6 +451,37 @@ impl OutboxTable {
         (start - self.entries.len()) as u64
     }
 
+    /// §41: erase derived content. Every listed entry's payload is
+    /// emptied; an open one is also dead-lettered with `reason` so it
+    /// can never run against content that no longer exists. The row
+    /// itself is kept — [`crate::outbox_reconcile`] must keep seeing
+    /// the operation as *present*, or it would rebuild it from
+    /// history. Unknown ids are ignored; returns how many rows changed.
+    pub fn scrub(&mut self, ids: &[OperationId], reason: &str, now: Timestamp) -> u64 {
+        let mut changed = 0;
+        for id in ids {
+            let Some(e) = self.entries.get_mut(id) else {
+                continue;
+            };
+            let mut touched = false;
+            if !e.payload.is_empty() {
+                e.payload.clear();
+                touched = true;
+            }
+            if e.state.is_open() {
+                e.state = OutboxState::DeadLettered;
+                e.lease_until = None;
+                e.last_error = Some(truncate_error(reason.to_string()));
+                touched = true;
+            }
+            if touched {
+                e.updated_at = now;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     pub fn counts(&self) -> OutboxCounts {
         let mut c = OutboxCounts::default();
         for e in self.entries.values() {
@@ -528,6 +559,14 @@ pub trait Outbox: Send + Sync {
     ) -> impl Future<Output = Result<u64, OutboxError>> + Send;
 
     fn counts(&self) -> impl Future<Output = Result<OutboxCounts, OutboxError>> + Send;
+
+    /// See [`OutboxTable::scrub`].
+    fn scrub(
+        &self,
+        ids: &[OperationId],
+        reason: &str,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<u64, OutboxError>> + Send;
 }
 
 /// A standalone in-memory [`Outbox`]. For an outbox that must commit
@@ -594,6 +633,14 @@ impl Outbox for InMemoryOutbox {
     }
     async fn counts(&self) -> Result<OutboxCounts, OutboxError> {
         Ok(self.lock().counts())
+    }
+    async fn scrub(
+        &self,
+        ids: &[OperationId],
+        reason: &str,
+        now: Timestamp,
+    ) -> Result<u64, OutboxError> {
+        Ok(self.lock().scrub(ids, reason, now))
     }
 }
 

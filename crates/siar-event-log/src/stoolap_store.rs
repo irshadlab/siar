@@ -149,6 +149,7 @@ impl StoolapEventStore {
     }
 
     fn from_database(db: Database) -> Result<Self, EventStoreError> {
+        check_and_stamp_schema_version(&db)?;
         apply_schema(&db)?;
         Ok(Self {
             db,
@@ -165,6 +166,87 @@ impl StoolapEventStore {
         StoolapOutbox::from_database(self.db.clone(), Arc::clone(&self.append_lock))
             .map_err(outbox_err_to_store)
     }
+}
+
+/// §91 "schema versioning", for the storage layer itself (event
+/// *payload* versioning is [`crate::upcast`]'s job; this is the shape of
+/// the tables).
+///
+/// Version history:
+/// - `1` — events, stream_heads (no version marker existed; a database
+///   with no `schema_meta` row is treated as this).
+/// - `2` — adds `outbox` and `redactions`.
+///
+/// The check runs **before** any DDL. A database stamped *newer* than
+/// this build understands is refused outright rather than opened and
+/// quietly written to by code that doesn't know what the newer tables
+/// mean — the storage-layer twin of [`crate::upcast`]'s `FromFuture`.
+/// Older/unmarked databases are brought forward: every table is
+/// `CREATE ... IF NOT EXISTS`, so running the schema setup *is* the
+/// 1 → 2 migration, after which the stamp is raised. A future breaking
+/// change adds its migration step here and bumps
+/// [`STORAGE_SCHEMA_VERSION`].
+pub const STORAGE_SCHEMA_VERSION: i64 = 2;
+
+fn check_and_stamp_schema_version(db: &Database) -> Result<(), EventStoreError> {
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS schema_meta (name TEXT NOT NULL, value INTEGER NOT NULL)",
+        (),
+    )
+    .map_err(backend_err)?;
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_schema_meta_key ON schema_meta (name)",
+        (),
+    )
+    .map_err(backend_err)?;
+    let stored: Option<i64> = {
+        let mut rows = db
+            .query(
+                "SELECT value FROM schema_meta WHERE name = 'storage_schema'",
+                (),
+            )
+            .map_err(backend_err)?;
+        match rows.next() {
+            Some(row) => Some(row.map_err(backend_err)?.get(0).map_err(backend_err)?),
+            None => None,
+        }
+    };
+    match stored {
+        Some(v) if v > STORAGE_SCHEMA_VERSION => Err(EventStoreError::Backend(format!(
+            "database storage schema is version {v}, newer than the {STORAGE_SCHEMA_VERSION} this build supports; refusing to open"
+        ))),
+        Some(v) if v == STORAGE_SCHEMA_VERSION => Ok(()),
+        Some(_) => {
+            // Older: DDL below migrates it; raise the stamp after.
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+fn stamp_schema_version(db: &Database) -> Result<(), EventStoreError> {
+    let exists = db
+        .query(
+            "SELECT 1 FROM schema_meta WHERE name = 'storage_schema'",
+            (),
+        )
+        .map_err(backend_err)?
+        .next()
+        .is_some();
+    if exists {
+        db.execute(
+            "UPDATE schema_meta SET value = $1 WHERE name = 'storage_schema'",
+            (STORAGE_SCHEMA_VERSION,),
+        )
+        .map_err(backend_err)?;
+    } else {
+        db.execute(
+            "INSERT INTO schema_meta (name, value) VALUES ('storage_schema', $1)",
+            (STORAGE_SCHEMA_VERSION,),
+        )
+        .map_err(backend_err)?;
+    }
+    Ok(())
 }
 
 fn apply_schema(db: &Database) -> Result<(), EventStoreError> {
@@ -236,6 +318,7 @@ fn apply_schema(db: &Database) -> Result<(), EventStoreError> {
     // in the same transaction as the events that cause them.
     apply_outbox_schema(db).map_err(outbox_err_to_store)?;
 
+    stamp_schema_version(db)?;
     Ok(())
 }
 
@@ -712,6 +795,24 @@ impl EventStore for StoolapEventStore {
     /// transaction.
     async fn append(&self, request: AppendRequest) -> Result<AppendResult, EventStoreError> {
         self.append_inner(request, Vec::new())
+    }
+
+    async fn latest_offset(&self) -> Result<LocalLogOffset, EventStoreError> {
+        let _guard = self
+            .append_lock
+            .lock()
+            .expect("StoolapEventStore append lock poisoned");
+        let mut rows = self
+            .db
+            .query("SELECT MAX(local_offset) FROM events", ())
+            .map_err(backend_err)?;
+        match rows.next() {
+            Some(row) => {
+                let v: Option<i64> = row.map_err(backend_err)?.get(0).map_err(backend_err)?;
+                Ok(LocalLogOffset(v.unwrap_or(0) as u64))
+            }
+            None => Ok(LocalLogOffset(0)),
+        }
     }
 
     async fn stream_head(&self, stream: StreamId) -> Result<u64, EventStoreError> {

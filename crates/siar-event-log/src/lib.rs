@@ -186,31 +186,64 @@
 //! [`command_flow::CommandFlow::commit_and_project`] shows a failing
 //! secondary projection leaving the durable commit untouched.
 //!
+//! ## Phase 8: the remainder of the spec
+//!
+//! - [`clock`] — §27 hybrid logical clock, with a drift bound so a
+//!   hostile peer can't drag every replica into the future.
+//! - [`blobref`] — §43 fixed-size, strictly-decoded blob reference and
+//!   the "store a blob" guard.
+//! - [`search`] — §44 full-text search as a rebuildable projection;
+//!   `fingerprint` makes "rebuild equals live" a checkable fact.
+//! - [`analytics`] — §72 privacy-filtered projection; the export type has
+//!   no field that can carry content.
+//! - [`boundary`] — §73-76/§90 `EventReader` / `EventAppender` split,
+//!   `SoleWriter` + `WriterLease`, and §74's platform-signal policy.
+//! - [`diagnostics`] — §81 content-free health report (§82 metrics are
+//!   [`metrics`]).
+//! - `stoolap_store::STORAGE_SCHEMA_VERSION` — §91 storage-schema stamp;
+//!   a database from a newer build is refused, an older one migrated.
+//! - [`definition_of_done`] — §93 self-audit: 14 done, 4 partially done,
+//!   3 satisfied by other crates, each with its evidence.
+//!
+//! Spec-level scenarios run end to end in `tests/acceptance.rs` (§87
+//! recovery, §80 SOS, §88 offline multi-device); `tests/golden_and_
+//! robustness.rs` pins byte formats (§86) and hammers decoders with
+//! hostile input (§85).
+//!
 //! ## What's still NOT here
 //!
 //! - §23's remote-ingestion pipeline itself — protocol, identity and
 //!   authorization checks live in `siar-remote-ingestion`; this crate
-//!   has no dependency on `siar-identity-multidevice` or
-//!   `siar-protocol-ext` for that reason.
-//! - §27 hybrid logical clocks beyond `stream_version` (the spec itself
-//!   says "later"), §43 blob references (Part 05), §44 search as a
-//!   projection, §72+ analytics separation.
+//!   deliberately has no dependency on `siar-identity-multidevice` or
+//!   `siar-protocol-ext`.
 //! - Per-stream projection checkpoints (checkpoints are per log offset,
 //!   which is why [`unknown::triage`] blocks globally rather than per
 //!   stream).
 //! - Real implementations of the domain-supplied seams
-//!   ([`replication::ReplicationAuthorizer`],
-//!   [`backup::RestoreGuard`], [`deletion::PayloadSealer`]) — only the
-//!   fail-closed placeholders exist here; `siar-messaging::event_policy`
+//!   ([`replication::ReplicationAuthorizer`], [`backup::RestoreGuard`],
+//!   [`deletion::PayloadSealer`]); `siar-messaging::event_policy`
 //!   supplies messaging's guard and planner.
-//! - A cargo-fuzz harness and criterion benchmarks.
-//! - A schema-version column for `stoolap_store`'s own tables: their
-//!   `CREATE TABLE IF NOT EXISTS` has no version, a real gap for
-//!   whoever makes the first breaking change to one.
+//! - **Coverage-guided fuzzing was written but not run.** `fuzz/` holds
+//!   `cargo-fuzz` targets; they need a nightly toolchain. The
+//!   property-test form of §85 does run (see above).
+//! - Criterion benchmarks (§82's metrics exist; a benchmark suite does
+//!   not).
+//! - Cross-process writer exclusion: [`boundary::WriterLease`] is
+//!   process-local; across processes the database's own lock is the
+//!   arbiter.
+//! - §77-§80's consumer wiring (routing, files, DTN, emergency) lives in
+//!   those crates; the substrate and the §80 persist-before-send proof
+//!   are here.
 
+pub mod analytics;
 pub mod backup;
+pub mod blobref;
+pub mod boundary;
+pub mod clock;
 pub mod command_flow;
+pub mod definition_of_done;
 pub mod deletion;
+pub mod diagnostics;
 pub mod durability;
 pub mod effects;
 pub mod envelope;
@@ -231,6 +264,7 @@ pub mod redaction;
 pub mod replication;
 pub mod retention;
 pub mod retry;
+pub mod search;
 pub mod snapshot;
 pub mod stoolap_checkpoint_store;
 pub mod stoolap_outbox;

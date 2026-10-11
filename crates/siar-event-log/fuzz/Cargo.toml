@@ -1,0 +1,29 @@
+[package]
+name = "siar-event-log-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+siar-event-log = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decoders"
+path = "fuzz_targets/decoders.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "search_tokenizer"
+path = "fuzz_targets/search_tokenizer.rs"
+test = false
+doc = false
+bench = false

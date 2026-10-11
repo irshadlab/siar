@@ -23,7 +23,7 @@ Or execute directly from the `scripts/` directory:
 If you have not yet cloned the repository, you can install Nix on any machine via `curl`:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSfL https://raw.githubusercontent.com/irshadali5/siar/develop/scripts/install-nix.sh | bash
+curl --proto '=https' --tlsv1.2 -sSfL https://raw.githubusercontent.com/irshadlab/siar/develop/scripts/install-nix.sh | bash
 ```
 
 ### Option C: Non-Interactive / CI Installation

@@ -103,8 +103,8 @@
 ---
 
 ### External References
-* [GitHub Repository](https://github.com/irshadali5/siar)
-* [System Architecture Specs](https://github.com/irshadali5/siar/tree/main/sys-arch)
-* [UI/UX Specifications](https://github.com/irshadali5/siar/tree/main/ui-ux)
-* [Master Design Rationale](https://github.com/irshadali5/siar/blob/main/SIAR_SYSTEM_ARCHITECTURE_DESIGN_RATIONALE.md)
-* [System Capabilities & Comparison](https://github.com/irshadali5/siar/blob/main/SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md)
+* [GitHub Repository](https://github.com/irshadlab/siar)
+* [System Architecture Specs](https://github.com/irshadlab/siar/tree/main/sys-arch)
+* [UI/UX Specifications](https://github.com/irshadlab/siar/tree/main/ui-ux)
+* [Master Design Rationale](https://github.com/irshadlab/siar/blob/main/SIAR_SYSTEM_ARCHITECTURE_DESIGN_RATIONALE.md)
+* [System Capabilities & Comparison](https://github.com/irshadlab/siar/blob/main/SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md)

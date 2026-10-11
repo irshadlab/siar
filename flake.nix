@@ -211,7 +211,7 @@
           buildInputs = if isLinux then coreLinuxBuildInputs else commonBuildInputs;
           meta = with lib; {
             description = "SIAR CLI - Sovereign, Interoperable, Asynchronous, Resilient CLI client";
-            homepage = "https://github.com/irshadali5/siar";
+            homepage = "https://github.com/irshadlab/siar";
             license = licenses.agpl3Plus;
             mainProgram = "siar";
           };
@@ -225,7 +225,7 @@
           buildInputs = if isLinux then coreLinuxBuildInputs else commonBuildInputs;
           meta = with lib; {
             description = "SIAR Emergency DTN Mesh Node daemon";
-            homepage = "https://github.com/irshadali5/siar";
+            homepage = "https://github.com/irshadlab/siar";
             license = licenses.agpl3Plus;
             mainProgram = "siar-emergency-node";
           };
@@ -269,7 +269,7 @@ DESKTOPEOF
 
           meta = with lib; {
             description = "SIAR Desktop GUI client (Dioxus)";
-            homepage = "https://github.com/irshadali5/siar";
+            homepage = "https://github.com/irshadlab/siar";
             license = licenses.agpl3Plus;
             mainProgram = "siar-desktop";
           };

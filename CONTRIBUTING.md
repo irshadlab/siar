@@ -1,6 +1,6 @@
 # Contributing to SIAR
 
-First off, thank you for considering contributing to **SIAR** (*Survivable Identity & Autonomous Routing*)! 🚀
+First off, thank you for considering contributing to **SIAR** (*Survivable Identity & Autonomous Routing*), a research initiative developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab))! 🚀
 
 SIAR is a zero-infrastructure, multi-transport, offline-first decentralized messaging and delay-tolerant networking (DTN) platform built to guarantee private, autonomous communications for humanity.
 
@@ -32,7 +32,7 @@ All contributions to SIAR are governed by the **[SIAR Contributor License Agreem
 
 - Core libraries under `crates/*` are licensed under **MIT OR Apache-2.0**.
 - Standalone applications and daemons under `apps/*` are licensed under **GNU AGPLv3**.
-- Maintainers hold the right to grant commercial exemptions under `SIAR-CEEL-1.0` to commercial entities, with 100% of licensing fees reinvested into core development.
+- Maintainers (Irshad Lab) hold the right to grant commercial exemptions under `SIAR-CEEL-1.0` to commercial entities, with 100% of licensing fees reinvested into core development.
 
 By opening a Pull Request or submitting a patch, you agree to the terms in **[`CLA.md`](file:///home/irshad/Projects/siar/CLA.md)**. We recommend signing your commits with `git commit -s` (`Signed-off-by`).
 
@@ -91,7 +91,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 
 ### 1. Clone & Build
 ```bash
-git clone https://github.com/irshadali5/siar.git
+git clone https://github.com/irshadlab/siar.git
 cd siar
 cargo build --workspace
 ```
@@ -172,5 +172,5 @@ Security and cryptographic integrity are paramount for SIAR.
 
 If you discover a security vulnerability or cryptographic flaw:
 - **DO NOT open a public GitHub issue.**
-- Report the vulnerability responsibly via email to **`security@siar.network`** or directly to **`irshad@siar.network`**.
+- Report the vulnerability responsibly via email to **`security@irshadlab.org`**, or directly to **`irshad@irshadlab.org`** / **`irshad@siar.network`**.
 - We will acknowledge receipt within 24 hours and coordinate a responsible patch and disclosure timeline.

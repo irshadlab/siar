@@ -5,12 +5,13 @@
 <h1 align="center">SIAR — Survivable Identity & Autonomous Routing</h1>
 
 <p align="center">
-  <a href="https://irshadali5.github.io/siar-site/"><img src="https://img.shields.io/badge/Official%20Site-siar--site-00f2fe?style=flat-square" alt="Official Website"/></a>
+  <a href="https://github.com/irshadlab/siar"><img src="https://img.shields.io/badge/GitHub-irshadlab%2Fsiar-181717?style=flat-square&logo=github" alt="GitHub Repository"/></a>
+  <a href="https://siar.irshadlab.org/"><img src="https://img.shields.io/badge/Official%20Site-siar.irshadlab.org-00f2fe?style=flat-square" alt="Official Website"/></a>
   <a href="wiki/Home.md"><img src="https://img.shields.io/badge/Wiki-50%20Chapters-8b5cf6?style=flat-square" alt="Technical Wiki"/></a>
-  <a href="https://irshadali5.github.io/siar-site/guide.html"><img src="https://img.shields.io/badge/User%20Manual-Guide%20%26%20Ops-34d399?style=flat-square" alt="User Manual"/></a>
-  <a href="https://irshadali5.github.io/siar-site/sys-arch/"><img src="https://img.shields.io/badge/Architecture-mdBook%20Portal-a78bfa?style=flat-square" alt="Architecture Specs"/></a>
-  <a href="https://irshadali5.github.io/siar-site/docs.html"><img src="https://img.shields.io/badge/Developer-C--ABI%20%26%20APIs-38bdf8?style=flat-square" alt="Developer Hub"/></a>
-  <a href="https://irshadali5.github.io/siar-site/packages.html"><img src="https://img.shields.io/badge/Downloads-Packages-fbbf24?style=flat-square" alt="Package Center"/></a>
+  <a href="https://siar.irshadlab.org/guide.html"><img src="https://img.shields.io/badge/User%20Manual-Guide%20%26%20Ops-34d399?style=flat-square" alt="User Manual"/></a>
+  <a href="https://siar.irshadlab.org/sys-arch/"><img src="https://img.shields.io/badge/Architecture-mdBook%20Portal-a78bfa?style=flat-square" alt="Architecture Specs"/></a>
+  <a href="https://siar.irshadlab.org/docs.html"><img src="https://img.shields.io/badge/Developer-C--ABI%20%26%20APIs-38bdf8?style=flat-square" alt="Developer Hub"/></a>
+  <a href="https://siar.irshadlab.org/packages.html"><img src="https://img.shields.io/badge/Downloads-Packages-fbbf24?style=flat-square" alt="Package Center"/></a>
   <a href="#license--dual-tier-model"><img src="https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0%20%7C%20AGPLv3-blue.svg?style=flat-square" alt="License"/></a>
 </p>
 
@@ -23,14 +24,17 @@
 >
 > **DO NOT deploy SIAR in production, life-safety, high-threat, or operational environments until formal independent audits and the v0.1.0 milestone release are complete.**
 
+> 🏛️ **Organization Stewardship & Research Initiative:**  
+> **SIAR** is an open-source systems initiative developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab)) — focused on local-first computing, resilient peer-to-peer networking, and sovereign systems engineering.
+>
 > **Official Showcase, Package Center & Live Architecture Documentation:**
-> - 🌐 **[Official Product Presentation](https://irshadali5.github.io/siar-site/)**
+> - 🌐 **[Official Product Presentation](https://siar.irshadlab.org/)**
 > - 📚 **[Comprehensive Technical Wiki (50 Chapters)](wiki/Home.md)** — System Stack, Multi-Device Trust, Routing, DTN, Security Center, Calls, Testing & Operations
-> - 📘 **[End-to-End User & Operations Manual](https://irshadali5.github.io/siar-site/guide.html)** — Zero-Knowledge Setup, QR/NFC Pairing, Vault Export/Import & Anti-Forensics
-> - 📑 **[System Architecture & Protocol Specs (mdBook)](https://irshadali5.github.io/siar-site/sys-arch/)** — 33+ numbered core specs + 27 UI/UX specs
-> - 📦 **[Universal Package Center](https://irshadali5.github.io/siar-site/packages.html)** — .deb, .rpm, .apk, .dmg, brew, winget
-> - 🔬 **[Interactive WASM Mesh Simulator Lab](https://irshadali5.github.io/siar-site/simulator.html)**
-> - 🛡️ **[SLSA Level 3+ Supply Chain Cryptographic Verifier](https://irshadali5.github.io/siar-site/verify.html)**
+> - 📘 **[End-to-End User & Operations Manual](https://siar.irshadlab.org/guide.html)** — Zero-Knowledge Setup, QR/NFC Pairing, Vault Export/Import & Anti-Forensics
+> - 📑 **[System Architecture & Protocol Specs (mdBook)](https://siar.irshadlab.org/sys-arch/)** — 33+ numbered core specs + 27 UI/UX specs
+> - 📦 **[Universal Package Center](https://siar.irshadlab.org/packages.html)** — .deb, .rpm, .apk, .dmg, brew, winget
+> - 🔬 **[Interactive WASM Mesh Simulator Lab](https://siar.irshadlab.org/simulator.html)**
+> - 🛡️ **[SLSA Level 3+ Supply Chain Cryptographic Verifier](https://siar.irshadlab.org/verify.html)**
 
 ---
 
@@ -579,7 +583,7 @@ SIAR provides a universal, cross-distribution Nix installer ([`install-nix.sh`](
 
 # Or remotely via curl:
 curl --proto '=https' --tlsv1.2 -sSfL \
-  https://raw.githubusercontent.com/irshadali5/siar/develop/scripts/install-nix.sh | bash
+  https://raw.githubusercontent.com/irshadlab/siar/develop/scripts/install-nix.sh | bash
 ```
 
 > See the full [Nix Installation & Configuration Guide](docs/nix-installation-guide.md) for distro-specific options, diagnostics (`--doctor`), and uninstallation (`--uninstall`).
@@ -797,14 +801,14 @@ All end-user client applications (`apps/android`, `apps/desktop`, `apps/cli`) an
 
 For commercial enterprises that wish to rebrand, white-label, or host modified closed-source versions without AGPLv3 obligations:
 - Full legal terms and commercial subscription tiers: [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)
-- Contact: `licensing@siar.network`
+- Contact: `licensing@irshadlab.org` / `licensing@siar.network`
 
 ---
 
 ### Contributing
 
 1. Read **[CONTRIBUTING.md](CONTRIBUTING.md)** and **[CLA.md](CLA.md)** before opening a Pull Request.
-2. All contributions are governed by the CLA, granting the SIAR maintainers dual-licensing rights.
+2. All contributions are governed by the CLA, granting Irshad Lab dual-licensing rights.
 3. Maintain zero-warning clean compilation across all targets (`cargo check --workspace`, `cargo clippy -D warnings --workspace`).
 4. Preserve strict boundary isolation — core crates under `crates/` must remain pure-Rust without mandatory C-library linkages.
 5. Platform-specific hardware integration must be strictly isolated in dedicated crates (`siar-media-android`, `siar-transport-ble-android`).
@@ -812,4 +816,4 @@ For commercial enterprises that wish to rebrand, white-label, or host modified c
 
 ---
 
-*Built with Rust, Kotlin, and OpenMLS by the SIAR Open Source Engineering Team.*
+*Built with Rust, Kotlin, and OpenMLS by [Irshad Lab](https://irshadlab.org) and the SIAR Open Source Engineering Team.*

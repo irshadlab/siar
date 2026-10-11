@@ -93,11 +93,11 @@ Every release artifact is sealed within an **In-Toto Attestation Envelope** sign
   ],
   "predicateType": "https://slsa.dev/provenance/v0.2",
   "predicate": {
-    "builder": { "id": "https://github.com/irshadali5/siar/.github/workflows/release.yml" },
+    "builder": { "id": "https://github.com/irshadlab/siar/.github/workflows/release.yml" },
     "buildType": "https://nixos.org/reproducible-build/v1",
     "materials": [
       {
-        "uri": "git+https://github.com/irshadali5/siar",
+        "uri": "git+https://github.com/irshadlab/siar",
         "digest": { "sha1": "7e49f82d41b02c89f419b489d81d293cf9a1c8f2" }
       }
     ]

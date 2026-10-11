@@ -1,7 +1,7 @@
 # 22 — Developer & Getting Started Guide
 
 > **Target Audience:** Core Contributors, Integration Engineers, Application Developers, Security Researchers  
-> **Repository:** [`github.com/irshadali5/siar`](https://github.com/irshadali5/siar)  
+> **Repository:** [`github.com/irshadlab/siar`](https://github.com/irshadlab/siar)  
 > **Workspace Composition:** 39 Domain Crates, 4 Applications, 176 Architecture Specifications  
 > **Complements:** [`SIAR_SYSTEM_ARCHITECTURE_DESIGN_RATIONALE.md`](../SIAR_SYSTEM_ARCHITECTURE_DESIGN_RATIONALE.md) (§2.17), [Wiki Chapter 21](21-Testing-Fuzzing-and-Network-Diagnostics.md), [Wiki Chapter 45](45-Engineering-Traceability-Knowledge-Graph-and-Release-Evidence.md)
 
@@ -76,7 +76,7 @@ sudo apt update && sudo apt install -y \
     libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev
 
 # 3. Clone the repository
-git clone https://github.com/irshadali5/siar.git
+git clone https://github.com/irshadlab/siar.git
 cd siar
 ```
 

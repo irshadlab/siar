@@ -6,7 +6,7 @@ Thank you for your interest in contributing to **SIAR** (*Survivable Identity & 
 
 To clarify the intellectual property terms for contributions and to ensure the perpetual freedom and legal security of the SIAR platform for humanity, all contributors must accept this Contributor License Agreement ("Agreement").
 
-By submitting a Pull Request, commit, code contribution, documentation, or patch to any repository within the SIAR project ecosystem (including `https://github.com/irshadali5/siar`), you agree to the terms below.
+By submitting a Pull Request, commit, code contribution, documentation, or patch to any repository within the SIAR project ecosystem (including `https://github.com/irshadlab/siar`), you agree to the terms below.
 
 ---
 
@@ -14,7 +14,7 @@ By submitting a Pull Request, commit, code contribution, documentation, or patch
 
 - **"You" (or "Contributor")**: Any individual or legal entity submitting a Contribution to the Project.
 - **"Contribution"**: Any original work of authorship, including software source code, documentation, scripts, configurations, bug fixes, enhancements, graphic assets, or modifications submitted by You for inclusion in the SIAR codebase.
-- **"Maintainers" (or "Project Stewards")**: The core maintainers and governance entity of the SIAR open-source project.
+- **"Maintainers" (or "Project Stewards")**: **Irshad Lab** (`https://irshadlab.org`, GitHub: `https://github.com/irshadlab`), a research initiative focused on local-first computing, resilient peer-to-peer networking, and systems engineering, alongside the core maintainers and governance entity of the SIAR open-source project.
 - **"Submit"**: Any form of electronic communication sent to the Project repositories, issue trackers, or mailing lists (including GitHub Pull Requests and git commits).
 
 ---

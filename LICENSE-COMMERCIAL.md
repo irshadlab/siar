@@ -15,6 +15,8 @@
 ### 🕊️ Free for Humanity Commitment
 **SIAR is, and will always remain, 100% free and open-source software for all of humanity.** 
 
+SIAR is developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab)), a research initiative focused on local-first computing, resilient peer-to-peer networking, and systems engineering.
+
 - **Permissive Libraries (`crates/*`)**: All underlying Rust crates (`siar-crypto`, `siar-crypto-mls`, `siar-transport`, `siar-storage`, `siar-messaging`, `siar-routing-policy`, `siar-dtn-bundle`, `siar-connectivity`, etc.) are licensed under **MIT OR Apache-2.0** to maximize developer adoption, academic research, and interoperability across the ecosystem.
 - **Copyleft Standalone Applications (`apps/*`)**: Complete end-user applications (`apps/android`, `apps/desktop`, `apps/cli`) and headless relay daemons (`apps/emergency-node`) are licensed under **GNU AGPLv3** to ensure that modifications to user-facing applications and network services remain open and accessible to the public.
 
@@ -27,7 +29,7 @@ To prevent uncompensated enterprise exploitation of turnkey applications while g
 
 ## 2. Terms of Commercial Exemption Grant for Applications
 
-Subject to your payment of applicable Commercial Subscription Fees and compliance with this Agreement, the SIAR Maintainers grant your entity a non-exclusive, worldwide, royalty-bearing (paid via subscription) commercial license to:
+Subject to your payment of applicable Commercial Subscription Fees and compliance with this Agreement, the SIAR Maintainers (Irshad Lab) grant your entity a non-exclusive, worldwide, royalty-bearing (paid via subscription) commercial license to:
 
 1. **Exemption from AGPLv3 Copyleft on Applications**:
    - You are fully exempt from Section 13 (Remote Network Interaction) of the GNU AGPLv3 for `apps/*`. You may host, run, scale, and provide cloud/SaaS messaging infrastructure built on SIAR applications without disclosing your application source code, proprietary algorithms, database schemas, or cloud orchestration software.
@@ -90,6 +92,6 @@ The SIAR maintainers reserve the right to request annual self-certification of c
 
 To purchase a SIAR Commercial License, activate an Enterprise Exemption, or request a custom licensing quote:
 
-- **Commercial Licensing Portal**: `https://siar.network/licensing`
-- **Enterprise Contact Email**: `licensing@siar.network` / `irshad@siar.network`
-- **GitHub Repository**: `https://github.com/irshadali5/siar`
+- **Commercial Licensing Portal**: `https://siar.irshadlab.org/licensing` / `https://siar.network/licensing`
+- **Enterprise Contact Email**: `licensing@irshadlab.org` / `licensing@siar.network` / `irshad@irshadlab.org`
+- **Organization & GitHub Repository**: `https://github.com/irshadlab/siar` (`@irshadlab`) / `https://irshadlab.org`

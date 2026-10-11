@@ -191,6 +191,23 @@ pub trait EventStore: Send + Sync {
     /// InMemoryEventStore`] and [`crate::stoolap_store::
     /// StoolapEventStore`] both do). Wrappers that don't forward it
     /// (metrics, read-only, ...) simply fall back to the default.
+    /// Highest [`LocalLogOffset`] in the log (`LocalLogOffset(0)` when
+    /// empty) — the number §81 diagnostics call "latest local offset".
+    /// Provided like [`Self::stream_head`]: the default pages through
+    /// `read_log` (correct everywhere, O(log length)); both real
+    /// backends override it with an O(1) lookup.
+    async fn latest_offset(&self) -> Result<LocalLogOffset, EventStoreError> {
+        const PAGE: usize = 1024;
+        let mut at = LocalLogOffset(0);
+        loop {
+            let page = self.read_log(at, PAGE).await?;
+            match page.last() {
+                Some(last) => at = last.local_offset,
+                None => return Ok(at),
+            }
+        }
+    }
+
     async fn stream_head(&self, stream: StreamId) -> Result<u64, EventStoreError> {
         const PAGE: usize = 1024;
         let mut head = 0u64;

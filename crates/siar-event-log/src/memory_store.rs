@@ -352,6 +352,11 @@ impl EventStore for InMemoryEventStore {
             .collect())
     }
 
+    async fn latest_offset(&self) -> Result<LocalLogOffset, EventStoreError> {
+        let inner = self.inner.lock().expect("InMemoryEventStore lock poisoned");
+        Ok(LocalLogOffset(inner.log.len() as u64))
+    }
+
     async fn stream_head(&self, stream: StreamId) -> Result<u64, EventStoreError> {
         let inner = self.inner.lock().expect("InMemoryEventStore lock poisoned");
         Ok(inner.streams.get(&stream).map_or(0, |e| e.len() as u64))

@@ -39,6 +39,25 @@ impl BlobId {
         Self(*hasher.finalize().as_bytes())
     }
 
+    /// The identity of whatever a streaming reader has fed `hasher` so
+    /// far. Crate-private on purpose: [`Self::from_ciphertext`] and
+    /// [`Self::from_ciphertext_incremental`] stay the only *public*
+    /// ways to mint a [`BlobId`], so "encrypt first, then
+    /// content-address the ciphertext" (§7) remains the only route.
+    /// `fs_store` uses this to hash a staged file through a bounded
+    /// buffer instead of materializing it.
+    pub(crate) fn from_streaming_hasher(hasher: &blake3::Hasher) -> Self {
+        Self(*hasher.finalize().as_bytes())
+    }
+
+    /// Rebuilds an id from a digest read back from the store's own
+    /// directory layout (a file *named* by its hash). Crate-private for
+    /// the reason [`Self::from_streaming_hasher`] is; a rebuilt id is
+    /// only ever trusted after the file's contents are re-hashed.
+    pub(crate) fn from_raw_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

@@ -339,6 +339,62 @@
 //!   [`ids::BlobId::from_ciphertext`] — §114's own real correctness
 //!   requirement, checked directly rather than assumed.
 //!
+//! ## Round 13: the local blob store — §37-40, 47-52, 86-90, 186-188
+//!
+//! Until now this crate produced and verified manifests as pure values
+//! and had **no store**: nothing wrote bytes anywhere. This round adds
+//! one, on a real filesystem, with the staging / verification / atomic
+//! publication / crash-recovery behaviour Part 05 specifies.
+//!
+//! - [`fs_store`] — §50 staging, §51 atomic finalization, §52 crash
+//!   recovery, §49 sparse preallocation, §90 directory layout, and the
+//!   filesystem implementation of [`blob_io`]'s traits.
+//!   [`fs_store::FsBlobStore::begin_write_with_manifest`] verifies each
+//!   chunk against its own hash as it arrives; `finalize` stream-hashes
+//!   the whole file through a bounded buffer and only then renames it
+//!   into `objects/` — an incomplete or unverified object is **never
+//!   visible**. A blob that fails its identity check is moved to
+//!   `quarantine/`. [`fs_store::FsBlobStore::recover`] re-hashes every
+//!   staged chunk against the manifest rather than believing the file.
+//! - [`blob_io`] — §86 `BlobReader`, §87 `BlobWriter`, §88 `BlobStore`.
+//!   Native async-fn-in-trait with associated `Reader`/`Writer` types
+//!   instead of the spec's `Box<dyn …>` (an `impl Future` trait is not
+//!   object-safe; boxing would put an allocation on the hot path).
+//! - [`byte_range`] — §86's `ByteRange`, validated with checked
+//!   arithmetic; reads are capped
+//!   ([`blob_io::MAX_READ_RANGE_BYTES`]) so there is no way to ask for a
+//!   whole object as one `Bytes`.
+//! - [`quota`] — §47 (the store-level quotas) and §48: space is
+//!   *reserved* against the declared size before the first byte lands,
+//!   so "accept 20 GB then fail at 99%" cannot happen. Per-peer and
+//!   daily budgets stay in [`resource_policy`]/[`auto_accept`], which
+//!   decide whether to *start* a transfer.
+//! - [`metadata_store`] — §89: rows ([`schema_rows::BlobRow`]) behind a
+//!   trait, in memory or on `stoolap`. Files are the truth;
+//!   [`fs_store::FsBlobStore::reconcile_metadata`] rebuilds rows from
+//!   them (after re-hashing) and drops rows whose file is gone.
+//! - [`buffer_pool`] — §39: a fixed number of fixed-size buffers
+//!   allocated once; `acquire` *blocks* when empty, which is §40's
+//!   backpressure. One pool per §13 size class.
+//! - [`bounded_io`] — §37/§40: the sender pipeline (`file → bounded
+//!   queue → consumer`), peak memory `max_buffers × buffer_size`
+//!   whatever the file size; a consumer error stops the reader.
+//! - [`store_error`] — §186 closed error enum, §187
+//!   [`store_error::Recoverability`] (retryable / caller error / refetch
+//!   / requires repair / policy denied), §188 no `anyhow`. Errors carry
+//!   the `io::ErrorKind` and operation, never a path.
+//!
+//! §38 "Low-Copy Data Path" is only partly met: the API's currency is
+//! `bytes::Bytes`, and the writer takes chunks by reference without
+//! copying, but a [`blob_io::BlobStream`] piece is allocated per read
+//! rather than recycled through a [`buffer_pool::BufferPool`].
+//!
+//! `tests/fs_store.rs` drives all of this against real files: out-of-
+//! order writes, torn/corrupted staging after a simulated crash,
+//! quarantine, quota refusal, dedup, permissions (`0700`/`0600`),
+//! sparse allocation, and a file streamed sender→receiver without ever
+//! being buffered whole.
+//!
 //! Every module is covered by tests exercising real bytes/hashes/state
 //! transitions/ciphertext — including a tamper-detection test for
 //! per-chunk verification, whole-blob verification, AND now AEAD
@@ -352,10 +408,12 @@
 //!   flow that's the message envelope's job (per-message E2EE already
 //!   covers it) — a real integration point, not attempted from this
 //!   crate.
-//! - **No local store.** §207 Phase 2: no filesystem blob storage, no
-//!   staging, no SQLite metadata, no reference tracking/GC — this
-//!   crate produces and verifies manifests as pure values; persisting
-//!   them is a `siar-storage` integration this crate doesn't depend on.
+//! - **Local store: now real (round 13), but not yet wired.** §207
+//!   Phase 2 — filesystem blobs, staging, atomic publish, metadata and
+//!   recovery exist ([`fs_store`]); nothing in `siar-messaging` or
+//!   `siar-file-transfer-service` calls it yet, and reference tracking/GC
+//!   ([`blob_references`], [`storage_lifecycle`]) is still policy only —
+//!   no sweeper runs it against the store.
 //! - **No transfer protocol wire messages.** §207 Phase 4 (offer/
 //!   accept/manifest/chunk-request/ACK/complete as actual
 //!   `siar-protocol` envelope kinds) — [`transfer_state::TransferState`]
@@ -375,9 +433,7 @@
 //!   wiring isn't.
 //! - **Progressive images/video (§33-34), manifest hierarchy for huge
 //!   files (§17, explicitly "not required initially" per the spec's own
-//!   text), streaming/low-copy I/O and buffer pools (§37-39),
-//!   parallelism/adaptive concurrency (§41-43), quotas/sparse files/
-//!   staging/atomic finalization/crash recovery (§47-52), compression
+//!   text), parallelism/adaptive concurrency (§41-43), compression
 //!   (§79-80, pending a codec dependency decision), §115-117/§120-139/
 //!   §142+ except where named above** — still a remaining slice of a
 //!   210-section document, though a shrinking one. §20 "Chunk Nonces"
@@ -387,7 +443,11 @@
 
 pub mod attachment_reference;
 pub mod auto_accept;
+pub mod blob_io;
 pub mod blob_references;
+pub mod bounded_io;
+pub mod buffer_pool;
+pub mod byte_range;
 pub mod chunking;
 pub mod content_sniffing;
 pub mod delivery_policy;
@@ -396,14 +456,17 @@ pub mod encryption;
 pub mod events;
 pub mod file_offer;
 pub mod filename_safety;
+pub mod fs_store;
 pub mod ids;
 pub mod limits;
 pub mod manifest;
 pub mod metadata_encryption;
 pub mod metadata_privacy;
+pub mod metadata_store;
 pub mod partial_availability;
 pub mod progress;
 pub mod quarantine;
+pub mod quota;
 pub mod relay_and_dtn;
 pub mod resource_policy;
 pub mod resume;
@@ -411,6 +474,7 @@ pub mod schema_rows;
 pub mod source_integrity;
 pub mod source_trust;
 pub mod storage_lifecycle;
+pub mod store_error;
 pub mod transfer_authorization;
 pub mod transfer_control;
 pub mod transfer_journal;
@@ -421,7 +485,10 @@ pub mod verify;
 
 pub use attachment_reference::{AttachmentMetadata, AttachmentReference};
 pub use auto_accept::{evaluate_auto_accept, AutoAcceptContext, AutoAcceptPolicy};
+pub use blob_io::{BlobReader, BlobStat, BlobStore, BlobStream, BlobWriter};
 pub use blob_references::{PinReason, ReferenceKind, ReferenceSet};
+pub use buffer_pool::{BufferPool, BufferPools, PooledBuffer};
+pub use byte_range::ByteRange;
 pub use chunking::{chunk_fixed_size, ChunkSizeClass};
 pub use content_sniffing::{
     check_declared_media_type, has_potentially_executable_extension, sniff_media_type, MimeTrust,
@@ -443,6 +510,10 @@ pub use events::{
 };
 pub use file_offer::{FileOffer, FileOfferDecision};
 pub use filename_safety::{resolve_export_collision, sanitize_for_export, temp_file_name};
+pub use fs_store::{
+    DurabilityPolicy, FsBlobReader, FsBlobStore, FsBlobWriter, FsStoreConfig, Preallocation,
+    ReconcileReport, RecoveryReport,
+};
 pub use ids::{BlobEncryptionKey, BlobId, ChunkHash, LogicalAttachmentId, ManifestId, TransferId};
 pub use limits::ManifestLimits;
 pub use manifest::{build_manifest, BlobManifest, ChunkDescriptor, ManifestError};
@@ -451,9 +522,11 @@ pub use metadata_privacy::{
     default_sensitivity, public_transport_view, MetadataField, MetadataSensitivity,
     PublicTransportMetadata,
 };
+pub use metadata_store::{BlobMetadataStore, InMemoryBlobMetadata, StoolapBlobMetadata};
 pub use partial_availability::{partial_availability, PartialAvailability};
 pub use progress::{estimate_eta, EtaEstimate, TransferProgress};
 pub use quarantine::{QuarantineReason, QuarantineRecord};
+pub use quota::{QuotaLedger, Reservation, StoreLimits};
 pub use relay_and_dtn::{chunks_to_send, DtnChunkPolicy, RelayStorageAccounting};
 pub use resource_policy::{
     BatteryAwareAdjustments, FileResourcePolicy, MemoryPressureAdjustments, RateLimitPolicy,
@@ -470,6 +543,7 @@ pub use storage_lifecycle::{
     effects_for, is_eviction_protected, is_gc_eligible, may_evict, BlobClassification,
     CacheEvictionTier, GcPolicy, StoragePressure, StoragePressureEffects,
 };
+pub use store_error::{BlobError, Recoverability};
 pub use transfer_authorization::{
     authorize_transfer, AuthorizationChecks, AuthorizationDenialReason,
 };

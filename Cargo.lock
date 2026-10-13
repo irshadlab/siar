@@ -7136,14 +7136,19 @@ dependencies = [
 name = "siar-blob-manifest"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "blake3",
+ "bytes",
  "chacha20poly1305",
  "postcard",
+ "proptest",
  "rand_core 0.6.4",
  "serde",
  "siar-domain",
  "siar-event-log",
+ "stoolap",
  "thiserror 2.0.19",
+ "tokio",
  "uuid",
  "workspace-hack",
 ]

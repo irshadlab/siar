@@ -11,6 +11,9 @@ serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 blake3.workspace = true
+bytes.workspace = true
+base64.workspace = true
+stoolap = { version = "0.4", default-features = false, features = ["parallel"] }
 chacha20poly1305.workspace = true
 rand_core.workspace = true
 postcard.workspace = true
@@ -20,3 +23,7 @@ postcard.workspace = true
 # §35/§33.
 siar-event-log.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+proptest.workspace = true
+tokio.workspace = true

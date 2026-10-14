@@ -96,6 +96,9 @@ pub enum DerivativeKind {
     Thumbnail,
     Transcode,
     Preview,
+    /// §82's "waveform" for voice notes. Appended last so existing
+    /// postcard encodings of the other variants are unchanged.
+    Waveform,
 }
 
 /// `blob_derivatives`: a derived blob is a REAL, independent blob (its

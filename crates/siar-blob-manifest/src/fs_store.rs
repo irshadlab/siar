@@ -379,6 +379,25 @@ pub struct ReconcileReport {
     pub corrupt_quarantined: u32,
 }
 
+/// One incomplete transfer's staging data, as seen on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StagingInfo {
+    pub blob_id: BlobId,
+    /// Bytes the `.part` file logically holds (its length, which for a
+    /// sparse file is the *declared* size, not what is allocated).
+    pub part_bytes: u64,
+    /// When the staging data last changed. Chunk writes bump the
+    /// `.part`'s modification time, so this is "last progress".
+    pub modified_millis: u64,
+}
+
+fn mtime_millis(m: &fs::Metadata) -> u64 {
+    m.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
 impl<M: BlobMetadataStore> FsBlobStore<M> {
     /// Creates the directory layout (restrictive modes per §92) and
     /// scans `objects/` once to learn how much space is already used.
@@ -584,6 +603,80 @@ impl<M: BlobMetadataStore> FsBlobStore<M> {
         }
         report.resumable.sort_by_key(|r| *r.blob_id.as_bytes());
         Ok(report)
+    }
+
+    /// The descriptor (and manifest, if one was supplied) a staged
+    /// transfer was started with — what a restarted process needs to
+    /// resume it. `None` if there is no readable sidecar.
+    pub fn staging_meta(
+        &self,
+        id: BlobId,
+    ) -> Result<Option<(BlobDescriptor, Option<BlobManifest>)>, BlobError> {
+        let bytes = match fs::read(self.shared.meta_path(id)) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io("read sidecar")(e)),
+        };
+        match postcard::from_bytes::<StagingMeta>(&bytes) {
+            Ok(m) if m.version == STAGING_META_VERSION && m.descriptor.blob_id == id => {
+                Ok(Some((m.descriptor, m.manifest)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// `true` if a writer for `id` is open right now in this process.
+    pub fn is_active(&self, id: BlobId) -> bool {
+        self.shared
+            .active
+            .lock()
+            .expect("active poisoned")
+            .contains(&id)
+    }
+
+    /// Every incomplete transfer's staging data (§152/§153's raw
+    /// material). Entries are keyed by the blob id parsed from the file
+    /// *name*; anything not named like one is ignored.
+    pub fn list_staging(&self) -> Result<Vec<StagingInfo>, BlobError> {
+        let mut by_id: std::collections::BTreeMap<BlobId, StagingInfo> = Default::default();
+        for e in fs::read_dir(self.shared.root.join("staging")).map_err(io("read staging"))? {
+            let e = e.map_err(io("read staging entry"))?;
+            let path = e.path();
+            let Some(id) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(parse_id_hex)
+            else {
+                continue;
+            };
+            let Ok(md) = e.metadata() else { continue };
+            let is_part = path.extension().and_then(|x| x.to_str()) == Some("part");
+            let entry = by_id.entry(id).or_insert(StagingInfo {
+                blob_id: id,
+                part_bytes: 0,
+                modified_millis: 0,
+            });
+            if is_part {
+                entry.part_bytes = md.len();
+            }
+            entry.modified_millis = entry.modified_millis.max(mtime_millis(&md));
+        }
+        Ok(by_id.into_values().collect())
+    }
+
+    /// Deletes one transfer's staging data; returns the bytes it held.
+    /// Refuses ([`BlobError::AlreadyStaging`]) while a writer for the
+    /// blob is open — GC must never pull a file out from under a
+    /// transfer that is writing to it.
+    pub fn discard_staging(&self, id: BlobId) -> Result<u64, BlobError> {
+        if self.is_active(id) {
+            return Err(BlobError::AlreadyStaging(id));
+        }
+        let part = self.shared.part_path(id);
+        let bytes = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        let _ = fs::remove_file(&part);
+        let _ = fs::remove_file(self.shared.meta_path(id));
+        Ok(bytes)
     }
 
     /// Deep check: re-hash the stored file and compare to its id.

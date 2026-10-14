@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// deliberately named to make that choice visible at every call site
 /// rather than a bare `BlobId::new(bytes)` that doesn't say which kind
 /// of bytes it expects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BlobId([u8; 32]);
 
 impl BlobId {

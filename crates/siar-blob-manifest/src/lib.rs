@@ -395,6 +395,65 @@
 //! sparse allocation, and a file streamed sender→receiver without ever
 //! being buffered whole.
 //!
+//! ## Round 14: references, GC, compression, derivatives — §79-85, 148-157
+//!
+//! **References and garbage collection (§148-157).**
+//!
+//! - [`reference_store`] — §148 [`reference_store::BlobReference`] as a
+//!   *set* of `(namespace, object, blob, role)` tuples (so two messages
+//!   sharing a blob are two references, and one message re-asserting its
+//!   own is a no-op, not a count of two); §149 atomic batches, plus
+//!   `StoolapReferenceStore::apply_in_transaction` so a domain commits
+//!   its own row and the reference in **one** transaction (tested:
+//!   both survive a commit, neither survives a rollback); §155
+//!   [`reference_store::release_object_references`] reports which blobs
+//!   became unreferenced but deletes nothing; §156
+//!   [`reference_store::disappearing_release_at`]; §157 the two meanings
+//!   of "save" ([`reference_store::SaveSemantics`]).
+//! - [`gc`] — §151 the mark-and-sweep: nothing is deleted when it first
+//!   becomes unreferenced, only after a grace period, re-checked at the
+//!   last instant; §150 the cached `reference_count` is *repaired* from
+//!   the real references every sweep; `Cache`/`Relay` blobs, pinned
+//!   blobs and blobs mid-transfer are never collected. §152/§153
+//!   [`gc::sweep_staging`] and [`gc::reclaim_staging`] clean orphaned
+//!   and partial transfers (resumable ones are kept until their
+//!   [`expiry::TransferExpiry`]; storage pressure takes orphans first).
+//! - [`expiry`] — §154 four *distinct types* (offer / transfer / relay /
+//!   cache) with no conversion between them.
+//!
+//! **Compression and derivatives (§79-85).**
+//!
+//! - [`compression`] — §79-81. The long-pending codec decision is made
+//!   and recorded: **DEFLATE via `flate2`'s pure-Rust backend**, chosen
+//!   to keep this crate free of C and `unsafe`; the trade-off (Zstandard
+//!   would compress better) is isolated behind a one-byte frame tag.
+//!   The pipeline order is fixed and explicit
+//!   ([`compression::PIPELINE_ORDER`]: compress → encrypt → chunk →
+//!   address); compression is application-controlled and content-aware
+//!   (refuses already-compressed media and containers, tiny inputs, and
+//!   anything — ciphertext included — that does not shrink on a trial
+//!   sample). Decompression is bomb-resistant: streaming, output cap,
+//!   ratio cap, declared-length enforcement, trailing-data rejection,
+//!   all tested with a real 128 MiB bomb that is stopped early. A bug
+//!   caught while writing it — trailing bytes were silently accepted
+//!   because `flate2`'s `read` decoder buffers ahead — is fixed by
+//!   owning the buffer (`bufread`).
+//! - [`derivatives`] — §82-85. Relationships are metadata
+//!   ([`derivatives::DerivativeIndex`], in memory or `stoolap`) and can
+//!   never alter a `BlobId`; a derivative may have several sources
+//!   (content addressing makes identical thumbnails one blob);
+//!   [`derivatives::choose_representation`] picks the smallest adequate
+//!   representation for a budget and says when it had to degrade;
+//!   §84 [`derivatives::VoiceNoteMeta`] is strictly bounded; §85
+//!   [`derivatives::channel_for_attachment`] sends *every* attachment
+//!   media type (video included) to the blob path, never to realtime.
+//!   `DerivativeKind::Waveform` was added (appended, so existing
+//!   encodings are unchanged).
+//!
+//! The receive-side wiring lives in `siar-file-transfer-service`'s
+//! `transfer_engine` (see that crate), which also added
+//! `FileTransferService::restore_from_log`.
+//!
 //! Every module is covered by tests exercising real bytes/hashes/state
 //! transitions/ciphertext — including a tamper-detection test for
 //! per-chunk verification, whole-blob verification, AND now AEAD
@@ -408,12 +467,14 @@
 //!   flow that's the message envelope's job (per-message E2EE already
 //!   covers it) — a real integration point, not attempted from this
 //!   crate.
-//! - **Local store: now real (round 13), but not yet wired.** §207
-//!   Phase 2 — filesystem blobs, staging, atomic publish, metadata and
-//!   recovery exist ([`fs_store`]); nothing in `siar-messaging` or
-//!   `siar-file-transfer-service` calls it yet, and reference tracking/GC
-//!   ([`blob_references`], [`storage_lifecycle`]) is still policy only —
-//!   no sweeper runs it against the store.
+//! - **Local store: real (round 13) and, as of round 14, wired into
+//!   `siar-file-transfer-service`** (its `transfer_engine`), with
+//!   references and GC ([`reference_store`], [`gc`]). Still not wired:
+//!   `siar-messaging` does not call any of it, nothing *schedules*
+//!   [`gc::sweep`]/[`gc::sweep_staging`] (they are functions awaiting a
+//!   caller on a timer), and the engine covers the **receive** side
+//!   only — there is no send-side engine reading a file through
+//!   [`bounded_io`] into a live transport.
 //! - **No transfer protocol wire messages.** §207 Phase 4 (offer/
 //!   accept/manifest/chunk-request/ACK/complete as actual
 //!   `siar-protocol` envelope kinds) — [`transfer_state::TransferState`]
@@ -433,8 +494,9 @@
 //!   wiring isn't.
 //! - **Progressive images/video (§33-34), manifest hierarchy for huge
 //!   files (§17, explicitly "not required initially" per the spec's own
-//!   text), parallelism/adaptive concurrency (§41-43), compression
-//!   (§79-80, pending a codec dependency decision), §115-117/§120-139/
+//!   text), parallelism/adaptive concurrency (§41-43), thumbnail
+//!   *generation* (§83 — needs an image codec; only the policy skeleton
+//!   exists), §115-117/§120-139/
 //!   §142+ except where named above** — still a remaining slice of a
 //!   210-section document, though a shrinking one. §20 "Chunk Nonces"
 //!   and §21 "Encryption Metadata" are resolved, not open — see
@@ -449,14 +511,18 @@ pub mod bounded_io;
 pub mod buffer_pool;
 pub mod byte_range;
 pub mod chunking;
+pub mod compression;
 pub mod content_sniffing;
 pub mod delivery_policy;
+pub mod derivatives;
 pub mod descriptor;
 pub mod encryption;
 pub mod events;
+pub mod expiry;
 pub mod file_offer;
 pub mod filename_safety;
 pub mod fs_store;
+pub mod gc;
 pub mod ids;
 pub mod limits;
 pub mod manifest;
@@ -467,6 +533,7 @@ pub mod partial_availability;
 pub mod progress;
 pub mod quarantine;
 pub mod quota;
+pub mod reference_store;
 pub mod relay_and_dtn;
 pub mod resource_policy;
 pub mod resume;
@@ -527,6 +594,10 @@ pub use partial_availability::{partial_availability, PartialAvailability};
 pub use progress::{estimate_eta, EtaEstimate, TransferProgress};
 pub use quarantine::{QuarantineReason, QuarantineRecord};
 pub use quota::{QuotaLedger, Reservation, StoreLimits};
+pub use reference_store::{
+    BlobReference, BlobRole, InMemoryReferenceStore, ObjectId, RefOp, ReferenceStore,
+    StoolapReferenceStore,
+};
 pub use relay_and_dtn::{chunks_to_send, DtnChunkPolicy, RelayStorageAccounting};
 pub use resource_policy::{
     BatteryAwareAdjustments, FileResourcePolicy, MemoryPressureAdjustments, RateLimitPolicy,

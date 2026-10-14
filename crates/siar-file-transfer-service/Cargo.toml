@@ -13,9 +13,11 @@ siar-domain.workspace = true
 # siar-blob-manifest itself.
 siar-blob-manifest.workspace = true
 siar-event-log.workspace = true
+bytes.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tokio.workspace = true
+uuid.workspace = true

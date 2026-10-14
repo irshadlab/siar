@@ -65,6 +65,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+pub mod transfer_engine;
+
 /// Same bound `siar_messaging::service`'s own
 /// `EVENT_LOG_APPEND_MAX_ATTEMPTS` uses — matched, not re-derived.
 const EVENT_LOG_APPEND_MAX_ATTEMPTS: u32 = 5;
@@ -82,6 +84,9 @@ pub enum FileTransferError {
         "TransferEvent::Fail carries no reason — call fail_transfer(reason) instead of apply()"
     )]
     FailNeedsReason,
+    /// Reading the event log back failed ([`FileTransferService::restore_from_log`]).
+    #[error("event log read failed: {0}")]
+    Log(String),
 }
 
 /// §29 "Pure Decision Functions": [`siar_blob_manifest::decide`]'s own
@@ -97,6 +102,19 @@ impl From<siar_blob_manifest::DecideError> for FileTransferError {
             siar_blob_manifest::DecideError::FailNeedsReason => Self::FailNeedsReason,
         }
     }
+}
+
+/// One transfer as reconstructed from the event log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestoredTransfer {
+    pub transfer_id: TransferId,
+    pub manifest_id: ManifestId,
+    pub blob_id: BlobId,
+    pub total_size_bytes: u64,
+    pub chunk_count: u32,
+    /// "At least this far" — see [`FileTransferService::restore_from_log`].
+    pub state: TransferState,
+    pub blob_verified: bool,
 }
 
 /// The real caller — see this module's own doc comment.
@@ -136,6 +154,104 @@ impl FileTransferService {
     pub fn with_event_log(mut self, event_log: Arc<dyn EventStore + Send + Sync>) -> Self {
         self.event_log = Some(event_log);
         self
+    }
+
+    /// Rebuilds in-memory transfer state after a restart by replaying
+    /// this domain's recorded [`FileEvent`]s — the recovery path this
+    /// struct's own doc comment promises. Transfers already known to
+    /// this instance keep their live state (replay only *adds*).
+    ///
+    /// **The log can lag reality.** `TransferStarted`, `TransferPaused`
+    /// and `TransferResumed` are [`siar_event_log::DurabilityClass::
+    /// BestEffort`] (see `FileEvent::durability_class`): any of them may
+    /// have been lost in a crash. So a restored state is "at least this
+    /// far", never authoritative — a transfer restored as `Accepted` may
+    /// really have been `InProgress`. Callers reconcile against real
+    /// disk state (see `transfer_engine`'s `reconcile_after_restart`)
+    /// rather than trusting the replayed state alone. Terminal states
+    /// are sticky: nothing later in the log un-completes, un-fails or
+    /// un-cancels a transfer.
+    ///
+    /// Events this build cannot decode, or that belong to other
+    /// domains, are skipped, not fatal.
+    pub async fn restore_from_log(
+        &self,
+        store: &(dyn EventStore + Send + Sync),
+    ) -> Result<Vec<RestoredTransfer>, FileTransferError> {
+        use siar_blob_manifest::events::{decode_file_event, EVENT_TYPE_TRANSFER_CREATED};
+        use siar_event_log::LocalLogOffset;
+
+        let mut found: Vec<RestoredTransfer> = Vec::new();
+        let mut index: HashMap<TransferId, usize> = HashMap::new();
+        let mut from = LocalLogOffset(0);
+        loop {
+            let page = store
+                .read_log(from, 512)
+                .await
+                .map_err(|e| FileTransferError::Log(e.to_string()))?;
+            let Some(last) = page.last() else { break };
+            from = last.local_offset;
+            for stored in &page {
+                let ty = stored.envelope.event_type;
+                if !(EVENT_TYPE_TRANSFER_CREATED.0..=EVENT_TYPE_TRANSFER_CREATED.0 + 8)
+                    .contains(&ty.0)
+                {
+                    continue;
+                }
+                let Ok(ev) =
+                    decode_file_event(stored.envelope.schema_version, &stored.envelope.payload)
+                else {
+                    continue;
+                };
+                let id = ev.transfer_id();
+                if let FileEvent::TransferCreated {
+                    manifest_id,
+                    blob_id,
+                    total_size_bytes,
+                    chunk_count,
+                    ..
+                } = &ev
+                {
+                    if let std::collections::hash_map::Entry::Vacant(slot) = index.entry(id) {
+                        slot.insert(found.len());
+                        found.push(RestoredTransfer {
+                            transfer_id: id,
+                            manifest_id: *manifest_id,
+                            blob_id: *blob_id,
+                            total_size_bytes: *total_size_bytes,
+                            chunk_count: *chunk_count,
+                            state: TransferState::Offered,
+                            blob_verified: false,
+                        });
+                    }
+                    continue;
+                }
+                let Some(&i) = index.get(&id) else { continue };
+                let t = &mut found[i];
+                let terminal = matches!(
+                    t.state,
+                    TransferState::Completed | TransferState::Failed | TransferState::Cancelled
+                );
+                match ev {
+                    FileEvent::BlobVerified { .. } => t.blob_verified = true,
+                    _ if terminal => {}
+                    FileEvent::TransferAccepted { .. } => t.state = TransferState::Accepted,
+                    FileEvent::TransferStarted { .. } | FileEvent::TransferResumed { .. } => {
+                        t.state = TransferState::InProgress
+                    }
+                    FileEvent::TransferPaused { .. } => t.state = TransferState::Paused,
+                    FileEvent::TransferCompleted { .. } => t.state = TransferState::Completed,
+                    FileEvent::TransferCancelled { .. } => t.state = TransferState::Cancelled,
+                    FileEvent::TransferFailed { .. } => t.state = TransferState::Failed,
+                    FileEvent::TransferCreated { .. } => {}
+                }
+            }
+        }
+        let mut states = self.states.lock().expect("state lock");
+        for t in &found {
+            states.entry(t.transfer_id).or_insert(t.state);
+        }
+        Ok(found)
     }
 
     /// The `TransferState` this service currently has for

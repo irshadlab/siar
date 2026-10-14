@@ -7140,6 +7140,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chacha20poly1305",
+ "flate2",
  "postcard",
  "proptest",
  "rand_core 0.6.4",
@@ -7424,12 +7425,14 @@ dependencies = [
 name = "siar-file-transfer-service"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "siar-blob-manifest",
  "siar-domain",
  "siar-event-log",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

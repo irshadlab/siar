@@ -55,6 +55,11 @@ pub trait BlobMetadataStore: Send + Sync {
     /// Up to `limit` rows, ordered by `blob_id` (stable paging order).
     fn list(&self, limit: usize) -> Result<Vec<BlobRow>, BlobError>;
     fn count(&self) -> Result<u64, BlobError>;
+    /// Up to `limit` rows with `blob_id` strictly greater than `after`
+    /// (`None` = from the start), in `blob_id` order — the cursor form
+    /// of [`Self::list`], so a sweep over millions of blobs pages
+    /// instead of loading them all (§59 memory discipline).
+    fn list_after(&self, after: Option<BlobId>, limit: usize) -> Result<Vec<BlobRow>, BlobError>;
 }
 
 #[derive(Debug, Default)]
@@ -112,6 +117,19 @@ impl BlobMetadataStore for InMemoryBlobMetadata {
     }
     fn count(&self) -> Result<u64, BlobError> {
         Ok(self.rows.lock().expect("metadata poisoned").len() as u64)
+    }
+    fn list_after(&self, after: Option<BlobId>, limit: usize) -> Result<Vec<BlobRow>, BlobError> {
+        let mut rows: Vec<BlobRow> = self
+            .rows
+            .lock()
+            .expect("metadata poisoned")
+            .values()
+            .filter(|r| after.is_none_or(|a| r.blob_id.as_bytes() > a.as_bytes()))
+            .copied()
+            .collect();
+        rows.sort_by_key(|r| *r.blob_id.as_bytes());
+        rows.truncate(limit);
+        Ok(rows)
     }
 }
 
@@ -259,6 +277,32 @@ impl BlobMetadataStore for StoolapBlobMetadata {
         Ok(out)
     }
 
+    fn list_after(&self, after: Option<BlobId>, limit: usize) -> Result<Vec<BlobRow>, BlobError> {
+        let _g = self.lock.lock().expect("metadata poisoned");
+        let mut out = Vec::new();
+        let lim = limit.min(i64::MAX as usize) as i64;
+        let rows = match after {
+            Some(a) => self
+                .db
+                .query(
+                    "SELECT row FROM blob_rows WHERE blob_id > $1 ORDER BY blob_id ASC LIMIT $2",
+                    (hex(a.as_bytes()), lim),
+                )
+                .map_err(me)?,
+            None => self
+                .db
+                .query(
+                    "SELECT row FROM blob_rows ORDER BY blob_id ASC LIMIT $1",
+                    (lim,),
+                )
+                .map_err(me)?,
+        };
+        for r in rows {
+            out.push(Self::decode(&r.map_err(me)?.get::<String>(0).map_err(me)?)?);
+        }
+        Ok(out)
+    }
+
     fn count(&self) -> Result<u64, BlobError> {
         let _g = self.lock.lock().expect("metadata poisoned");
         let mut rows = self
@@ -324,6 +368,17 @@ mod tests {
             "stable order"
         );
         assert_eq!(m.list(1).unwrap().len(), 1);
+
+        // Cursor paging visits every row exactly once, in order.
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = m.list_after(cursor, 1).unwrap();
+            let Some(last) = page.last() else { break };
+            cursor = Some(last.blob_id);
+            seen.extend(page.iter().map(|r| r.blob_id));
+        }
+        assert_eq!(seen, all.iter().map(|r| r.blob_id).collect::<Vec<_>>());
 
         assert!(m.remove(changed.blob_id).unwrap());
         assert!(!m.remove(changed.blob_id).unwrap());

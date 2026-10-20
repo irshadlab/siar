@@ -65,6 +65,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+pub mod gc_schedule;
+pub mod protocol;
 pub mod transfer_engine;
 
 /// Same bound `siar_messaging::service`'s own

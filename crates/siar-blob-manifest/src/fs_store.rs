@@ -725,10 +725,24 @@ impl<M: BlobMetadataStore> FsBlobStore<M> {
             })?;
             report.rows_added += 1;
         }
-        for row in sh.meta.list(usize::MAX)? {
-            if !present.contains(&row.blob_id) && sh.meta.remove(row.blob_id)? {
-                report.rows_removed += 1;
+        // Page by cursor instead of materializing every row: removing a
+        // row never disturbs a cursor that is already past it.
+        let mut cursor = None;
+        loop {
+            let page = sh.meta.list_after(cursor, 512)?;
+            let Some(last) = page.last().map(|r| r.blob_id) else {
+                break;
+            };
+            let short = page.len() < 512;
+            for row in page {
+                if !present.contains(&row.blob_id) && sh.meta.remove(row.blob_id)? {
+                    report.rows_removed += 1;
+                }
             }
+            if short {
+                break;
+            }
+            cursor = Some(last);
         }
         Ok(report)
     }

@@ -61,6 +61,14 @@ impl BlobId {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Rebuilds an id from the 32 bytes a message's attachment reference
+    /// carries. This is a *lookup key*, not a trust claim: nothing is
+    /// believed about a blob because its id was constructed this way —
+    /// content is verified when a blob is published (§51) and on read.
+    pub fn from_reference_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 /// §14: computed the same way as [`BlobId`] — a content hash of one
@@ -73,6 +81,16 @@ pub struct ChunkHash([u8; 32]);
 impl ChunkHash {
     pub fn from_ciphertext_chunk(chunk: &[u8]) -> Self {
         Self(*blake3::hash(chunk).as_bytes())
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Only the wire layer rebuilds a hash from raw bytes; the value
+    /// is untrusted until compared with a manifest entry.
+    pub(crate) fn from_raw_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
     }
 }
 
@@ -135,6 +153,14 @@ pub struct TransferId(Uuid);
 impl TransferId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        self.0.as_bytes()
+    }
+
+    pub(crate) fn from_raw_bytes(bytes: [u8; 16]) -> Self {
+        Self(Uuid::from_bytes(bytes))
     }
 }
 

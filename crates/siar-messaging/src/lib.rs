@@ -12,6 +12,7 @@
 mod blob_bridge;
 pub mod event_policy;
 pub mod events;
+mod files_transport;
 mod group_service;
 mod key_package_directory;
 pub mod projections;
@@ -19,17 +20,23 @@ mod service;
 pub mod stoolap_projections;
 mod ticket;
 
-pub use blob_bridge::StorageBlobStore;
+pub use blob_bridge::{FilesBlobStore, StorageBlobStore};
 pub use events::{
     conversation_stream_id, decode_messaging_event, MessagingEvent, EVENT_TYPE_MESSAGE_CREATED,
     EVENT_TYPE_MESSAGE_DELETED, EVENT_TYPE_MESSAGE_DELIVERED, EVENT_TYPE_MESSAGE_EDITED,
     EVENT_TYPE_MESSAGE_QUEUED, EVENT_TYPE_MESSAGE_READ, EVENT_TYPE_MESSAGE_RECEIVED,
     EVENT_TYPE_REACTION_ADDED, EVENT_TYPE_REACTION_REMOVED,
 };
+pub use files_transport::{
+    fetch_attachment_over_files, FilesAttachmentFetcher, FilesInbound, IdentityPairwiseSecrets,
+    PeerBook, TransportFileChannel,
+};
 pub use projections::{
     ConversationSummary, ConversationSummaryProjection, ConversationSummaryQuery,
 };
-pub use service::{IncomingEvent, MessageService};
+pub use service::{
+    AttachmentFetchError, AttachmentFetcher, IncomingEvent, MessageService, MessageServiceError,
+};
 pub use stoolap_projections::StoolapConversationSummaryProjection;
 pub use ticket::PeerTicket;
 // `InMemoryDeviceDirectory` added to this re-export list — a real,

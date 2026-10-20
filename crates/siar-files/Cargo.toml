@@ -1,0 +1,28 @@
+[package]
+name = "siar-files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Spec 05 §201's `comm-files` + §202-205's public API: the one
+# high-level surface over the blob store, the transfer engine and the
+# `files/1` protocol. Applications (and siar-messaging) use this; they
+# never touch chunks.
+[dependencies]
+siar-domain.workspace = true
+siar-blob-manifest.workspace = true
+siar-file-transfer-service.workspace = true
+siar-event-log.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+postcard.workspace = true
+zeroize.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tokio.workspace = true

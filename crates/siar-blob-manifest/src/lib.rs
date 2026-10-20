@@ -395,6 +395,133 @@
 //! sparse allocation, and a file streamed sender→receiver without ever
 //! being buffered whole.
 //!
+//! ## Round 15: wire protocol, scheduling, diagnostics — §132-139, §174-185
+//!
+//! - [`wire`] — §132-139: `files/1` control messages (postcard behind a
+//!   2-byte version), a separately-bounded manifest frame with
+//!   [`wire::validate_manifest_shape`], a fixed 88-byte chunk header
+//!   validated against the manifest *before* the body is allocated
+//!   (§138), numeric safety helpers (§139), and §133/§134 capability
+//!   negotiation. §136's `*V1` types are the wire contract; domain
+//!   types are never serialized directly. §130/§131 (iroh backend and
+//!   external-id mapping) are NOT done: no iroh-blobs backend exists to
+//!   map against yet.
+//! - [`scheduling`] — §174-176 path-change plans, §179 routing inputs,
+//!   §180 classes, §181-183 a chunk-granular weighted deficit
+//!   round-robin scheduler with strict emergency priority and per-peer /
+//!   per-app slot caps, §184 lock-free metrics (no field can hold a
+//!   name), §185 diagnostics snapshot.
+//!
+//! ## Round 25: wrapped keys on the wire
+//!
+//! [`key_wrapping::WrappedKey`] gained a strict byte encoding so a
+//! recipient-specific wrapped key can ride in an offer
+//! (`siar-files`' offer metadata v2); the pairwise secret that wraps it is
+//! `siar_crypto::FileKeyWrapSecret`. See ROADMAP.
+//!
+//! ## Round 23: `files/1` over real QUIC, and pull
+//!
+//! New wire messages (appended to `FileControlV1`): `BlobRequest` and
+//! `BlobUnavailable`. The transport (`siar-transport::files_handler`),
+//! the pull logic (`siar-files::FilesService::fetch_blob`) and the
+//! messaging glue (`siar-messaging::files_transport`) are described in
+//! ROADMAP; the guarantees that matter at this layer are unchanged — a
+//! pulled blob is verified exactly like a pushed one.
+//!
+//! ## Round 22: durable-store crash injection, and the paging bug it found
+//!
+//! `siar-file-transfer-service/tests/crash_durable.rs` crashes against
+//! stoolap-backed metadata, references and log (all reopened from disk).
+//! It exposed a panic the in-memory stores hid: a `LIMIT` near `i64::MAX`
+//! makes stoolap's top-N operator reserve that many rows. The durable
+//! stores now page internally ([`metadata_store::StoolapBlobMetadata`],
+//! [`reference_store::StoolapReferenceStore`]) and
+//! [`fs_store::FsBlobStore::reconcile_metadata`] walks rows by cursor.
+//! Regression: `tests/durable_paging.rs`.
+//!
+//! ## Round 21: crash, hostile-network, Bluetooth, DTN-policy, fuzz
+//!
+//! Test-side work (see ROADMAP): `siar-file-transfer-service`'s
+//! `tests/crash_injection.rs`, `siar-files`' hostile-network and Bluetooth
+//! tests, this crate's `tests/scenarios.rs`, and `fuzz/` (cargo-fuzz
+//! targets; compile-checked, not run). The one production change it
+//! forced: `siar-files::FilesService::retry_stalled`, because a lost
+//! chunk request used to hang a transfer forever.
+//!
+//! ## Round 20: §41-43 parallelism, §189-198 verification
+//!
+//! - [`parallelism`] — §41-43: per-path ceilings (LAN 8, iroh/Wi-Fi 4,
+//!   Bluetooth and DTN 1), reduction under battery saver / memory
+//!   pressure / metered / busy CPU (never below 1), and an AIMD
+//!   controller that adapts *inside* the deterministic limit.
+//!   `scheduling::FairScheduler::set_peer_cap` carries the per-peer cap;
+//!   `siar-files` now keeps that many chunk sends genuinely in flight
+//!   (measured: LAN overlaps, Bluetooth is exactly 1).
+//! - `tests/properties.rs` — §191/192/194/196 with proptest: hostile
+//!   bytes into the control, manifest and chunk-header decoders never
+//!   panic and only ever yield validated values; bitmap ranges partition
+//!   the file; any delivery order with duplicates reassembles the
+//!   original; any flipped byte or tampered manifest entry is caught;
+//!   v2 survives round trip and rejects every mutation; files ≤100 KB are
+//!   one chunk; GC never deletes a referenced, pinned or in-flight blob
+//!   under random reference/pin/active states.
+//! - `siar-files` large-file test (§195): a 32 MiB file imports and
+//!   exports with peak RSS growth under 40 MiB (a whole-file path needs
+//!   ≥ 96 MiB), byte-exact on read-back.
+//!
+//! ## Round 19: format v2, policy, backup, sharing, keys — §142-147, §158-173
+//!
+//! - [`chunked_encryption`] — blob format v2 (STREAM construction):
+//!   per-segment authentication, index-in-nonce (no reorder/splice),
+//!   last-segment flag (no truncation), authenticated header. Every
+//!   single-bit flip of a v2 blob is tested to be rejected. BlobId is
+//!   still BLAKE3 of the whole ciphertext. [`manifest_builder`] builds the
+//!   identical manifest incrementally, so import is two bounded passes.
+//!   Wire: `AlgorithmV1::ChaCha20Poly1305Chunked`, appended so v1-only
+//!   peers refuse the offer cleanly.
+//! - [`app_policy`] — §143 notifications, §144 acceptance prompt, §145
+//!   auto-download, §146 data saver + derivative-first fetch plan, §147
+//!   storage classes.
+//! - [`backup`] — §158-161 policy, incremental plan, verified restore.
+//! - [`sharing`] — §165-168: relay-allowed ≠ may-reshare, as separate
+//!   predicates; public links need an explicit grant.
+//! - [`key_wrapping`] — §169-173: one blob, per-recipient wrapped keys;
+//!   revocation that can only claim "no future access"; re-key cost;
+//!   bounded zeroizing key cache. Caller supplies the pairwise secret;
+//!   no key agreement here (§170 depends on group architecture).
+//!
+//! §162-164 (object-store backend, server-side encryption, signed URLs)
+//! are adapter concerns behind `BlobStore`/transport and need no code in
+//! the core; the design constraint they state (ciphertext only, signed
+//! URLs outside blob identity) already holds because nothing here ever
+//! sees plaintext or a URL.
+//!
+//! ## Round 18: §115-117, §120-129
+//!
+//! - [`file_io`] — §120-125: async [`file_io::FileSource`] (`len`,
+//!   positional `read_at`) and [`file_io::FileSink`] (`write`, atomic
+//!   `commit`), a bounded whole-source read that refuses growth or
+//!   change mid-read, and memory and filesystem implementations
+//!   (open-once handle, temp-file-then-rename sink that never
+//!   overwrites and cleans up if dropped).
+//! - [`plaintext_cache`] — §127/§128: off by default; when on, bounded by
+//!   bytes, age and on-demand shrink, LRU in `O(log n)`, zeroized on exit.
+//! - [`preprocess`] — §115 fixed stage order as a value, §116-117 staging
+//!   decision, §129 [`preprocess::Verified`] (only an authenticated
+//!   decrypt can produce one). **Finding:** `StreamOnly` is refused
+//!   because the blob format is a single whole-blob ChaCha20-Poly1305:
+//!   plaintext cannot be released before the final tag verifies, so
+//!   neither streaming encryption (§117) nor streaming export without
+//!   holding the file in memory is possible until a chunk-wise AEAD blob
+//!   version exists. That is a format decision, not a code gap.
+//!
+//! Public API (§201-205) lives in the new `siar-files` crate, and
+//! `siar-messaging::send_imported_attachment` calls it.
+//!
+//! Wired in `siar-file-transfer-service`: `protocol` (`FileReceiver` /
+//! `FileSender`, end to end over real stores) and `gc_schedule`
+//! (`GcScheduler` — `gc::sweep` finally has a caller).
+//!
 //! ## Round 14: references, GC, compression, derivatives — §79-85, 148-157
 //!
 //! **References and garbage collection (§148-157).**
@@ -503,13 +630,16 @@
 //!   [`descriptor::EncryptionDescriptor`]'s own doc comment: whole-blob
 //!   AEAD means there was never a per-chunk nonce to derive.
 
+pub mod app_policy;
 pub mod attachment_reference;
 pub mod auto_accept;
+pub mod backup;
 pub mod blob_io;
 pub mod blob_references;
 pub mod bounded_io;
 pub mod buffer_pool;
 pub mod byte_range;
+pub mod chunked_encryption;
 pub mod chunking;
 pub mod compression;
 pub mod content_sniffing;
@@ -519,17 +649,23 @@ pub mod descriptor;
 pub mod encryption;
 pub mod events;
 pub mod expiry;
+pub mod file_io;
 pub mod file_offer;
 pub mod filename_safety;
 pub mod fs_store;
 pub mod gc;
 pub mod ids;
+pub mod key_wrapping;
 pub mod limits;
 pub mod manifest;
+pub mod manifest_builder;
 pub mod metadata_encryption;
 pub mod metadata_privacy;
 pub mod metadata_store;
+pub mod parallelism;
 pub mod partial_availability;
+pub mod plaintext_cache;
+pub mod preprocess;
 pub mod progress;
 pub mod quarantine;
 pub mod quota;
@@ -537,7 +673,9 @@ pub mod reference_store;
 pub mod relay_and_dtn;
 pub mod resource_policy;
 pub mod resume;
+pub mod scheduling;
 pub mod schema_rows;
+pub mod sharing;
 pub mod source_integrity;
 pub mod source_trust;
 pub mod storage_lifecycle;
@@ -549,6 +687,7 @@ pub mod transfer_planner;
 pub mod transfer_record;
 pub mod transfer_state;
 pub mod verify;
+pub mod wire;
 
 pub use attachment_reference::{AttachmentMetadata, AttachmentReference};
 pub use auto_accept::{evaluate_auto_accept, AutoAcceptContext, AutoAcceptPolicy};

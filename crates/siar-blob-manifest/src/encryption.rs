@@ -113,6 +113,15 @@ pub fn decrypt_blob(
         .map_err(|_| EncryptionError::DecryptionFailed)
 }
 
+/// §129: decrypt and hand back bytes that are *known* authentic. Media
+/// decoders take [`Verified`] so unverified bytes cannot reach them.
+pub fn decrypt_blob_verified(
+    key: &BlobEncryptionKey,
+    ciphertext: &[u8],
+) -> Result<crate::preprocess::Verified<Vec<u8>>, EncryptionError> {
+    decrypt_blob(key, ciphertext).map(crate::preprocess::Verified::new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

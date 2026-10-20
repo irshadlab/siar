@@ -44,6 +44,12 @@ pub enum CryptoDomain {
     /// file *content* key and deserves its own domain rather than
     /// silently sharing `File`'s.
     FileMetadata,
+    /// `comm/file-keywrap/v1` — the pairwise secret that wraps a blob key
+    /// for one recipient (`siar-blob-manifest::key_wrapping`, spec 05
+    /// §169-170). Its own domain, so the secret that protects a file key
+    /// can never equal the session key or the mailbox-token secret even
+    /// though all three come from the same ECDH exchange.
+    FileKeyWrap,
     /// `comm/dtn/v1` — DTN bundle-level constructions (reserved; no
     /// bundle-level signing/AEAD construction in this crate uses it
     /// yet — `siar-dtn-bundle` carries only ciphertext/references, see
@@ -73,6 +79,7 @@ impl CryptoDomain {
             Self::Message => b"comm/msg/v1",
             Self::File => b"comm/file/v1",
             Self::FileMetadata => b"comm/file-metadata/v1",
+            Self::FileKeyWrap => b"comm/file-keywrap/v1",
             Self::Dtn => b"comm/dtn/v1",
             Self::DeviceSync => b"comm/device-sync/v1",
             Self::Backup => b"comm/backup/v1",
@@ -85,10 +92,11 @@ impl CryptoDomain {
 mod tests {
     use super::*;
 
-    const ALL: [CryptoDomain; 7] = [
+    const ALL: [CryptoDomain; 8] = [
         CryptoDomain::Message,
         CryptoDomain::File,
         CryptoDomain::FileMetadata,
+        CryptoDomain::FileKeyWrap,
         CryptoDomain::Dtn,
         CryptoDomain::DeviceSync,
         CryptoDomain::Backup,

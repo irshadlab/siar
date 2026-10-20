@@ -2,6 +2,7 @@
 
 use crate::{
     blob_handler::{BlobProtocolHandler, BlobStore, BLOB_ALPN},
+    files_handler::{FilesFrameSink, FilesProtocolHandler, FILES_ALPN, FILES_MAX_FRAME},
     handler::MessagingProtocolHandler,
     local_discovery::{spawn_local_discovery_task, LocalPeerDirectory},
     pool::ConnectionPool,
@@ -26,6 +27,14 @@ pub struct SiarEndpoint {
     _router: Router,
     pool: ConnectionPool,
     local_peers: Arc<LocalPeerDirectory>,
+    /// One persistent, ordered `files/1` stream per peer (see
+    /// `files_handler`'s module docs).
+    files_streams: std::sync::Mutex<
+        std::collections::HashMap<
+            EndpointId,
+            Arc<tokio::sync::Mutex<Option<iroh::endpoint::SendStream>>>,
+        >,
+    >,
 }
 
 impl SiarEndpoint {
@@ -39,6 +48,18 @@ impl SiarEndpoint {
         secret_key: SecretKey,
         incoming: mpsc::Sender<crate::handler::IncomingFrame>,
         blob_store: Arc<dyn BlobStore>,
+    ) -> Result<Self, TransportError> {
+        Self::bind_with_files(secret_key, incoming, blob_store, None).await
+    }
+
+    /// [`Self::bind`], additionally routing `FILES_ALPN` connections to
+    /// `files` (spec 05 `files/1`). With `None` the endpoint does not
+    /// accept that protocol, exactly as before.
+    pub async fn bind_with_files(
+        secret_key: SecretKey,
+        incoming: mpsc::Sender<crate::handler::IncomingFrame>,
+        blob_store: Arc<dyn BlobStore>,
+        files: Option<Arc<dyn FilesFrameSink>>,
     ) -> Result<Self, TransportError> {
         // iroh 1.0's `Endpoint::builder` takes a `Preset` (a bundle of
         // defaults) instead of the old zero-arg builder. `presets::N0`
@@ -88,16 +109,20 @@ impl SiarEndpoint {
 
         let messaging_handler = MessagingProtocolHandler::new(incoming);
         let blob_handler = BlobProtocolHandler::new(blob_store);
-        let router = Router::builder(endpoint.clone())
+        let mut builder = Router::builder(endpoint.clone())
             .accept(MESSENGER_ALPN, messaging_handler)
-            .accept(BLOB_ALPN, blob_handler)
-            .spawn();
+            .accept(BLOB_ALPN, blob_handler);
+        if let Some(sink) = files {
+            builder = builder.accept(FILES_ALPN, FilesProtocolHandler::new(sink));
+        }
+        let router = builder.spawn();
 
         Ok(Self {
             endpoint,
             _router: router,
             pool: ConnectionPool::default(),
             local_peers,
+            files_streams: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -140,6 +165,53 @@ impl SiarEndpoint {
             .map_err(|e| TransportError::Connect(e.to_string()))?;
         self.pool.insert(peer.id, alpn, connection.clone());
         Ok(connection)
+    }
+
+    /// Sends one `files/1` frame to `peer`, in order after every frame
+    /// previously sent to that peer. The stream is opened on first use and
+    /// reused; if a write fails it is replaced once and the frame retried
+    /// on the new stream. Frames over [`FILES_MAX_FRAME`] are refused
+    /// locally.
+    pub async fn send_files_frame(
+        &self,
+        peer: EndpointAddr,
+        kind: u8,
+        frame: &[u8],
+    ) -> Result<(), TransportError> {
+        if frame.len() > FILES_MAX_FRAME {
+            return Err(TransportError::Write("files frame over the limit".into()));
+        }
+        let len = u32::try_from(frame.len())
+            .map_err(|_| TransportError::Write("files frame over the limit".into()))?;
+        let hdr = crate::files_handler::header(kind, len);
+        let slot = {
+            let mut map = self.files_streams.lock().expect("files streams");
+            Arc::clone(map.entry(peer.id).or_default())
+        };
+        // Holding this lock across the write is what keeps frames ordered.
+        let mut guard = slot.lock().await;
+        for attempt in 0..2 {
+            if guard.is_none() {
+                let connection = self.connection_for(peer.clone(), FILES_ALPN).await?;
+                let stream = connection
+                    .open_uni()
+                    .await
+                    .map_err(|e| TransportError::Write(e.to_string()))?;
+                *guard = Some(stream);
+            }
+            let stream = guard.as_mut().expect("just ensured");
+            let written = async {
+                stream.write_all(&hdr).await?;
+                stream.write_all(frame).await
+            }
+            .await;
+            match written {
+                Ok(()) => return Ok(()),
+                Err(e) if attempt == 1 => return Err(TransportError::Write(e.to_string())),
+                Err(_) => *guard = None, // replace the stream and retry once
+            }
+        }
+        unreachable!("the loop returns on its second iteration")
     }
 
     /// plan.md §22's attachment flow: ask `peer` for the blob addressed

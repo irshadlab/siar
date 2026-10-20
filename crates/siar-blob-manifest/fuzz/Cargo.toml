@@ -1,0 +1,49 @@
+[package]
+name = "siar-blob-manifest-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Coverage-guided fuzzing (spec 05 §192). Not part of the main workspace:
+#   cargo install cargo-fuzz
+#   cd crates/siar-blob-manifest && cargo +nightly fuzz run decode_control
+# The in-tree `tests/properties.rs` runs the same decoders on random
+# bytes on every `cargo test`; these targets add coverage guidance.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+siar-blob-manifest = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "decode_control"
+path = "fuzz_targets/decode_control.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "decode_manifest"
+path = "fuzz_targets/decode_manifest.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "chunk_frame"
+path = "fuzz_targets/chunk_frame.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "chunked_decrypt"
+path = "fuzz_targets/chunked_decrypt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "manifest_builder_equivalence"
+path = "fuzz_targets/manifest_builder_equivalence.rs"
+test = false
+doc = false

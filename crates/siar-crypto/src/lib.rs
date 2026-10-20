@@ -99,6 +99,7 @@ mod envelope;
 mod epoch;
 mod error;
 mod fanout;
+mod file_keywrap;
 mod history_policy;
 mod identity;
 mod keystore;
@@ -123,6 +124,7 @@ pub use envelope::{
 pub use epoch::SecurityEpoch;
 pub use error::CryptoError;
 pub use fanout::{fan_out_envelope, RecipientDevice};
+pub use file_keywrap::FileKeyWrapSecret;
 pub use history_policy::HistoryAccessPolicy;
 pub use identity::DeviceIdentity;
 pub use keystore::{InMemorySecureKeyStore, KeyHandle, KeyPolicy, SecureKeyStore};

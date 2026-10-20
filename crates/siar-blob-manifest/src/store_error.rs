@@ -70,7 +70,7 @@ pub enum BlobError {
 }
 
 /// §187: what a caller should do about a failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Recoverability {
     /// Transient: the same call may succeed later (back off, retry).
     Retryable,

@@ -155,7 +155,36 @@ pub struct StoolapBlobMetadata {
     lock: Arc<Mutex<()>>,
 }
 
+/// Rows fetched per stoolap query (see [`BlobMetadataStore::list_after`]).
+const QUERY_PAGE: usize = 1024;
+
 impl StoolapBlobMetadata {
+    fn query_page(&self, after: Option<BlobId>, n: usize) -> Result<Vec<BlobRow>, BlobError> {
+        let _g = self.lock.lock().expect("metadata poisoned");
+        let mut out = Vec::new();
+        let lim = n.min(QUERY_PAGE) as i64;
+        let rows = match after {
+            Some(a) => self
+                .db
+                .query(
+                    "SELECT row FROM blob_rows WHERE blob_id > $1 ORDER BY blob_id ASC LIMIT $2",
+                    (hex(a.as_bytes()), lim),
+                )
+                .map_err(me)?,
+            None => self
+                .db
+                .query(
+                    "SELECT row FROM blob_rows ORDER BY blob_id ASC LIMIT $1",
+                    (lim,),
+                )
+                .map_err(me)?,
+        };
+        for r in rows {
+            out.push(Self::decode(&r.map_err(me)?.get::<String>(0).map_err(me)?)?);
+        }
+        Ok(out)
+    }
+
     pub fn open(path: &str) -> Result<Self, BlobError> {
         Self::from_db(Database::open(&format!("file://{path}")).map_err(me)?)
     }
@@ -262,43 +291,27 @@ impl BlobMetadataStore for StoolapBlobMetadata {
     }
 
     fn list(&self, limit: usize) -> Result<Vec<BlobRow>, BlobError> {
-        let _g = self.lock.lock().expect("metadata poisoned");
-        let mut out = Vec::new();
-        for r in self
-            .db
-            .query(
-                "SELECT row FROM blob_rows ORDER BY blob_id ASC LIMIT $1",
-                (limit.min(i64::MAX as usize) as i64,),
-            )
-            .map_err(me)?
-        {
-            out.push(Self::decode(&r.map_err(me)?.get::<String>(0).map_err(me)?)?);
-        }
-        Ok(out)
+        self.list_after(None, limit)
     }
 
+    /// Honors any `limit` — including `usize::MAX` — by paging internally
+    /// in [`QUERY_PAGE`]-row queries. (One `LIMIT i64::MAX` query makes
+    /// stoolap's top-N operator try to reserve that many rows and panic
+    /// with a capacity overflow; the in-memory store never showed it.)
     fn list_after(&self, after: Option<BlobId>, limit: usize) -> Result<Vec<BlobRow>, BlobError> {
-        let _g = self.lock.lock().expect("metadata poisoned");
-        let mut out = Vec::new();
-        let lim = limit.min(i64::MAX as usize) as i64;
-        let rows = match after {
-            Some(a) => self
-                .db
-                .query(
-                    "SELECT row FROM blob_rows WHERE blob_id > $1 ORDER BY blob_id ASC LIMIT $2",
-                    (hex(a.as_bytes()), lim),
-                )
-                .map_err(me)?,
-            None => self
-                .db
-                .query(
-                    "SELECT row FROM blob_rows ORDER BY blob_id ASC LIMIT $1",
-                    (lim,),
-                )
-                .map_err(me)?,
-        };
-        for r in rows {
-            out.push(Self::decode(&r.map_err(me)?.get::<String>(0).map_err(me)?)?);
+        let mut out: Vec<BlobRow> = Vec::new();
+        let mut cursor = after;
+        while out.len() < limit {
+            let want = (limit - out.len()).min(QUERY_PAGE);
+            let page = self.query_page(cursor, want)?;
+            let short = page.len() < want;
+            if let Some(last) = page.last() {
+                cursor = Some(last.blob_id);
+            }
+            out.extend(page);
+            if short {
+                break;
+            }
         }
         Ok(out)
     }

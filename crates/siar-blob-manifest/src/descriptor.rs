@@ -19,7 +19,11 @@ pub struct ChunkingDescriptor {
 /// isn't this crate's call to make.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EncryptionAlgorithm {
+    /// Whole-blob AEAD, `nonce ‖ ciphertext ‖ tag` (format v1).
     ChaCha20Poly1305,
+    /// Chunk-wise AEAD (format v2, [`crate::chunked_encryption`]); the
+    /// descriptor's `nonce` is unused (the nonce prefix is in the blob header).
+    ChaCha20Poly1305Chunked,
 }
 
 /// §18/§21: real encrypt/decrypt now lives in [`crate::encryption`] —

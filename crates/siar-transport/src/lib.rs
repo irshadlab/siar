@@ -35,6 +35,7 @@
 mod blob_handler;
 mod endpoint;
 mod error;
+mod files_handler;
 mod handler;
 mod local_discovery;
 mod pool;
@@ -42,6 +43,9 @@ mod pool;
 pub use blob_handler::{BlobStore, BLOB_ALPN};
 pub use endpoint::{SiarEndpoint, MESSENGER_ALPN};
 pub use error::TransportError;
+pub use files_handler::{
+    DeferredFilesSink, FilesFrameSink, FilesProtocolHandler, FILES_ALPN, FILES_MAX_FRAME,
+};
 pub use handler::{IncomingFrame, MessagingProtocolHandler};
 pub use local_discovery::LocalPeerDirectory;
 

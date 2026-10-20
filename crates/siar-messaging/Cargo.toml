@@ -12,6 +12,10 @@ siar-crypto.workspace = true
 siar-crypto-mls.workspace = true
 siar-storage.workspace = true
 siar-transport.workspace = true
+# spec 05 §204 — `send_imported_attachment` / `FilesBlobStore`.
+siar-files.workspace = true
+# `files_transport` names the store traits the file service is generic over.
+siar-blob-manifest.workspace = true
 # §33 "Messaging Events" (`events.rs`) — Phase 3 of
 # `04-offline-event-log-architecture.md`'s own implementation-phase
 # breakdown, same crate `siar-identity-multidevice::audit_log` already
@@ -29,6 +33,7 @@ async-trait.workspace = true
 stoolap = { version = "0.4", default-features = false, features = ["parallel"] }
 uuid.workspace = true
 x25519-dalek.workspace = true
+zeroize.workspace = true
 iroh.workspace = true
 # Added for send_text_anon's TokenMailboxEnvelope::payload_hash — the
 # same already-adopted BLAKE3 primitive siar-crypto's own Session key
@@ -40,3 +45,7 @@ iroh.workspace = true
 # constructing a `TokenMailboxEnvelope`, is that caller.
 blake3.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+# spec 05 §204 integration test builds a real FilesService.
+siar-file-transfer-service.workspace = true

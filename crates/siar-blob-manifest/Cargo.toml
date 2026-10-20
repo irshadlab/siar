@@ -23,8 +23,11 @@ postcard.workspace = true
 # pattern `siar-identity-multidevice`/`siar-messaging` already use for
 # §35/§33.
 siar-event-log.workspace = true
+# §120-125: filesystem source/sink reads and writes run on the blocking pool.
+tokio.workspace = true
+# §127: cached plaintext is wiped when it leaves.
+zeroize.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 proptest.workspace = true
-tokio.workspace = true

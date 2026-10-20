@@ -21,3 +21,15 @@ impl BlobStore for StorageBlobStore {
         }
     }
 }
+
+/// Serves blobs held by the file subsystem (`siar_files::FilesService`,
+/// or anything else that can read ciphertext by hash) to peers. Bind the
+/// endpoint with this instead of [`StorageBlobStore`] to send imported
+/// attachments without keeping a second copy in `siar-storage`.
+pub struct FilesBlobStore<T: siar_files::CiphertextSource>(pub Arc<T>);
+
+impl<T: siar_files::CiphertextSource> BlobStore for FilesBlobStore<T> {
+    fn get(&self, blob_hash: &[u8; 32]) -> Option<Vec<u8>> {
+        self.0.ciphertext(blob_hash)
+    }
+}

@@ -77,7 +77,7 @@
 //! inside `async fn`s; call from a blocking-capable context on a
 //! multi-threaded runtime.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use siar_blob_manifest::blob_io::BlobWriter;
@@ -511,6 +511,47 @@ impl<M: BlobMetadataStore, R: ReferenceStore + ?Sized> TransferEngine<M, R> {
         self.drop_reference(&ctx);
         self.ctx.lock().expect("ctx").remove(&id);
         Ok(state)
+    }
+
+    /// Blobs with a transfer in flight: GC must never collect these.
+    pub fn active_blob_ids(&self) -> HashSet<BlobId> {
+        self.ctx
+            .lock()
+            .expect("ctx")
+            .values()
+            .map(|c| c.descriptor.blob_id)
+            .collect()
+    }
+
+    /// One mark-and-sweep (§151) over this engine's own store and
+    /// reference model, with the in-flight blobs protected. Scheduling
+    /// is [`crate::gc_schedule::GcScheduler`]'s job.
+    pub fn gc_sweep(
+        &self,
+        pinned: &HashSet<BlobId>,
+        now_millis: u64,
+        policy: &siar_blob_manifest::storage_lifecycle::GcPolicy,
+        page: usize,
+    ) -> Result<siar_blob_manifest::gc::GcReport, EngineError> {
+        let active = self.active_blob_ids();
+        Ok(siar_blob_manifest::gc::sweep(
+            &self.store,
+            &*self.refs,
+            pinned,
+            &active,
+            now_millis,
+            policy,
+            page,
+        )?)
+    }
+
+    /// Contiguous `[start, end)` runs still missing for a live transfer
+    /// — what a receiver puts in a `ChunkRequest`/`Resume` (§31, §132).
+    pub fn missing_ranges(&self, id: TransferId) -> Result<Vec<(u32, u32)>, EngineError> {
+        let live = self.live.lock().expect("live");
+        live.get(&id)
+            .map(|l| l.writer.missing_ranges())
+            .ok_or(EngineError::NotActive(id))
     }
 
     fn origin_of(&self, id: TransferId) -> Result<EventOrigin, EngineError> {

@@ -61,6 +61,9 @@ pub enum MessageServiceError {
     Malformed,
     #[error("attachment is too large: {0}")]
     AttachmentTooLarge(#[from] siar_domain::BlobSizeError),
+    /// A file-subsystem failure while preparing an imported attachment.
+    #[error("file subsystem: {0}")]
+    Files(#[from] siar_files::FilesError),
     #[error("requested blob was not found on the peer")]
     BlobNotFound,
 }
@@ -81,6 +84,33 @@ pub enum IncomingEvent {
     },
 }
 
+/// Why a [`AttachmentFetcher`] could not produce the attachment — told
+/// apart because they call for different follow-ups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentFetchError {
+    /// The peer answered: it does not have the blob or will not serve it.
+    /// The legacy path would be told the same, so it is not tried.
+    Unavailable,
+    /// The peer could not be spoken to over this protocol (not paired for
+    /// it, no address, or it does not implement it). The legacy path may
+    /// still work.
+    Unsupported,
+    /// It started and did not finish (timeout, cancelled, corrupt).
+    Failed,
+}
+
+/// A chunked, resumable way to pull an attachment (`files/1`), offered to
+/// [`MessageService::fetch_attachment`] as the preferred path.
+pub trait AttachmentFetcher: Send + Sync {
+    fn fetch<'a>(
+        &'a self,
+        peer: &'a PeerTicket,
+        reference: &'a AttachmentReference,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u8>, AttachmentFetchError>> + Send + 'a>,
+    >;
+}
+
 pub struct MessageService {
     /// plan.md §7–8: `DeviceId` is our own stable local identifier,
     /// assigned once at provisioning — never derived from key bytes, so
@@ -91,6 +121,9 @@ pub struct MessageService {
     messages: Arc<dyn MessageRepository + Send + Sync>,
     outbox: Arc<dyn OutboxRepository + Send + Sync>,
     blobs: Arc<dyn BlobRepository + Send + Sync>,
+    /// Preferred way to pull attachments, if the host wired one (see
+    /// [`Self::with_attachment_fetcher`]).
+    attachment_fetcher: Option<Arc<dyn AttachmentFetcher>>,
     /// `04-offline-event-log-architecture.md` §33's own real call
     /// sites — see [`Self::with_event_log`]'s own doc comment for why
     /// this is optional rather than a required constructor argument.
@@ -159,11 +192,22 @@ impl MessageService {
             messages,
             outbox,
             blobs,
+            attachment_fetcher: None,
             event_log: None,
             conversation_summary: None,
             summary_checkpoints: None,
             correlations: None,
         }
+    }
+
+    /// Makes [`Self::fetch_attachment`] try `fetcher` (normally the
+    /// `files/1` chunked pull) before the legacy whole-blob request. A
+    /// peer that answers "unavailable" ends the attempt; one that cannot
+    /// speak the protocol, or a transfer that does not finish, falls back
+    /// to the legacy path, so nothing that worked before stops working.
+    pub fn with_attachment_fetcher(mut self, fetcher: Arc<dyn AttachmentFetcher>) -> Self {
+        self.attachment_fetcher = Some(fetcher);
+        self
     }
 
     /// Opt-in wiring for `siar-event-log`'s per-conversation messaging
@@ -659,6 +703,37 @@ impl MessageService {
             thumbnail: None, // plan.md §25 — thumbnail generation is a later refinement
         };
 
+        self.send_attachment_reference(conversation, peer, reference)
+            .await
+    }
+
+    /// spec 05 §204: send an attachment that already lives in the file
+    /// subsystem's blob store (`siar_files::FilesService::import_attachment`).
+    /// No bytes are copied into this service's own `BlobRepository`:
+    /// serve the store to peers with `FilesBlobStore` (see `blob_bridge`)
+    /// when binding the endpoint. Binding the blob to the returned
+    /// message id (`FilesService::bind_to_object`) is the caller's next
+    /// step, so the blob outlives its temporary import owner.
+    pub async fn send_imported_attachment(
+        &self,
+        conversation: ConversationId,
+        peer: &PeerTicket,
+        imported: &siar_files::ImportedAttachment,
+    ) -> Result<MessageId, MessageServiceError> {
+        let reference = imported.reference()?;
+        self.send_attachment_reference(conversation, peer, reference)
+            .await
+    }
+
+    /// The part of an attachment send that does not care where the blob
+    /// is stored: wrap the reference, encrypt it for the session, record
+    /// it in the outbox, and try the wire once.
+    async fn send_attachment_reference(
+        &self,
+        conversation: ConversationId,
+        peer: &PeerTicket,
+        reference: AttachmentReference,
+    ) -> Result<MessageId, MessageServiceError> {
         let message_id = MessageId::new();
         let now = now_millis();
         let content = MessageContent::Attachment(reference);
@@ -904,6 +979,18 @@ impl MessageService {
             let key = siar_crypto::AttachmentKey::from_bytes(reference.attachment_key);
             let hash = siar_crypto::BlobHash::from_bytes(reference.blob_hash);
             return Ok(siar_crypto::decrypt_attachment(&cached, hash, &key)?);
+        }
+
+        if let Some(fetcher) = &self.attachment_fetcher {
+            match fetcher.fetch(peer, reference).await {
+                Ok(plaintext) => return Ok(plaintext),
+                Err(AttachmentFetchError::Unavailable) => {
+                    return Err(MessageServiceError::BlobNotFound)
+                }
+                Err(e) => {
+                    tracing::debug!(?e, "files/1 fetch did not succeed; using the legacy path")
+                }
+            }
         }
 
         let ciphertext = self

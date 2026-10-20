@@ -337,7 +337,43 @@ pub struct StoolapReferenceStore {
     lock: Arc<Mutex<()>>,
 }
 
+/// Rows per stoolap query; larger requests are paged (see
+/// `referenced_blob_ids`) or capped (`references_for`).
+const MAX_QUERY_ROWS: usize = 1 << 14;
+
 impl StoolapReferenceStore {
+    fn referenced_blob_ids_page(
+        &self,
+        after: Option<BlobId>,
+        n: usize,
+    ) -> Result<Vec<BlobId>, BlobError> {
+        let _g = self.lock.lock().expect("reference store poisoned");
+        let lim = n.min(MAX_QUERY_ROWS) as i64;
+        let rows = match after {
+            Some(a) => self
+                .db
+                .query(
+                    "SELECT blob_id FROM blob_refs WHERE blob_id > $1
+                     GROUP BY blob_id ORDER BY blob_id ASC LIMIT $2",
+                    (hex(a.as_bytes()), lim),
+                )
+                .map_err(me)?,
+            None => self
+                .db
+                .query(
+                    "SELECT blob_id FROM blob_refs GROUP BY blob_id ORDER BY blob_id ASC LIMIT $1",
+                    (lim,),
+                )
+                .map_err(me)?,
+        };
+        let mut out = Vec::new();
+        for r in rows {
+            let s: String = r.map_err(me)?.get(0).map_err(me)?;
+            out.push(BlobId::from_raw_digest(parse_hex32(&s)?));
+        }
+        Ok(out)
+    }
+
     pub fn open(path: &str) -> Result<Self, BlobError> {
         Self::from_database(Database::open(&format!("file://{path}")).map_err(me)?)
     }
@@ -505,7 +541,7 @@ impl ReferenceStore for StoolapReferenceStore {
             .query(
                 "SELECT namespace, object_id, blob_id, role FROM blob_refs
                  WHERE blob_id = $1 ORDER BY namespace ASC, object_id ASC, role ASC LIMIT $2",
-                (hex(blob.as_bytes()), limit.min(i64::MAX as usize) as i64),
+                (hex(blob.as_bytes()), limit.min(MAX_QUERY_ROWS) as i64),
             )
             .map_err(me)?;
         Self::rows_to_refs(rows)
@@ -533,29 +569,21 @@ impl ReferenceStore for StoolapReferenceStore {
         after: Option<BlobId>,
         limit: usize,
     ) -> Result<Vec<BlobId>, BlobError> {
-        let _g = self.lock.lock().expect("reference store poisoned");
-        let lim = limit.min(i64::MAX as usize) as i64;
-        let rows = match after {
-            Some(a) => self
-                .db
-                .query(
-                    "SELECT blob_id FROM blob_refs WHERE blob_id > $1
-                     GROUP BY blob_id ORDER BY blob_id ASC LIMIT $2",
-                    (hex(a.as_bytes()), lim),
-                )
-                .map_err(me)?,
-            None => self
-                .db
-                .query(
-                    "SELECT blob_id FROM blob_refs GROUP BY blob_id ORDER BY blob_id ASC LIMIT $1",
-                    (lim,),
-                )
-                .map_err(me)?,
-        };
-        let mut out = Vec::new();
-        for r in rows {
-            let s: String = r.map_err(me)?.get(0).map_err(me)?;
-            out.push(BlobId::from_raw_digest(parse_hex32(&s)?));
+        // Page internally: a single huge LIMIT makes stoolap's top-N
+        // operator reserve that many rows (capacity-overflow panic).
+        let mut out: Vec<BlobId> = Vec::new();
+        let mut cursor = after;
+        while out.len() < limit {
+            let want = (limit - out.len()).min(MAX_QUERY_ROWS);
+            let page = self.referenced_blob_ids_page(cursor, want)?;
+            let short = page.len() < want;
+            if let Some(last) = page.last() {
+                cursor = Some(*last);
+            }
+            out.extend(page);
+            if short {
+                break;
+            }
         }
         Ok(out)
     }

@@ -45,6 +45,9 @@ impl TimelineState {
     /// page means we've hit the start of the conversation).
     pub fn prepend_page(&mut self, mut older_page: Vec<TimelineWindow>) {
         self.has_more_history = older_page.len() == PAGE_SIZE;
+        // Idempotent: a message that arrived live and is also in the page
+        // loaded from storage must appear once, not twice.
+        older_page.retain(|e| !self.entries.iter().any(|x| x.message_id == e.message_id));
         older_page.extend(std::mem::take(&mut self.entries));
         self.entries = older_page;
     }
@@ -101,6 +104,17 @@ mod tests {
         t.prepend_page(vec![entry(8), entry(9)]);
         let seqs: Vec<u64> = t.visible().map(|e| e.sequence).collect();
         assert_eq!(seqs, vec![8, 9, 10]);
+    }
+
+    #[test]
+    fn prepending_a_page_never_duplicates_a_message_already_shown() {
+        let mut t = TimelineState::new();
+        let live = entry(10);
+        t.push_latest(live.clone());
+        // storage returns the same message again plus an older one
+        t.prepend_page(vec![entry(9), live]);
+        let seqs: Vec<u64> = t.visible().map(|e| e.sequence).collect();
+        assert_eq!(seqs, vec![9, 10]);
     }
 
     #[test]

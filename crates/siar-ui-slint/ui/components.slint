@@ -279,6 +279,8 @@ export component CopyField inherits Rectangle {
     in property <string> label;
     in property <string> value;
     in property <string> empty-text: "Not available yet";
+    // Prose values (not ids/keys) read better in the proportional font.
+    in property <bool> mono-off: false;
     callback copied();
 
     private property <bool> has-value: value != "";
@@ -301,7 +303,7 @@ export component CopyField inherits Rectangle {
             spacing: Theme.sp-sm;
             Rectangle {
                 horizontal-stretch: 1;
-                preferred-height: max(input.preferred-height, Theme.min-target - Theme.sp-sm);
+                min-height: max(input.preferred-height, Theme.min-target - Theme.sp-sm);
                 input := TextInput {
                     width: parent.width;
                     y: (parent.height - self.height) / 2;
@@ -309,7 +311,7 @@ export component CopyField inherits Rectangle {
                     wrap: word-wrap;
                     text: root.has-value ? root.value : root.empty-text;
                     font-size: Theme.ty-body-sm;
-                    font-family: root.has-value ? Theme.mono-family : "";
+                    font-family: root.has-value && !root.mono-off ? Theme.mono-family : "";
                     color: root.has-value ? Theme.text-primary : Theme.text-muted;
                     selection-background-color: Theme.action-primary;
                     selection-foreground-color: Theme.action-primary-text;

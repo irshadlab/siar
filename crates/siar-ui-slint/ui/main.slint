@@ -1,0 +1,304 @@
+// Desktop shell (ui-ux-02): navigation rail · secondary sidebar · main
+// workspace · status bar. Native window decorations (§79 — "native where
+// practical"), so drag, resize, snapping and the window controls behave
+// exactly as the OS defines them.
+
+import { Theme, WindowClass, ThemeMode, Density } from "theme.slint";
+import { AppState, Page, SecurityTab, NoticeKind } from "app_state.slint";
+import { Icon, IconButton, Button, Badge, EmptyState, StatusChip } from "components.slint";
+import { ConversationSidebar, ChatView } from "chat.slint";
+import {
+    ContactSidebar, ContactsPage, GroupSidebar, GroupsPage,
+    SecuritySidebar, SecurityPage, ConnectPage, SettingsPage
+} from "pages.slint";
+
+// Re-exported so Rust can name them through the generated module.
+export {
+    Theme, ThemeMode, Density, WindowClass, AppState, Page, SecurityTab, NoticeKind
+}
+export { ConversationRow, MessageRow, ContactRow, GroupRow, InviteRow, EventRow, DeviceRow } from "app_state.slint";
+
+component RailButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> selected;
+    in property <int> badge: 0;
+    in property <bool> alert: false;     // critical state shown beyond colour: badge + label
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: label + (badge > 0 ? ", " + badge + " need attention" : "");
+    accessible-action-default => { root.clicked(); }
+
+    height: 56px * Theme.ui-scale;
+    border-radius: Theme.radius-md;
+    background: selected ? Theme.surface-selected
+        : ta.pressed ? Theme.surface-pressed
+        : ta.has-hover ? Theme.surface-hover : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { fs.focus(); root.clicked(); }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        Icon {
+            source: root.icon;
+            tint: root.selected ? Theme.action-primary : Theme.text-secondary;
+            x: (parent.width - self.width) / 2;
+        }
+        Text {
+            text: root.label;
+            color: root.selected ? Theme.action-primary : Theme.text-secondary;
+            font-size: Theme.ty-label-sm;
+            font-weight: root.selected ? 700 : 500;
+            horizontal-alignment: center;
+        }
+    }
+    Badge {
+        x: parent.width - self.width - 6px * Theme.ui-scale;
+        y: 4px * Theme.ui-scale;
+        count: root.badge;
+    }
+    Rectangle {
+        x: -2px; y: -2px;
+        width: parent.width + 4px; height: parent.height + 4px;
+        border-radius: Theme.radius-md + 2px;
+        border-width: fs.has-focus ? 2px : 0px;
+        border-color: Theme.focus-ring;
+        background: transparent;
+    }
+}
+
+component Rail inherits Rectangle {
+    width: Theme.rail-width;
+    background: Theme.surface-rail;
+    VerticalLayout {
+        padding: Theme.sp-sm;
+        spacing: Theme.sp-xs;
+        RailButton {
+            icon: @image-url("icons/chat.svg");
+            label: "Chats";
+            selected: AppState.page == Page.chats;
+            badge: AppState.total-unread;
+            clicked => { AppState.page = Page.chats; AppState.content-open = AppState.selected-id != ""; }
+        }
+        RailButton {
+            icon: @image-url("icons/users.svg");
+            label: "Contacts";
+            selected: AppState.page == Page.contacts;
+            clicked => { AppState.page = Page.contacts; AppState.content-open = false; }
+        }
+        RailButton {
+            icon: @image-url("icons/group.svg");
+            label: "Groups";
+            selected: AppState.page == Page.groups;
+            badge: AppState.invites.length;
+            clicked => { AppState.page = Page.groups; AppState.content-open = false; }
+        }
+        RailButton {
+            icon: @image-url("icons/link.svg");
+            label: "Connect";
+            selected: AppState.page == Page.connect;
+            clicked => { AppState.page = Page.connect; }
+        }
+        Rectangle { vertical-stretch: 1; }
+        RailButton {
+            icon: @image-url("icons/shield.svg");
+            label: "Security";
+            selected: AppState.page == Page.security;
+            badge: AppState.unresolved-events;
+            clicked => { AppState.page = Page.security; AppState.content-open = false; }
+        }
+        RailButton {
+            icon: @image-url("icons/settings.svg");
+            label: "Settings";
+            selected: AppState.page == Page.settings;
+            clicked => { AppState.page = Page.settings; }
+        }
+    }
+}
+
+// ui-ux-15 §47: an unresolved critical security event interrupts.
+component CriticalBanner inherits Rectangle {
+    visible: AppState.critical-count > 0;
+    height: AppState.critical-count > 0 ? banner-row.preferred-height : 0px;
+    background: Theme.status-error;
+    accessible-role: none;
+    banner-row := HorizontalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-md;
+        Icon {
+            source: @image-url("icons/alert.svg");
+            tint: Theme.text-inverse;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: AppState.critical-title
+                + (AppState.critical-count > 1 ? "  (+" + (AppState.critical-count - 1) + " more)" : "");
+            color: Theme.text-inverse;
+            font-size: Theme.ty-body-md;
+            font-weight: 700;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+        Button {
+            text: "I understand";
+            kind: "inverse";
+            clicked => { AppState.resolve-event(AppState.critical-id); }
+        }
+    }
+}
+
+component StatusBar inherits Rectangle {
+    height: 26px * Theme.ui-scale;
+    background: Theme.surface-rail;
+    private property <color> tone: AppState.network-kind == 1 ? Theme.status-success
+        : AppState.network-kind == 2 ? Theme.status-warning : Theme.text-muted;
+    HorizontalLayout {
+        padding-left: Theme.sp-md;
+        padding-right: Theme.sp-md;
+        spacing: Theme.sp-sm;
+        Icon {
+            source: AppState.network-kind == 2 ? @image-url("icons/wifi-off.svg") : @image-url("icons/globe.svg");
+            tint: root.tone;
+            size: 14px * Theme.ui-scale;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: AppState.network-label;
+            color: root.tone;
+            font-size: Theme.ty-label-md;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: "End-to-end encrypted";
+            color: Theme.text-muted;
+            font-size: Theme.ty-label-md;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component Toast inherits Rectangle {
+    private property <string> text: AppState.notice-text;
+    changed text => { dismiss.running = false; dismiss.running = root.text != ""; }
+    dismiss := Timer {
+        interval: 4500ms;
+        running: false;
+        triggered => { self.running = false; AppState.notice-text = ""; }
+    }
+
+    visible: AppState.notice-text != "";
+    height: row.preferred-height;
+    width: min(row.preferred-width, Theme.window-width - 2 * Theme.sp-lg);
+    border-radius: Theme.radius-md;
+    background: Theme.surface-overlay;
+    border-width: 2px;
+    border-color: AppState.notice-kind == NoticeKind.error ? Theme.status-error
+        : AppState.notice-kind == NoticeKind.warning ? Theme.status-warning
+        : AppState.notice-kind == NoticeKind.success ? Theme.status-success
+        : Theme.border-strong;
+    accessible-role: none;
+    row := HorizontalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-md;
+        Icon {
+            source: AppState.notice-kind == NoticeKind.error || AppState.notice-kind == NoticeKind.warning
+                ? @image-url("icons/alert.svg") : @image-url("icons/check.svg");
+            tint: AppState.notice-kind == NoticeKind.error ? Theme.status-error
+                : AppState.notice-kind == NoticeKind.warning ? Theme.status-warning
+                : AppState.notice-kind == NoticeKind.success ? Theme.status-success
+                : Theme.text-secondary;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: AppState.notice-text;
+            color: Theme.text-primary;
+            font-size: Theme.ty-body-md;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+        IconButton {
+            icon: @image-url("icons/x.svg");
+            label: "Dismiss";
+            clicked => { AppState.notice-text = ""; }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Siar";
+    icon: @image-url("icons/app-icon.png");
+    min-width: 520px;
+    min-height: 460px;
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    background: Theme.surface-base;
+
+    changed width => { Theme.window-width = self.width; }
+    init => { Theme.window-width = self.width; }
+
+    // Which pages own a secondary sidebar (ui-ux-02 §7-8).
+    private property <bool> has-sidebar:
+        AppState.page == Page.chats || AppState.page == Page.contacts
+        || AppState.page == Page.groups || AppState.page == Page.security;
+    private property <bool> compact: Theme.window-class == WindowClass.compact;
+    // Compact: show the list or the content, never overlapping panes (§17).
+    private property <bool> show-sidebar: has-sidebar && (!compact || !AppState.content-open);
+    private property <bool> show-content: !has-sidebar || !compact || AppState.content-open;
+
+    if AppState.startup-error != "": EmptyState {
+        icon: @image-url("icons/alert.svg");
+        tone: Theme.status-error;
+        title: "Siar couldn’t start";
+        body: AppState.startup-error;
+    }
+
+    if AppState.startup-error == "": VerticalLayout {
+        CriticalBanner { }
+        HorizontalLayout {
+            Rail { }
+            if root.show-sidebar: Rectangle {
+                width: root.compact ? parent.width - Theme.rail-width : Theme.sidebar-width;
+                background: Theme.surface-sidebar;
+                if AppState.page == Page.chats: ConversationSidebar { }
+                if AppState.page == Page.contacts: ContactSidebar { }
+                if AppState.page == Page.groups: GroupSidebar { }
+                if AppState.page == Page.security: SecuritySidebar { }
+            }
+            if root.show-sidebar && !root.compact: Rectangle {
+                width: 1px;
+                background: Theme.border-subtle;
+            }
+            if root.show-content: Rectangle {
+                horizontal-stretch: 1;
+                if AppState.page == Page.chats: ChatView { }
+                if AppState.page == Page.contacts: ContactsPage { }
+                if AppState.page == Page.groups: GroupsPage { }
+                if AppState.page == Page.security: SecurityPage { }
+                if AppState.page == Page.connect: ConnectPage { }
+                if AppState.page == Page.settings: SettingsPage { }
+            }
+        }
+        StatusBar { }
+    }
+
+    Toast {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - 44px * Theme.ui-scale;
+    }
+}

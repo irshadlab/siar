@@ -28,5 +28,5 @@ base64.workspace = true
 postcard.workspace = true
 directories.workspace = true
 uuid.workspace = true
-dioxus = { version = "0.7", features = ["desktop"] }
+siar-ui-slint.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

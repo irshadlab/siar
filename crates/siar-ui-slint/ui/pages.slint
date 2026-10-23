@@ -137,7 +137,23 @@ component ContactItem inherits RowSurface {
         Avatar { initial: root.item.initial; hue: root.item.hue; y: (parent.height - self.height) / 2; }
         VerticalLayout {
             alignment: center;
-            Text { text: root.item.name; color: Theme.text-primary; font-size: Theme.ty-title-sm; font-weight: 600; overflow: elide; }
+            HorizontalLayout {
+                spacing: Theme.sp-xs;
+                Text { text: root.item.name; color: Theme.text-primary; font-size: Theme.ty-title-sm; font-weight: 600; overflow: elide; }
+                // Icon + colour (never colour alone): verified / key changed.
+                if root.item.verification == 1: Icon {
+                    source: @image-url("icons/shield.svg");
+                    tint: Theme.status-success;
+                    size: 14px * Theme.ui-scale;
+                    y: (parent.height - self.height) / 2;
+                }
+                if root.item.verification == 2: Icon {
+                    source: @image-url("icons/alert.svg");
+                    tint: Theme.status-error;
+                    size: 14px * Theme.ui-scale;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
             Text { text: root.item.short-id; color: Theme.text-muted; font-size: Theme.ty-body-sm; font-family: Theme.mono-family; overflow: elide; }
         }
     }
@@ -192,6 +208,61 @@ export component ContactsPage inherits PageBody {
                     text: "Add another";
                     kind: "ghost";
                     clicked => { AppState.select-contact(""); }
+                }
+            }
+        }
+        if AppState.selected-contact-id != "": Card {
+            heading: "Verify identity";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                HorizontalLayout {
+                    alignment: start;
+                    StatusChip {
+                        text: AppState.selected-contact-verification == 1 ? "Verified"
+                            : AppState.selected-contact-verification == 2 ? "Key changed — not verified"
+                            : "Not verified";
+                        icon: AppState.selected-contact-verification == 1 ? @image-url("icons/shield.svg")
+                            : AppState.selected-contact-verification == 2 ? @image-url("icons/alert.svg")
+                            : @image-url("icons/clock.svg");
+                        tone: AppState.selected-contact-verification == 1 ? Theme.status-success
+                            : AppState.selected-contact-verification == 2 ? Theme.status-error
+                            : Theme.text-secondary;
+                    }
+                }
+                if AppState.selected-contact-verification == 2: Text {
+                    text: "This contact’s security key is different from the one you verified. Compare the safety number again in person or over a call you trust before continuing.";
+                    color: Theme.status-error;
+                    font-size: Theme.ty-body-md;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Compare this number with the one on their screen — out loud or in person. If it matches, nobody is in the middle of your chat.";
+                    color: Theme.text-secondary;
+                    font-size: Theme.ty-body-md;
+                    wrap: word-wrap;
+                }
+                CopyField {
+                    label: "Safety number";
+                    value: AppState.selected-contact-safety;
+                    empty-text: "Not available";
+                    copied => {
+                        AppState.notice-kind = NoticeKind.success;
+                        AppState.notice-text = "Safety number copied";
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.sp-sm;
+                    alignment: start;
+                    if AppState.selected-contact-verification != 1: Button {
+                        text: "They match — mark as verified";
+                        kind: "primary";
+                        enabled: AppState.selected-contact-safety != "";
+                        clicked => { AppState.set-contact-verified(AppState.selected-contact-id, true); }
+                    }
+                    if AppState.selected-contact-verification != 0: Button {
+                        text: "Remove verification";
+                        clicked => { AppState.set-contact-verified(AppState.selected-contact-id, false); }
+                    }
                 }
             }
         }
@@ -563,6 +634,8 @@ export component SecurityPage inherits PageBody {
 // ----------------------------------------------------------------- settings
 
 export component SettingsPage inherits PageBody {
+    in-out property <bool> show-full-fingerprint: false;
+    in-out property <bool> show-diagnostics: false;
     title: "Settings";
     subtitle: "Appearance applies instantly and is remembered on this device.";
     VerticalLayout {
@@ -601,6 +674,63 @@ export component SettingsPage inherits PageBody {
                         Theme.ui-scale = i == 0 ? 0.9 : i == 1 ? 1.0 : i == 2 ? 1.15 : 1.3;
                         AppState.settings-changed();
                     }
+                }
+            }
+        }
+        Card {
+            heading: "Your identity";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                Text {
+                    text: AppState.own-key-health == "" ? "Starting up…" : AppState.own-key-health;
+                    color: Theme.text-secondary;
+                    font-size: Theme.ty-body-md;
+                    wrap: word-wrap;
+                }
+                CopyField {
+                    label: "Your fingerprint (short)";
+                    value: AppState.own-fingerprint-short;
+                    copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Fingerprint copied"; }
+                }
+                if show-full-fingerprint: CopyField {
+                    label: "Your fingerprint (full)";
+                    value: AppState.own-fingerprint-full;
+                    copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Full fingerprint copied"; }
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: show-full-fingerprint ? "Hide full fingerprint" : "Show full fingerprint";
+                        kind: "ghost";
+                        clicked => { root.show-full-fingerprint = !root.show-full-fingerprint; }
+                    }
+                }
+            }
+        }
+        Card {
+            heading: "Diagnostics";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                Text {
+                    text: "For support and advanced checks. Private keys are never shown here.";
+                    color: Theme.text-secondary;
+                    font-size: Theme.ty-body-sm;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: show-diagnostics ? "Hide diagnostics" : "Show diagnostics";
+                        kind: "ghost";
+                        clicked => { root.show-diagnostics = !root.show-diagnostics; }
+                    }
+                }
+                if show-diagnostics: VerticalLayout {
+                    spacing: Theme.sp-sm;
+                    CopyField { label: "Device key id"; value: AppState.diag-key-id; }
+                    CopyField { label: "Group key epochs"; value: AppState.diag-epochs; mono-off: true; }
+                    CopyField { label: "Signatures"; value: AppState.diag-signature; mono-off: true; }
+                    CopyField { label: "Transport security"; value: AppState.diag-transport; mono-off: true; }
                 }
             }
         }

@@ -1,0 +1,36 @@
+[package]
+name = "siar-ui-slint"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"
+description = "Siar desktop UI: Slint views + the siar-ui-state bridge. Depends on no networking or storage crate by design."
+build = "build.rs"
+
+[dependencies]
+siar-domain.workspace = true
+siar-ui-state.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+# GPU renderer (femtovg/OpenGL) with a software fallback for machines
+# without a usable GL stack; winit backend covers X11 + Wayland + Windows.
+slint = { workspace = true, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-femtovg",
+    "renderer-software",
+    "software-renderer-systemfonts",
+    "accessibility",
+] }
+# Previews arrive as JPEG bytes (siar-media-image output); decoding them
+# for display is a display concern, so it lives here, not in ui-state.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+base64.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[build-dependencies]
+slint-build.workspace = true
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

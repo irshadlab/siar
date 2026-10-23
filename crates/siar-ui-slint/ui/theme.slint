@@ -1,0 +1,138 @@
+// Design system tokens — ui-ux-22.
+//
+// Hard rule (§10): components consume SEMANTIC tokens only. The raw
+// palette literals below exist only inside this file, in the theme
+// implementation. A component that wants "red" asks for
+// `Theme.status-error`, never for a hex value.
+
+import { Palette } from "std-widgets.slint";
+
+export enum ThemeMode { system, light, dark, high-contrast }
+export enum Density { comfortable, compact }
+export enum WindowClass { compact, medium, wide, ultra-wide }
+
+export global Theme {
+    // ---- inputs, set from Rust (persisted user settings) -------------
+    in-out property <ThemeMode> mode: ThemeMode.system;       // §17
+    in-out property <Density> density: Density.comfortable;   // §49
+    in-out property <float> ui-scale: 1.0;                    // §37
+    // Window width in logical px, fed by the shell, so every component
+    // can ask the same question (§53).
+    in-out property <length> window-width: 1100px;
+
+    // ---- derived scheme ----------------------------------------------
+    out property <bool> high-contrast: mode == ThemeMode.high-contrast;
+    out property <bool> dark: mode == ThemeMode.dark || mode == ThemeMode.high-contrast
+        || (mode == ThemeMode.system && Palette.color-scheme == ColorScheme.dark);
+
+    out property <WindowClass> window-class:
+        window-width < 720px ? WindowClass.compact
+        : window-width < 1100px ? WindowClass.medium
+        : window-width < 1700px ? WindowClass.wide
+        : WindowClass.ultra-wide;
+
+    // ---- surfaces (§9, §11) ------------------------------------------
+    out property <color> surface-base:
+        high-contrast ? #000000 : dark ? #101216 : #f5f6f8;
+    out property <color> surface-sidebar:
+        high-contrast ? #000000 : dark ? #14171c : #eceef2;
+    out property <color> surface-rail:
+        high-contrast ? #000000 : dark ? #0b0d10 : #e2e5ea;
+    out property <color> surface-raised:
+        high-contrast ? #000000 : dark ? #181b21 : #ffffff;
+    out property <color> surface-overlay:
+        high-contrast ? #000000 : dark ? #1f232b : #ffffff;
+    out property <color> surface-selected:
+        high-contrast ? #1a1a00 : dark ? #22305a : #dfe8fb;
+    out property <color> surface-hover:
+        high-contrast ? #1f1f1f : dark ? #1d2129 : #e6e9ee;
+    out property <color> surface-pressed:
+        high-contrast ? #333333 : dark ? #262b35 : #d9dde5;
+    out property <color> surface-input:
+        high-contrast ? #000000 : dark ? #0d0f13 : #ffffff;
+
+    // ---- text ----------------------------------------------------------
+    out property <color> text-primary:
+        high-contrast ? #ffffff : dark ? #e8eaee : #15181e;
+    out property <color> text-secondary:
+        high-contrast ? #ffffff : dark ? #aab1bf : #4a5160;
+    out property <color> text-muted:
+        high-contrast ? #e6e6e6 : dark ? #8a92a3 : #656d7e;
+    out property <color> text-inverse:
+        high-contrast ? #000000 : dark ? #0b1020 : #ffffff;
+
+    // ---- borders / focus -------------------------------------------------
+    out property <color> border-subtle:
+        high-contrast ? #ffffff : dark ? #262b34 : #dde0e7;
+    out property <color> border-strong:
+        high-contrast ? #ffffff : dark ? #3b4250 : #b4bbc8;
+    out property <color> focus-ring:
+        high-contrast ? #ffe14d : dark ? #8fb0ff : #2b59d9;
+
+    // ---- actions ----------------------------------------------------------
+    out property <color> action-primary:
+        high-contrast ? #ffe14d : dark ? #6d93ff : #2b59d9;
+    out property <color> action-primary-hover:
+        high-contrast ? #fff09a : dark ? #86a6ff : #2349b3;
+    out property <color> action-primary-text: text-inverse;
+    out property <color> action-destructive:
+        high-contrast ? #ff8a80 : dark ? #ff6b5e : #c0392b;
+
+    // ---- status roles (§12): five distinct roles, not "everything red" ---
+    out property <color> status-success:
+        high-contrast ? #7dff9e : dark ? #4cc27f : #1c7d45;
+    out property <color> status-warning:
+        high-contrast ? #ffd24d : dark ? #e0a030 : #8f5500;
+    out property <color> status-error:
+        high-contrast ? #ff8a80 : dark ? #ff6b5e : #b3261e;
+    out property <color> status-security:
+        high-contrast ? #d9c4ff : dark ? #a98bff : #6236b8;
+    out property <color> status-emergency:
+        high-contrast ? #ff9a66 : dark ? #ff7a45 : #c2410c;
+
+    // ---- message bubbles (§59: grouping + sender distinction) ------------
+    out property <color> bubble-mine:
+        high-contrast ? #ffe14d : dark ? #2a4bb0 : #2b59d9;
+    out property <color> bubble-mine-text:
+        high-contrast ? #000000 : #ffffff;
+    out property <color> bubble-theirs:
+        high-contrast ? #000000 : dark ? #1f232b : #ffffff;
+
+    // ---- density & scale (§45-49): semantic space tokens ------------------
+    out property <float> density-factor: density == Density.compact ? 0.78 : 1.0;
+    out property <length> sp-xs: 4px * ui-scale;
+    out property <length> sp-sm: 8px * ui-scale * density-factor;
+    out property <length> sp-md: 12px * ui-scale * density-factor;
+    out property <length> sp-lg: 16px * ui-scale * density-factor;
+    out property <length> sp-xl: 24px * ui-scale * density-factor;
+    out property <length> sp-xxl: 32px * ui-scale;
+
+    // ---- shape (§56-58): small controls / medium cards / large sheets ----
+    out property <length> radius-sm: 6px * ui-scale;
+    out property <length> radius-md: 10px * ui-scale;
+    out property <length> radius-lg: 16px * ui-scale;
+    out property <length> radius-pill: 999px;
+
+    // ---- typography roles (§26, §34) ---------------------------------------
+    out property <length> ty-display: 28px * ui-scale;
+    out property <length> ty-title-lg: 22px * ui-scale;
+    out property <length> ty-title-md: 17px * ui-scale;
+    out property <length> ty-title-sm: 14px * ui-scale;
+    out property <length> ty-body-lg: 15px * ui-scale;
+    out property <length> ty-body-md: 13px * ui-scale;
+    out property <length> ty-body-sm: 12px * ui-scale;
+    out property <length> ty-label-lg: 14px * ui-scale;
+    out property <length> ty-label-md: 12px * ui-scale;
+    out property <length> ty-label-sm: 11px * ui-scale;
+    // Technical text (tickets, ids) — the only place monospace is used (§33, §41).
+    out property <string> mono-family: "monospace";
+
+    // ---- shell widths (§54): semantic, not hardcoded per screen -----------
+    out property <length> rail-width: 72px * ui-scale;
+    out property <length> sidebar-width:
+        window-class == WindowClass.wide ? 320px * ui-scale
+        : window-class == WindowClass.ultra-wide ? 360px * ui-scale
+        : 280px * ui-scale;
+    // Minimum target (§51): 36px comfortable-desktop, never below 28px.
+    out property <length> min-target: (density == Density.compact ? 30px : 36px) * ui-scale;
+}

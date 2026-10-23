@@ -1,0 +1,616 @@
+// Secondary sidebars and content pages: contacts (ui-ux-08), groups
+// (ui-ux-09), security (ui-ux-15), connect/pairing (ui-ux-12), settings
+// (ui-ux-18).
+
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme, ThemeMode, Density, WindowClass } from "theme.slint";
+import {
+    AppState, Page, SecurityTab, NoticeKind, ContactRow, GroupRow, InviteRow,
+    EventRow, DeviceRow
+} from "app_state.slint";
+import {
+    Icon, IconButton, Button, TextField, TextArea, CopyField, Avatar, Badge,
+    StatusChip, RowSurface, SectionTitle, PageTitle, Divider, EmptyState, Segmented
+} from "components.slint";
+
+// A scrolling page body with consistent padding and a readable max width.
+component PageBody inherits Rectangle {
+    background: Theme.surface-base;
+    in property <string> title;
+    in property <string> subtitle;
+    callback back();
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.sp-xl;
+            spacing: Theme.sp-lg;
+            alignment: start;
+            HorizontalLayout {
+                spacing: Theme.sp-md;
+                if Theme.window-class == WindowClass.compact: IconButton {
+                    icon: @image-url("icons/chevron-left.svg");
+                    label: "Back";
+                    clicked => { AppState.content-open = false; root.back(); }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    PageTitle { text: root.title; }
+                    if root.subtitle != "": Text {
+                        text: root.subtitle;
+                        color: Theme.text-secondary;
+                        font-size: Theme.ty-body-md;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            // Readable measure (§53): content never stretches past ~720px.
+            Rectangle {
+                width: min(root.width - 2 * Theme.sp-xl, 720px * Theme.ui-scale);
+                height: body-content.preferred-height;
+                body-content := VerticalLayout {
+                    spacing: Theme.sp-lg;
+                    @children
+                }
+            }
+        }
+    }
+}
+
+component Card inherits Rectangle {
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+    in property <string> heading;
+    VerticalLayout {
+        padding: Theme.sp-lg;
+        spacing: Theme.sp-md;
+        if root.heading != "": Text {
+            text: root.heading;
+            color: Theme.text-primary;
+            font-size: Theme.ty-title-sm;
+            font-weight: 700;
+        }
+        @children
+    }
+}
+
+// ------------------------------------------------------------------ connect
+
+export component ConnectPage inherits PageBody {
+    title: "Connect";
+    subtitle: "Share your ticket with someone, or paste theirs, to start an end-to-end encrypted chat. Tickets travel out of band — over QR, a message, or in person.";
+    VerticalLayout {
+        spacing: Theme.sp-lg;
+        CopyField {
+            label: "Your ticket";
+            value: AppState.my-ticket;
+            empty-text: AppState.ready ? "Unavailable" : "Starting up…";
+            copied => {
+                AppState.notice-kind = NoticeKind.success;
+                AppState.notice-text = "Ticket copied";
+            }
+        }
+        Card {
+            heading: "Pair with someone";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                peer-ticket := TextField {
+                    label: "Their ticket";
+                    placeholder: "Paste their ticket";
+                    mono: true;
+                    accepted(text) => {
+                        if (AppState.pair-with-ticket(text)) { peer-ticket.clear-text(); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.sp-sm;
+                    alignment: start;
+                    Button {
+                        text: "Paste";
+                        clicked => { peer-ticket.paste-over(); }
+                    }
+                    Button {
+                        text: "Pair";
+                        kind: "primary";
+                        enabled: AppState.ready;
+                        clicked => {
+                            if (AppState.pair-with-ticket(peer-ticket.text)) { peer-ticket.clear-text(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------- contacts
+
+component ContactItem inherits RowSurface {
+    in property <ContactRow> item;
+    selected: item.selected;
+    label: item.name;
+    height: 60px * Theme.ui-scale * (Theme.density-factor > 0.9 ? 1.0 : 0.9);
+    HorizontalLayout {
+        padding-left: Theme.sp-md;
+        padding-right: Theme.sp-md;
+        spacing: Theme.sp-md;
+        Avatar { initial: root.item.initial; hue: root.item.hue; y: (parent.height - self.height) / 2; }
+        VerticalLayout {
+            alignment: center;
+            Text { text: root.item.name; color: Theme.text-primary; font-size: Theme.ty-title-sm; font-weight: 600; overflow: elide; }
+            Text { text: root.item.short-id; color: Theme.text-muted; font-size: Theme.ty-body-sm; font-family: Theme.mono-family; overflow: elide; }
+        }
+    }
+}
+
+export component ContactSidebar inherits Rectangle {
+    background: Theme.surface-sidebar;
+    VerticalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-md;
+        PageTitle { text: "Contacts"; }
+        if AppState.contacts.length == 0: EmptyState {
+            vertical-stretch: 1;
+            icon: @image-url("icons/users.svg");
+            title: "No saved contacts";
+            body: "Save someone from the form on the right so you can reach them again after a restart.";
+        }
+        if AppState.contacts.length > 0: ListView {
+            vertical-stretch: 1;
+            for row in AppState.contacts: ContactItem {
+                item: row;
+                clicked => { AppState.select-contact(row.id); }
+            }
+        }
+    }
+}
+
+export component ContactsPage inherits PageBody {
+    title: AppState.selected-contact-id == "" ? "Add a contact" : AppState.selected-contact-name;
+    subtitle: AppState.selected-contact-id == "" ? "Save a contact to keep their ticket across restarts." : AppState.selected-contact-detail;
+
+    VerticalLayout {
+        spacing: Theme.sp-lg;
+        if AppState.selected-contact-id != "": Card {
+            heading: "Actions";
+            HorizontalLayout {
+                spacing: Theme.sp-sm;
+                alignment: start;
+                Button {
+                    text: "Message";
+                    kind: "primary";
+                    has-icon: true;
+                    icon: @image-url("icons/chat.svg");
+                    clicked => { AppState.use-contact(AppState.selected-contact-id); }
+                }
+                Button {
+                    text: "Remove";
+                    kind: "destructive";
+                    clicked => { AppState.remove-contact(AppState.selected-contact-id); }
+                }
+                Button {
+                    text: "Add another";
+                    kind: "ghost";
+                    clicked => { AppState.select-contact(""); }
+                }
+            }
+        }
+        Card {
+            heading: "Save a contact";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                name := TextField { label: "Name"; placeholder: "Name"; }
+                account := TextField { label: "Their account id"; placeholder: "Their account id"; mono: true; }
+                device := TextField { label: "Their device id"; placeholder: "Their device id"; mono: true; }
+                ticket := TextField { label: "Their ticket"; placeholder: "Their ticket"; mono: true; }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: "Save contact";
+                        kind: "primary";
+                        enabled: AppState.ready;
+                        clicked => {
+                            if (AppState.save-contact(name.text, account.text, device.text, ticket.text)) {
+                                name.clear-text();
+                                account.clear-text();
+                                device.clear-text();
+                                ticket.clear-text();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------- groups
+
+component GroupItem inherits RowSurface {
+    in property <GroupRow> item;
+    selected: item.selected;
+    label: item.label + ", " + item.members;
+    height: 60px * Theme.ui-scale * (Theme.density-factor > 0.9 ? 1.0 : 0.9);
+    HorizontalLayout {
+        padding-left: Theme.sp-md;
+        padding-right: Theme.sp-md;
+        spacing: Theme.sp-md;
+        Rectangle {
+            width: 40px * Theme.ui-scale;
+            Icon {
+                source: @image-url("icons/group.svg");
+                tint: Theme.text-secondary;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.item.label; color: Theme.text-primary; font-size: Theme.ty-title-sm; font-weight: 600; overflow: elide; }
+            Text { text: root.item.members + " · epoch " + root.item.epoch; color: Theme.text-muted; font-size: Theme.ty-body-sm; overflow: elide; }
+        }
+        if root.item.admin: StatusChip {
+            text: "Admin";
+            icon: @image-url("icons/key.svg");
+            tone: Theme.status-security;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}
+
+export component GroupSidebar inherits Rectangle {
+    background: Theme.surface-sidebar;
+    VerticalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-md;
+        PageTitle { text: "Groups"; }
+        Button {
+            text: "Create group";
+            kind: "primary";
+            has-icon: true;
+            icon: @image-url("icons/plus.svg");
+            enabled: AppState.ready;
+            clicked => { AppState.create-group(); }
+        }
+        if AppState.groups.length == 0: EmptyState {
+            vertical-stretch: 1;
+            icon: @image-url("icons/group.svg");
+            title: "No groups yet";
+            body: "Create one, or accept an invite. Group chats use MLS end-to-end encryption.";
+        }
+        if AppState.groups.length > 0: ListView {
+            vertical-stretch: 1;
+            for row in AppState.groups: GroupItem {
+                item: row;
+                clicked => { AppState.select-group(row.id); }
+            }
+        }
+    }
+}
+
+component InviteCard inherits Rectangle {
+    in property <InviteRow> item;
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-md;
+    border-width: 2px;
+    border-color: Theme.status-security;
+    VerticalLayout {
+        padding: Theme.sp-lg;
+        spacing: Theme.sp-sm;
+        HorizontalLayout {
+            spacing: Theme.sp-sm;
+            Icon { source: @image-url("icons/group.svg"); tint: Theme.status-security; y: (parent.height - self.height) / 2; }
+            Text {
+                text: "Group invite from device " + root.item.from;
+                color: Theme.text-primary;
+                font-size: Theme.ty-title-sm;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+        }
+        Text {
+            text: "Accepting needs the group state the admin sent you out of band — that is a current backend limitation, not a UI shortcut.";
+            color: Theme.text-secondary;
+            font-size: Theme.ty-body-sm;
+            wrap: word-wrap;
+        }
+        state-in := TextArea {
+            label: "Group state";
+            placeholder: "Paste the group state the admin sent you";
+            mono: true;
+            max-input-height: 90px * Theme.ui-scale;
+        }
+        HorizontalLayout {
+            spacing: Theme.sp-sm;
+            Button {
+                text: "Accept";
+                kind: "primary";
+                clicked => { AppState.accept-invite(root.item.id, state-in.text); }
+            }
+            Button {
+                text: "Decline";
+                kind: "destructive";
+                clicked => { AppState.decline-invite(root.item.id); }
+            }
+        }
+    }
+}
+
+export component GroupsPage inherits PageBody {
+    title: AppState.selected-group-id == "" ? "Groups" : AppState.selected-group-label;
+    subtitle: AppState.selected-group-id == "" ? "Create a group, accept an invite, or select a group to add members." : "";
+
+    VerticalLayout {
+        spacing: Theme.sp-lg;
+        for invite in AppState.invites: InviteCard { item: invite; }
+
+        CopyField {
+            label: "Your key package (share it to be added to a group)";
+            value: AppState.my-key-package;
+            empty-text: AppState.ready ? "Key package unavailable — you can still use 1:1 chat." : "Starting up…";
+            copied => {
+                AppState.notice-kind = NoticeKind.success;
+                AppState.notice-text = "Key package copied";
+            }
+        }
+
+        if AppState.selected-group-id != "": Card {
+            heading: "Add a member";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                if !AppState.selected-group-admin: Text {
+                    text: "Only group admins can add members.";
+                    color: Theme.status-warning;
+                    font-size: Theme.ty-body-sm;
+                }
+                m-account := TextField { label: "Their account id"; placeholder: "Their account id"; mono: true; enabled: AppState.selected-group-admin; }
+                m-device := TextField { label: "Their device id"; placeholder: "Their device id"; mono: true; enabled: AppState.selected-group-admin; }
+                m-ticket := TextField { label: "Their ticket"; placeholder: "Their ticket"; mono: true; enabled: AppState.selected-group-admin; }
+                m-kp := TextArea { label: "Their key package"; placeholder: "Their key package (base64)"; mono: true; enabled: AppState.selected-group-admin; max-input-height: 90px * Theme.ui-scale; }
+                HorizontalLayout {
+                    spacing: Theme.sp-sm;
+                    alignment: start;
+                    Button {
+                        text: "Add member";
+                        kind: "primary";
+                        enabled: AppState.selected-group-admin;
+                        clicked => {
+                            if (AppState.add-member(m-account.text, m-device.text, m-ticket.text, m-kp.text)) {
+                                m-account.clear-text();
+                                m-device.clear-text();
+                                m-ticket.clear-text();
+                                m-kp.clear-text();
+                            }
+                        }
+                    }
+                    Button {
+                        text: "Open chat";
+                        has-icon: true;
+                        icon: @image-url("icons/chat.svg");
+                        clicked => { AppState.open-conversation(AppState.selected-group-id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------- security
+
+component EventItem inherits Rectangle {
+    in property <EventRow> item;
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-md;
+    border-width: root.item.severity == 2 && !root.item.resolved ? 2px : 1px;
+    border-color: root.item.severity == 2 && !root.item.resolved ? Theme.status-error : Theme.border-subtle;
+    private property <color> tone:
+        root.item.severity == 2 ? Theme.status-error
+        : root.item.severity == 1 ? Theme.status-warning
+        : Theme.text-secondary;
+    VerticalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-sm;
+        Text {
+            text: root.item.title;
+            color: Theme.text-primary;
+            font-size: Theme.ty-body-lg;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: Theme.sp-sm;
+            StatusChip {
+                // §13: severity is icon + word + colour, never colour alone.
+                text: root.item.severity-label;
+                icon: root.item.severity == 0 ? @image-url("icons/shield.svg") : @image-url("icons/alert.svg");
+                tone: root.tone;
+            }
+            if root.item.resolved: StatusChip {
+                text: "Resolved";
+                icon: @image-url("icons/check.svg");
+                tone: Theme.status-success;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if !root.item.resolved: Button {
+                text: "Mark resolved";
+                kind: "secondary";
+                clicked => { AppState.resolve-event(root.item.id); }
+            }
+        }
+    }
+}
+
+component DeviceItem inherits Rectangle {
+    in property <DeviceRow> item;
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: item.status == 3 ? Theme.status-error : Theme.border-subtle;
+    private property <color> tone:
+        item.status == 0 ? Theme.status-success
+        : item.status == 1 ? Theme.status-warning
+        : item.status == 3 ? Theme.status-error
+        : Theme.text-muted;
+    HorizontalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-md;
+        Icon {
+            source: root.item.kind-icon == 1 ? @image-url("icons/phone.svg")
+                : root.item.kind-icon == 2 ? @image-url("icons/server.svg")
+                : root.item.kind-icon == 3 ? @image-url("icons/shield.svg")
+                : @image-url("icons/laptop.svg");
+            tint: Theme.text-secondary;
+            size: 24px * Theme.ui-scale;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text { text: root.item.name; color: Theme.text-primary; font-size: Theme.ty-body-lg; font-weight: 600; overflow: elide; }
+            Text { text: root.item.kind-label + " · " + root.item.last-active; color: Theme.text-muted; font-size: Theme.ty-body-sm; overflow: elide; }
+            if root.item.flags != "": Text { text: root.item.flags; color: Theme.status-warning; font-size: Theme.ty-body-sm; wrap: word-wrap; }
+        }
+        StatusChip {
+            text: root.item.status-label;
+            icon: root.item.status == 0 ? @image-url("icons/check.svg") : @image-url("icons/alert.svg");
+            tone: root.tone;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}
+
+export component SecuritySidebar inherits Rectangle {
+    background: Theme.surface-sidebar;
+    VerticalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-sm;
+        alignment: start;
+        PageTitle { text: "Security"; }
+        RowSurface {
+            selected: AppState.security-tab == SecurityTab.events;
+            label: "Security events";
+            height: 48px * Theme.ui-scale;
+            clicked => { AppState.security-tab = SecurityTab.events; AppState.content-open = true; }
+            HorizontalLayout {
+                padding-left: Theme.sp-md;
+                padding-right: Theme.sp-md;
+                spacing: Theme.sp-md;
+                Icon { source: @image-url("icons/shield.svg"); y: (parent.height - self.height) / 2; }
+                Text { text: "Events"; color: Theme.text-primary; font-size: Theme.ty-title-sm; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                Badge { count: AppState.unresolved-events; y: (parent.height - self.height) / 2; }
+            }
+        }
+        RowSurface {
+            selected: AppState.security-tab == SecurityTab.devices;
+            label: "Devices";
+            height: 48px * Theme.ui-scale;
+            clicked => { AppState.security-tab = SecurityTab.devices; AppState.content-open = true; }
+            HorizontalLayout {
+                padding-left: Theme.sp-md;
+                padding-right: Theme.sp-md;
+                spacing: Theme.sp-md;
+                Icon { source: @image-url("icons/laptop.svg"); y: (parent.height - self.height) / 2; }
+                Text { text: "Devices"; color: Theme.text-primary; font-size: Theme.ty-title-sm; font-weight: 600; vertical-alignment: center; }
+            }
+        }
+    }
+}
+
+export component SecurityPage inherits PageBody {
+    title: AppState.security-tab == SecurityTab.events ? "Security events" : "Devices";
+    subtitle: AppState.security-tab == SecurityTab.events
+        ? "Plain-language record of things that affect your account’s security."
+        : "Devices that can read your messages. Remove any you don’t recognise.";
+
+    VerticalLayout {
+        spacing: Theme.sp-md;
+
+        if AppState.security-tab == SecurityTab.events: VerticalLayout {
+            spacing: Theme.sp-md;
+            Segmented {
+                options: ["All", "Unresolved", "Critical"];
+                current: AppState.event-filter;
+                selected(i) => { AppState.set-event-filter(i); }
+            }
+            if AppState.events.length == 0: EmptyState {
+                height: 220px * Theme.ui-scale;
+                icon: @image-url("icons/shield.svg");
+                tone: Theme.status-success;
+                title: "Nothing to review";
+                body: "No security events match this view.";
+            }
+            for ev in AppState.events: EventItem { item: ev; }
+        }
+
+        if AppState.security-tab == SecurityTab.devices: VerticalLayout {
+            spacing: Theme.sp-md;
+            if AppState.devices.length == 0: EmptyState {
+                height: 220px * Theme.ui-scale;
+                icon: @image-url("icons/laptop.svg");
+                title: "No device list yet";
+                body: "Your linked devices will appear here once device linking is available on this build.";
+            }
+            for d in AppState.devices: VerticalLayout {
+                spacing: Theme.sp-sm;
+                if d.section-title != "": SectionTitle { text: d.section-title.to-uppercase(); }
+                DeviceItem { item: d; }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------- settings
+
+export component SettingsPage inherits PageBody {
+    title: "Settings";
+    subtitle: "Appearance applies instantly and is remembered on this device.";
+    VerticalLayout {
+        spacing: Theme.sp-lg;
+        Card {
+            heading: "Appearance";
+            VerticalLayout {
+                spacing: Theme.sp-md;
+                SectionTitle { text: "THEME"; }
+                Segmented {
+                    options: ["System", "Light", "Dark", "High contrast"];
+                    current: Theme.mode == ThemeMode.system ? 0
+                        : Theme.mode == ThemeMode.light ? 1
+                        : Theme.mode == ThemeMode.dark ? 2 : 3;
+                    selected(i) => {
+                        Theme.mode = i == 0 ? ThemeMode.system
+                            : i == 1 ? ThemeMode.light
+                            : i == 2 ? ThemeMode.dark : ThemeMode.high-contrast;
+                        AppState.settings-changed();
+                    }
+                }
+                SectionTitle { text: "DENSITY"; }
+                Segmented {
+                    options: ["Comfortable", "Compact"];
+                    current: Theme.density == Density.comfortable ? 0 : 1;
+                    selected(i) => {
+                        Theme.density = i == 0 ? Density.comfortable : Density.compact;
+                        AppState.settings-changed();
+                    }
+                }
+                SectionTitle { text: "TEXT AND INTERFACE SIZE"; }
+                Segmented {
+                    options: ["90%", "100%", "115%", "130%"];
+                    current: Theme.ui-scale < 0.95 ? 0 : Theme.ui-scale < 1.05 ? 1 : Theme.ui-scale < 1.2 ? 2 : 3;
+                    selected(i) => {
+                        Theme.ui-scale = i == 0 ? 0.9 : i == 1 ? 1.0 : i == 2 ? 1.15 : 1.3;
+                        AppState.settings-changed();
+                    }
+                }
+            }
+        }
+        Card {
+            heading: "This device";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                CopyField { label: "Account id"; value: AppState.my-account-id; copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Account id copied"; } }
+                CopyField { label: "Device id"; value: AppState.my-device-id; copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Device id copied"; } }
+            }
+        }
+    }
+}

@@ -29,6 +29,17 @@ pub fn initial(s: &str) -> String {
         .unwrap_or_else(|| "?".to_string())
 }
 
+/// Re-flows a space-separated number into lines of `per_line` groups so a
+/// 60-digit safety number reads (and is compared) a few groups at a time.
+pub fn wrap_groups(s: &str, per_line: usize) -> String {
+    let groups: Vec<&str> = s.split_whitespace().collect();
+    groups
+        .chunks(per_line.max(1))
+        .map(|c| c.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn format_bytes(n: u64) -> String {
     const KIB: f64 = 1024.0;
     let f = n as f64;
@@ -188,6 +199,17 @@ mod tests {
         assert_eq!(initial(""), "?");
         assert_eq!(initial("!!!"), "?");
         assert_eq!(initial("élan"), "É");
+    }
+
+    #[test]
+    fn wrap_groups_breaks_into_even_lines() {
+        let n = "11111 22222 33333 44444 55555 66666 77777";
+        assert_eq!(
+            wrap_groups(n, 3),
+            "11111 22222 33333\n44444 55555 66666\n77777"
+        );
+        assert_eq!(wrap_groups("", 3), "");
+        assert_eq!(wrap_groups("a b", 0), "a\nb"); // 0 is clamped, not a panic
     }
 
     #[test]

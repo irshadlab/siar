@@ -16,7 +16,8 @@ use siar_domain::{AccountId, ConversationId, DeliveryState, DeviceId, MessageCon
 use siar_ui_state::{
     AttachmentPreviewState, ComposerState, ContactListState, ConversationKind,
     ConversationListState, ConversationSummary, DeviceListState, GroupListState, NetworkStatus,
-    PendingInviteState, SecurityEventState, TimelineState, TimelineWindow,
+    OwnIdentityView, PendingInviteState, SecurityDiagnosticDetail, SecurityEventState,
+    SecurityStatusBanner, TimelineState, TimelineWindow,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +43,36 @@ pub enum EventView {
     Critical,
 }
 
+/// Where a contact stands on out-of-band verification (ui-ux-15 §58-59).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerificationState {
+    #[default]
+    Unverified,
+    Verified,
+    /// Was verified, but the contact's key is not the one that was
+    /// verified. Never silently downgraded to "Unverified": the user must
+    /// see that something changed.
+    KeyChanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactSafety {
+    /// 60-digit safety number, space-separated 5-digit groups.
+    pub number: String,
+    pub state: VerificationState,
+}
+
+/// Where a 1:1 chat's stored history has got to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HistoryPaging {
+    /// The newest page has been loaded from storage (once per session).
+    pub loaded: bool,
+    /// `before` cursor for the next-older page.
+    pub next_before: Option<u64>,
+    /// Nothing older exists.
+    pub exhausted: bool,
+}
+
 /// This device's own identity, filled in once bootstrap finishes.
 #[derive(Debug, Default, Clone)]
 pub struct LocalIdentity {
@@ -58,6 +89,7 @@ pub struct Slices {
     /// shared a single timeline across every conversation.
     pub timelines: HashMap<ConversationId, TimelineState>,
     pub selected: Option<ConversationId>,
+    pub history: HashMap<ConversationId, HistoryPaging>,
     pub conversation_filter: String,
     /// Direct conversations that have a reachable peer. Groups need no
     /// entry — membership itself makes them sendable.
@@ -71,6 +103,12 @@ pub struct Slices {
     pub pending_invites: PendingInviteState,
     pub attachment_previews: AttachmentPreviewState,
     pub security_events: SecurityEventState,
+    /// Local "seen" set for the top banner. Dismissing there can NEVER
+    /// resolve an event (ui-ux-15 §98) — it has no access to resolution.
+    pub banner: SecurityStatusBanner,
+    pub own_identity: Option<OwnIdentityView>,
+    pub diagnostics: Option<SecurityDiagnosticDetail>,
+    pub contact_safety: HashMap<DeviceId, ContactSafety>,
     pub event_view: EventView,
     pub devices: DeviceListState,
     pub network: NetworkStatus,
@@ -134,6 +172,44 @@ impl Slices {
         self.open_content = true;
     }
 
+    /// Merges a page of stored history (oldest → newest) into a chat.
+    pub fn apply_history_page(
+        &mut self,
+        conversation: ConversationId,
+        entries: Vec<TimelineWindow>,
+        next_before: Option<u64>,
+        exhausted: bool,
+    ) {
+        let first_load = !self.history.get(&conversation).is_some_and(|h| h.loaded);
+        self.timeline_mut(conversation).prepend_page(entries);
+        self.history.insert(
+            conversation,
+            HistoryPaging {
+                loaded: true,
+                next_before,
+                exhausted,
+            },
+        );
+        if first_load {
+            // A restart must not leave the chat list showing "No messages yet".
+            let latest = self
+                .timelines
+                .get(&conversation)
+                .and_then(|t| t.visible().last())
+                .and_then(|e| match &e.content {
+                    MessageContent::Text(t) => Some(if e.from_me {
+                        format!("You: {}", t.as_str())
+                    } else {
+                        t.as_str().to_string()
+                    }),
+                    _ => None,
+                });
+            if let Some(preview) = latest {
+                self.conversations.set_preview(conversation, preview);
+            }
+        }
+    }
+
     pub fn notify(&mut self, level: NoticeLevel, text: impl Into<String>) {
         self.notice = Some(Notice {
             level,
@@ -152,9 +228,15 @@ impl Slices {
             self.conversations
                 .set_preview(conversation, format!("You: {}", text.as_str()));
         }
+        // Storage files this message under (roughly) the same clock reading;
+        // it is only used as a paging cursor, never for ordering display.
+        let sequence = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         self.timeline_mut(conversation).push_latest(TimelineWindow {
             message_id,
-            sequence: 0,
+            sequence,
             content,
             delivery_state: DeliveryState::Local,
             from_me: true,
@@ -269,6 +351,41 @@ mod tests {
         assert!(!s.can_send(d));
         s.sendable.insert(d);
         assert!(s.can_send(d));
+    }
+
+    #[test]
+    fn history_pages_merge_without_duplicating_live_messages_and_set_the_preview() {
+        let mut s = Slices::new();
+        let a = ConversationId::new();
+        s.ensure_conversation(a, "A", ConversationKind::Direct);
+        let live = MessageId::new();
+        s.record_incoming(a, live, 30, text("live"));
+        let stored = |id: MessageId, seq: u64, body: &str| TimelineWindow {
+            message_id: id,
+            sequence: seq,
+            content: text(body),
+            delivery_state: DeliveryState::Delivered,
+            from_me: false,
+        };
+        s.apply_history_page(
+            a,
+            vec![
+                stored(MessageId::new(), 10, "old"),
+                stored(live, 30, "live"),
+            ],
+            Some(10),
+            false,
+        );
+        let bodies: Vec<_> = s.timelines[&a]
+            .visible()
+            .map(|e| match &e.content {
+                MessageContent::Text(t) => t.as_str().to_string(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(bodies, ["old", "live"]);
+        assert!(s.history[&a].loaded && !s.history[&a].exhausted);
+        assert_eq!(s.history[&a].next_before, Some(10));
     }
 
     #[test]

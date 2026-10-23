@@ -1,0 +1,359 @@
+// Conversation list (ui-ux-04), message timeline (ui-ux-05) and
+// composer (ui-ux-06).
+
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme, WindowClass } from "theme.slint";
+import { AppState, ConversationRow, MessageRow } from "app_state.slint";
+import {
+    Icon, IconButton, Avatar, Badge, TextField, TextArea, EmptyState,
+    RowSurface, PageTitle, Divider
+} from "components.slint";
+
+// ------------------------------------------------------------------ sidebar
+
+component ConversationItem inherits RowSurface {
+    in property <ConversationRow> item;
+    selected: item.selected;
+    label: item.title + (item.unread > 0 ? ", " + item.unread + " unread" : "");
+    height: 64px * Theme.ui-scale * (Theme.density-factor > 0.9 ? 1.0 : 0.88);
+
+    HorizontalLayout {
+        padding-left: Theme.sp-md;
+        padding-right: Theme.sp-md;
+        spacing: Theme.sp-md;
+        Avatar {
+            initial: root.item.initial;
+            hue: root.item.hue;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                spacing: Theme.sp-xs;
+                Text {
+                    text: root.item.title;
+                    color: Theme.text-primary;
+                    font-size: Theme.ty-title-sm;
+                    font-weight: root.item.unread > 0 ? 700 : 600;
+                    overflow: elide;
+                }
+                if root.item.is-group: Icon {
+                    source: @image-url("icons/group.svg");
+                    size: 14px * Theme.ui-scale;
+                    tint: Theme.text-muted;
+                    y: (parent.height - self.height) / 2;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Text {
+                text: root.item.preview == "" ? "No messages yet" : root.item.preview;
+                color: root.item.unread > 0 ? Theme.text-primary : Theme.text-muted;
+                font-size: Theme.ty-body-sm;
+                overflow: elide;
+            }
+        }
+        Badge {
+            count: root.item.unread;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}
+
+export component ConversationSidebar inherits Rectangle {
+    background: Theme.surface-sidebar;
+    VerticalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-md;
+        PageTitle { text: "Chats"; }
+        TextField {
+            placeholder: "Search conversations";
+            label: "Search conversations";
+            edited(text) => { AppState.filter-conversations(text); }
+        }
+        if AppState.conversations.length == 0: EmptyState {
+            vertical-stretch: 1;
+            icon: @image-url("icons/chat.svg");
+            title: AppState.conversation-filter == "" ? "No conversations yet" : "No matches";
+            body: AppState.conversation-filter == ""
+                ? "Pair with someone in Connect, or pick a saved contact, to start an end-to-end encrypted chat."
+                : "Nothing matches that search.";
+        }
+        if AppState.conversations.length > 0: ListView {
+            vertical-stretch: 1;
+            for row in AppState.conversations: ConversationItem {
+                item: row;
+                clicked => { AppState.open-conversation(row.id); }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------- timeline
+
+component StatusLine inherits HorizontalLayout {
+    in property <MessageRow> item;
+    spacing: Theme.sp-xs;
+    alignment: item.from-me ? end : start;
+    private property <color> tone:
+        item.status-icon == 5 ? Theme.status-error
+        : item.status-icon == 4 ? Theme.action-primary
+        : item.status-icon == 6 ? Theme.status-security
+        : Theme.text-muted;
+    Icon {
+        visible: root.item.status-icon > 0;
+        width: root.item.status-icon > 0 ? 13px * Theme.ui-scale : 0px;
+        source: root.item.status-icon == 1 ? @image-url("icons/clock.svg")
+            : root.item.status-icon == 2 ? @image-url("icons/check.svg")
+            : root.item.status-icon == 3 ? @image-url("icons/check-check.svg")
+            : root.item.status-icon == 4 ? @image-url("icons/check-check.svg")
+            : root.item.status-icon == 5 ? @image-url("icons/alert.svg")
+            : @image-url("icons/globe.svg");
+        size: 13px * Theme.ui-scale;
+        tint: root.tone;
+        y: (parent.height - self.height) / 2;
+    }
+    Text {
+        text: root.item.status-label;
+        color: root.tone;
+        font-size: Theme.ty-label-sm;
+        vertical-alignment: center;
+    }
+}
+
+component MessageItem inherits Rectangle {
+    in property <MessageRow> item;
+    in property <length> list-width;
+    callback need-preview(string);
+
+    private property <length> max-bubble: min(list-width * 0.74, 560px * Theme.ui-scale);
+
+    height: column.preferred-height;
+    accessible-role: none;
+
+    column := VerticalLayout {
+        padding-left: Theme.sp-lg;
+        padding-right: Theme.sp-lg;
+        // §48: tighter inside a sender run, looser between runs.
+        padding-top: root.item.group-start ? Theme.sp-md : 3px * Theme.ui-scale;
+        spacing: 2px;
+
+        HorizontalLayout {
+            alignment: root.item.from-me ? end : start;
+            bubble := Rectangle {
+                max-width: root.max-bubble;
+                border-radius: Theme.radius-md;
+                background: root.item.from-me ? Theme.bubble-mine : Theme.bubble-theirs;
+                border-width: root.item.from-me ? 0px : 1px;
+                border-color: Theme.border-subtle;
+
+                VerticalLayout {
+                    padding: Theme.sp-md;
+                    spacing: Theme.sp-sm;
+
+                    // text
+                    if root.item.kind == 0: TextInput {
+                        text: root.item.text;
+                        read-only: true;
+                        wrap: word-wrap;
+                        font-size: Theme.ty-body-lg;
+                        color: root.item.from-me ? Theme.bubble-mine-text : Theme.text-primary;
+                        selection-background-color: Theme.action-primary-hover;
+                        selection-foreground-color: Theme.action-primary-text;
+                        accessible-label: (root.item.from-me ? "You: " : "Them: ") + root.item.text;
+                    }
+
+                    // image attachment
+                    if root.item.kind == 1 && root.item.preview-state == 2: Image {
+                        source: root.item.preview;
+                        width: min(root.item.preview-width, root.max-bubble - 2 * Theme.sp-md);
+                        height: self.width * (root.item.preview-height / max(1px, root.item.preview-width));
+                        image-fit: contain;
+                        accessible-role: image;
+                        accessible-label: "Image attachment";
+                    }
+                    if root.item.kind == 1 && root.item.preview-state != 2: HorizontalLayout {
+                        spacing: Theme.sp-sm;
+                        Icon {
+                            source: root.item.preview-state == 3 ? @image-url("icons/alert.svg")
+                                : @image-url("icons/image.svg");
+                            tint: root.item.from-me ? Theme.bubble-mine-text : Theme.text-secondary;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        Text {
+                            text: root.item.preview-state == 1 ? "Loading image…"
+                                : root.item.preview-state == 3 ? "Couldn’t load image: " + root.item.preview-error
+                                : "Image · tap to load";
+                            color: root.item.from-me ? Theme.bubble-mine-text : Theme.text-secondary;
+                            font-size: Theme.ty-body-md;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
+                        // Not requested yet → request on first render, same
+                        // on-demand policy AttachmentPreviewState documents.
+                        if root.item.preview-state == 0: Rectangle {
+                            width: 0px;
+                            init => { root.need-preview(root.item.id); }
+                        }
+                    }
+
+                    // non-image attachment: honest placeholder, no preview
+                    if root.item.kind == 2: HorizontalLayout {
+                        spacing: Theme.sp-sm;
+                        Icon {
+                            source: @image-url("icons/file.svg");
+                            tint: root.item.from-me ? Theme.bubble-mine-text : Theme.text-secondary;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        Text {
+                            text: root.item.attachment-label;
+                            color: root.item.from-me ? Theme.bubble-mine-text : Theme.text-primary;
+                            font-size: Theme.ty-body-md;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+        if root.item.status-icon > 0: StatusLine { item: root.item; }
+    }
+}
+
+// --------------------------------------------------------------------- chat
+
+export component ChatView inherits Rectangle {
+    background: Theme.surface-base;
+
+    if AppState.selected-id == "": EmptyState {
+        icon: @image-url("icons/chat.svg");
+        title: "Select a conversation";
+        body: "Messages are end-to-end encrypted on this device before they leave it.";
+    }
+
+    if AppState.selected-id != "": VerticalLayout {
+        // header
+        Rectangle {
+            height: 60px * Theme.ui-scale;
+            background: Theme.surface-raised;
+            HorizontalLayout {
+                padding-left: Theme.sp-md;
+                padding-right: Theme.sp-lg;
+                spacing: Theme.sp-md;
+                if Theme.window-class == WindowClass.compact: IconButton {
+                    icon: @image-url("icons/chevron-left.svg");
+                    label: "Back to conversations";
+                    y: (parent.height - self.height) / 2;
+                    clicked => { AppState.content-open = false; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: AppState.selected-title;
+                        color: Theme.text-primary;
+                        font-size: Theme.ty-title-md;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: AppState.selected-is-group
+                            ? "Group · end-to-end encrypted (MLS)"
+                            : "End-to-end encrypted";
+                        color: Theme.text-muted;
+                        font-size: Theme.ty-body-sm;
+                    }
+                }
+            }
+        }
+        Divider { }
+
+        private property <string> shown-conversation: AppState.selected-id;
+        changed shown-conversation => { scroll-timer.running = true; }
+        private property <int> message-count: AppState.messages.length;
+        changed message-count => {
+            timeline.viewport-y = min(0px, timeline.height - timeline.viewport-height);
+            scroll-timer.running = true;
+        }
+        // Keep the newest message in view. Deferred one tick so the
+        // viewport has been re-laid-out for the new row first.
+        // A few ticks: variable-height rows settle over more than one layout
+        // pass, so a single scroll can land a row short.
+        private property <int> ticks: 0;
+        scroll-timer := Timer {
+            interval: 16ms;
+            running: false;
+            triggered => {
+                timeline.viewport-y = min(0px, timeline.height - timeline.viewport-height);
+                ticks += 1;
+                if (ticks >= 4) {
+                    ticks = 0;
+                    self.running = false;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            // ScrollView, not ListView: ListView estimates the height of rows
+            // it hasn't laid out, which makes "scroll to newest" land short
+            // with variable-height bubbles. The timeline is a bounded window
+            // (plan.md §64), so laying out every row stays cheap, and the
+            // exact content height makes bottom-anchoring deterministic.
+            timeline := ScrollView {
+                init => { scroll-timer.running = true; }
+                VerticalLayout {
+                    padding-bottom: Theme.sp-md;
+                    for row in AppState.messages: MessageItem {
+                        item: row;
+                        list-width: timeline.width;
+                        need-preview(id) => { AppState.load-attachment(id); }
+                    }
+                }
+            }
+            if AppState.messages.length == 0: EmptyState {
+                icon: @image-url("icons/send.svg");
+                title: "No messages yet";
+                body: AppState.can-send ? "Say hello — it’s encrypted before it leaves this device."
+                    : "This conversation has no paired peer yet. Pair in Connect to send messages.";
+            }
+        }
+
+        Divider { }
+        // composer
+        Rectangle {
+            background: Theme.surface-raised;
+            VerticalLayout {
+                padding: Theme.sp-md;
+                HorizontalLayout {
+                    spacing: Theme.sp-sm;
+                    alignment: stretch;
+                    composer := TextArea {
+                        horizontal-stretch: 1;
+                        text <=> AppState.composer-draft;
+                        enabled: AppState.can-send;
+                        submit-on-enter: true;
+                        placeholder: AppState.can-send ? "Message  (Enter to send, Shift+Enter for a new line)"
+                            : "Pair with a peer first";
+                        label: "Message";
+                        submitted(text) => { AppState.send-message(text); }
+                        edited(text) => { AppState.draft-edited(text); }
+                    }
+                    Rectangle {
+                        width: Theme.min-target;
+                        VerticalLayout {
+                            alignment: end;
+                            IconButton {
+                                icon: @image-url("icons/send.svg");
+                                label: "Send message";
+                                enabled: AppState.can-send && AppState.composer-draft != "";
+                                tint: Theme.action-primary;
+                                clicked => { AppState.send-message(AppState.composer-draft); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

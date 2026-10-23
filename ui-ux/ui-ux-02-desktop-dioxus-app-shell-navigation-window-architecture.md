@@ -1,5 +1,12 @@
 # UI/UX Part 02 — Desktop Dioxus App Shell, Navigation & Window Architecture
 
+> **Implementation note (2026-10-22):** the desktop shell is now implemented
+> with **Slint** (`crates/siar-ui-slint`), not Dioxus. Everything in this
+> spec about layout, navigation, window classes, states and behaviour still
+> applies. Dioxus-specific wording (signals, `rsx!`, WebView, platform
+> events) is superseded: state lives in `siar-ui-state` slices behind a
+> `UiHub`, views are `.slint` files, and the window uses native decorations.
+
 ## Reusable P2P Communication Platform
 
 **Status:** UI/UX architecture specification  

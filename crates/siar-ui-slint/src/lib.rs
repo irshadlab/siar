@@ -30,7 +30,10 @@ mod ui {
 
 pub use hub::{SettingsSink, TicketValidator, UiHub};
 pub use settings::{DensityChoice, ThemeChoice, UiSettings};
-pub use slices::{EventView, LocalIdentity, Notice, NoticeLevel, Slices};
+pub use slices::{
+    ContactSafety, EventView, HistoryPaging, LocalIdentity, Notice, NoticeLevel, Slices,
+    VerificationState,
+};
 pub use ui::{
     AppState, Density, MainWindow, NoticeKind, Page, SecurityTab, Theme, ThemeMode, WindowClass,
 };

@@ -83,6 +83,17 @@ pub enum AppCommand {
         message_id: MessageId,
         reference: AttachmentReference,
     },
+    /// Pair with a peer from a pasted ticket: opens (or reuses) the
+    /// direct conversation with that peer and selects it. The UI has
+    /// already run the host's ticket validator, so a failure here is a
+    /// genuine runtime failure, reported back as a notice.
+    PairWithTicket {
+        ticket_text: String,
+    },
+    /// Start/open the direct conversation with a saved contact.
+    UseContact {
+        device_id: siar_domain::DeviceId,
+    },
 }
 
 #[derive(Debug, Clone)]

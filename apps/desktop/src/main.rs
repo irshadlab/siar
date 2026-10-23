@@ -9,7 +9,10 @@
 
 mod bootstrap;
 mod core;
+mod history;
 mod peers;
+mod read_marks;
+mod verification;
 
 #[cfg(test)]
 mod e2e_test;

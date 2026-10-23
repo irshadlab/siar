@@ -101,7 +101,7 @@ pub use security_event::{
     SecurityEventId, SecurityEventKind, SecurityEventSeverity, SecurityEventState,
 };
 pub use security_status_banner::SecurityStatusBanner;
-pub use timeline::{TimelineState, TimelineWindow};
+pub use timeline::{TimelineState, TimelineWindow, PAGE_SIZE};
 pub use ui_effects::{
     fake_recovery_material_for_screenshot_tests, should_offer_clipboard_clear, ReauthChallenge,
     ReauthChallengeId, RecoveryExportFormat, ReleaseReason, SecurityUiEvent,

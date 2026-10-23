@@ -148,6 +148,11 @@ pub struct Bootstrapped {
     /// Read access to stored messages, so the UI can show real delivery
     /// ticks (Sent / Delivered) instead of staying on "Saving…".
     pub messages: Arc<dyn MessageRepository + Send + Sync>,
+    /// Per-device data directory (verification marks live here).
+    pub data_dir: std::path::PathBuf,
+    /// When this device's identity key was first created (file creation
+    /// time; falls back to last-modified, then 0 if the platform has neither).
+    pub identity_created_at_millis: u64,
 }
 
 /// Runs on a background Tokio task, owns the `MessageService`, and is the
@@ -177,6 +182,12 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
             .context("saving new device identity")?;
         identity
     };
+    let identity_created_at_millis = std::fs::metadata(&paths.identity)
+        .and_then(|m| m.created().or_else(|_| m.modified()))
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
     let device_id = load_or_create_id(
         &paths.device_id,
         DeviceId::from_uuid,
@@ -304,5 +315,7 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
         contact_repo,
         saved_contacts,
         messages: message_view,
+        data_dir: paths.data_dir.clone(),
+        identity_created_at_millis,
     })
 }

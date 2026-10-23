@@ -116,6 +116,8 @@ pub struct MessageService {
     /// assigned once at provisioning — never derived from key bytes, so
     /// it stays stable across a future key-rotation (plan.md §40).
     device_id: DeviceId,
+    /// Last sequence handed to an outgoing message (see [`next_sequence`]).
+    last_sequence: std::sync::atomic::AtomicU64,
     identity: DeviceIdentity,
     endpoint: Arc<SiarEndpoint>,
     messages: Arc<dyn MessageRepository + Send + Sync>,
@@ -187,6 +189,7 @@ impl MessageService {
     ) -> Self {
         Self {
             device_id,
+            last_sequence: std::sync::atomic::AtomicU64::new(0),
             identity,
             endpoint,
             messages,
@@ -487,7 +490,7 @@ impl MessageService {
             // counter (plan.md §21) — fine for ordering within one
             // two-peer chat's local clock, not for the deterministic
             // distributed ordering groups will need in Phase 5.
-            sequence: now,
+            sequence: next_sequence(&self.last_sequence, now),
             timestamp_millis: now,
             delivery_state: DeliveryState::Local,
             payload: ciphertext.clone(),
@@ -747,7 +750,7 @@ impl MessageService {
             message_id,
             conversation_id: conversation,
             sender_device: self.device_id,
-            sequence: now,
+            sequence: next_sequence(&self.last_sequence, now),
             timestamp_millis: now,
             delivery_state: DeliveryState::Local,
             payload: ciphertext.clone(),
@@ -1126,10 +1129,46 @@ impl MessageService {
     /// nothing here to invalidate when Phase 2 swaps this for a real
     /// ratchet — that swap becomes a one-function change in siar-crypto
     /// instead of also touching a cache-invalidation path here.
+    /// Decrypts a payload previously stored for a 1:1 chat with `peer`
+    /// (what `send_text` and the receive path both persist), so history
+    /// can be shown again after a restart.
+    ///
+    /// Fails for a payload that belongs to a different peer: the session
+    /// key is pairwise, so the AEAD tag will not verify. Callers rely on
+    /// that to pick one peer's messages out of storage that several peers
+    /// share (every sender files its messages to us under one inbound
+    /// conversation id).
+    pub fn open_stored_payload(
+        &self,
+        peer: &PeerTicket,
+        payload: &[u8],
+    ) -> Result<MessageContent, MessageServiceError> {
+        let plaintext = self.session_for(peer).decrypt(payload)?;
+        postcard::from_bytes(&plaintext).map_err(|_| MessageServiceError::Malformed)
+    }
+
     fn session_for(&self, peer: &PeerTicket) -> Session {
         let x25519_public = x25519_dalek::PublicKey::from(peer.x25519_public);
         Session::establish(&self.identity, &x25519_public)
     }
+}
+
+/// Strictly increasing per-device sequence for outgoing messages.
+///
+/// The Phase-1 stand-in was the send time in milliseconds, so two messages
+/// sent within one millisecond shared a sequence and came back from storage
+/// in arbitrary order (found by the desktop history end-to-end test).
+/// Taking `max(now, last + 1)` keeps the "roughly the send time" meaning
+/// while guaranteeing uniqueness and send order. The receiver stores the
+/// sender's sequence, so both sides reload the same order.
+fn next_sequence(last: &std::sync::atomic::AtomicU64, now: u64) -> u64 {
+    use std::sync::atomic::Ordering::SeqCst;
+    let mut next = now;
+    let _ = last.fetch_update(SeqCst, SeqCst, |prev| {
+        next = now.max(prev.saturating_add(1));
+        Some(next)
+    });
+    next
 }
 
 fn now_millis() -> u64 {
@@ -1152,4 +1191,35 @@ fn pseudo_unit_random(seed: MessageId) -> f64 {
     seed.hash(&mut hasher);
     now_millis().hash(&mut hasher);
     (hasher.finish() as f64) / (u64::MAX as f64)
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::next_sequence;
+    use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn sequences_are_unique_and_increasing_even_within_one_millisecond() {
+        let last = AtomicU64::new(0);
+        let a = next_sequence(&last, 1_000);
+        let b = next_sequence(&last, 1_000);
+        let c = next_sequence(&last, 1_000);
+        assert_eq!((a, b, c), (1_000, 1_001, 1_002));
+    }
+
+    #[test]
+    fn a_clock_that_goes_backwards_never_reuses_or_decreases() {
+        let last = AtomicU64::new(0);
+        assert_eq!(next_sequence(&last, 5_000), 5_000);
+        assert_eq!(next_sequence(&last, 4_000), 5_001);
+        // and it catches up again when the clock does
+        assert_eq!(next_sequence(&last, 9_000), 9_000);
+    }
+
+    #[test]
+    fn it_tracks_the_clock_when_sends_are_far_apart() {
+        let last = AtomicU64::new(0);
+        assert_eq!(next_sequence(&last, 100), 100);
+        assert_eq!(next_sequence(&last, 200), 200);
+    }
 }

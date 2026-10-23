@@ -153,10 +153,17 @@ component CriticalBanner inherits Rectangle {
             wrap: word-wrap;
             vertical-alignment: center;
         }
+        // Dismiss hides this banner only. The issue stays open under
+        // Security until it is actually resolved (ui-ux-15 §98).
         Button {
-            text: "I understand";
+            text: "Review";
             kind: "inverse";
-            clicked => { AppState.resolve-event(AppState.critical-id); }
+            clicked => { AppState.review-security(); }
+        }
+        Button {
+            text: "Dismiss";
+            kind: "inverse";
+            clicked => { AppState.dismiss-banner(AppState.critical-id); }
         }
     }
 }

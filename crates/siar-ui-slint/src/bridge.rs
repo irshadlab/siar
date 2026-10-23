@@ -129,6 +129,14 @@ pub(crate) fn install(window: &MainWindow, hub: &UiHub) {
     }
     {
         let hub = hub.clone();
+        app.on_load_earlier(move || {
+            if let Some(conversation) = hub.read(|s| s.selected) {
+                hub.dispatch(AppCommand::LoadEarlierMessages { conversation });
+            }
+        });
+    }
+    {
+        let hub = hub.clone();
         app.on_filter_conversations(move |text| {
             hub.update(|s| s.conversation_filter = text.to_string());
         });
@@ -384,6 +392,39 @@ pub(crate) fn install(window: &MainWindow, hub: &UiHub) {
                     2 => EventView::Critical,
                     _ => EventView::All,
                 }
+            });
+        });
+    }
+
+    {
+        let hub = hub.clone();
+        app.on_dismiss_banner(move |id| {
+            if let Ok(raw) = id.trim().parse::<u64>() {
+                // Local "seen" only: resolution state is untouched (§98).
+                hub.update(|s| s.banner.dismiss(SecurityEventId::from_raw(raw)));
+            }
+        });
+    }
+    {
+        let weak = weak.clone();
+        app.on_review_security(move || {
+            if let Some(w) = weak.upgrade() {
+                let app = w.global::<AppState>();
+                app.set_page(Page::Security);
+                app.set_security_tab(crate::ui::SecurityTab::Events);
+                app.set_content_open(true);
+            }
+        });
+    }
+    {
+        let hub = hub.clone();
+        app.on_set_contact_verified(move |id, verified| {
+            let Some(device_id) = parse_id::<DeviceId>(&id) else {
+                return;
+            };
+            hub.dispatch(AppCommand::SetContactVerified {
+                device_id,
+                verified,
             });
         });
     }

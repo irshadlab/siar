@@ -261,9 +261,58 @@ ACK → Delivered):
   per-conversation timelines, frames routed by sender, real delivery ticks
   (storage poll), user-visible errors instead of log-only.
 
+**Added 2026-10-23 (ui-ux-15 §48-59, §96-100, §133-134 + core wiring):**
+- Contact verification: safety numbers from `siar-identity-multidevice`'s
+  `SafetyFingerprint` (both sides compute the same number — verified across
+  two real cores). Marks persist as `device=<key>`, so a later key change is
+  `KeyChanged` (not silently "unverified") and raises a critical
+  `IdentityChanged` security event once per transition. Today the inputs are
+  the two *device* signing keys; switch to account root keys when those are
+  wired into the desktop app.
+- Own identity fingerprint (short/full, reveal-on-demand) and a Diagnostics
+  card (device key id, group epochs, signature + transport summary; no private
+  key material can be shown by construction).
+- Spec fix: the top banner now has "Review" / "Dismiss". Dismiss is local
+  only and can never resolve an event (§98); my first version resolved on
+  click, which violated the spec.
+- Still not wired (no backend integration in the desktop app yet): device
+  linking/revocation (`device_lifecycle`, `revocation_*`), recovery
+  (`recovery*`), app lock / privacy settings (`privacy_and_lock`).
+
+**Added 2026-10-23 (history):**
+- Chat history survives a restart: stored 1:1 payloads (static pairwise key)
+  are decrypted via new `MessageService::open_stored_payload`. Paging is a
+  pure, unit-tested function (`apps/desktop/src/history.rs`): a chat is the
+  merge of two stored streams (my outbound id + the ONE inbound id every
+  peer files its messages to me under), and other peers' rows are skipped
+  because they fail to decrypt. "Load earlier messages" works, with scroll
+  anchoring so the view doesn't jump; chat-list previews come back too.
+- Core bug fixed along the way (found by the real-storage test): outgoing
+  `sequence` was the send time in ms, so same-millisecond messages tied and
+  reloaded in arbitrary order. It is now strictly increasing per device
+  (`next_sequence`, `crates/siar-messaging`), and both sides reload one order.
+- Known limits: groups have no history after restart (needs MLS state);
+  unread counts aren't persisted; messages from peers still using the old
+  random conversation ids can't be matched; attachments reload as references
+  (previews load on demand again).
+
+**Added 2026-10-23 (read state):**
+- Unread badges survive a restart. One number per chat is persisted
+  (`read-marks.txt`): the highest *incoming* sequence the user has seen.
+  Unread = incoming messages above it, recomputed from storage at start-up, so
+  there is no per-message flag to drift. A chat with no mark yet is treated as
+  already read (tracking starts then), so upgrading can't paint phantom
+  badges; a damaged file degrades the same way. Marks only ever move forward.
+  A chat counts as read when it is opened, when a message arrives while it is
+  on screen, or when you reply.
+- Limits: unread is computed from the newest page of history (50), so a badge
+  tops out there after a long absence; a chat shown while the window is
+  unfocused counts as read; groups keep in-session unread only.
+
 **Not done / known gaps**
-- "Load earlier messages": needs a decrypting history accessor in the core.
 - Calls, Files, Search destinations (no backend yet).
+- Device linking: needs a wire protocol that does not exist yet (no linking
+  message in `siar-protocol`) plus account-root key custody in the desktop app.
 - Not run on a real display/GPU (software-renderer + headless tests only).
 - Network "Online" means the transport endpoint is bound, not probed.
 - Slint pinned `=1.16.1` (1.17+ needs rustc 1.92; workspace is on 1.91).

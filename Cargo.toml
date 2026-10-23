@@ -27,6 +27,7 @@ members = [
     "crates/siar-transport",
     "crates/siar-messaging",
     "crates/siar-ui-state",
+    "crates/siar-ui-slint",
     "crates/siar-media-core",
     # siar-media-av1 and siar-media-audio are desktop-only (real Opus/
     # dav1d C dependencies with no configured Android cross-compilation
@@ -95,6 +96,7 @@ siar-startup-recovery = { path = "crates/siar-startup-recovery" }
 siar-transport = { path = "crates/siar-transport" }
 siar-messaging = { path = "crates/siar-messaging" }
 siar-ui-state = { path = "crates/siar-ui-state" }
+siar-ui-slint = { path = "crates/siar-ui-slint" }
 siar-media-core = { path = "crates/siar-media-core" }
 siar-connectivity = { path = "crates/siar-connectivity" }
 siar-transport-ble = { path = "crates/siar-transport-ble" }
@@ -107,6 +109,13 @@ siar-emergency-service = { path = "crates/siar-emergency-service" }
 # relationships, identifies transitive deps, and powers cargo-hakari for
 # build optimisation. Dev-only, never compiled into release binaries.
 guppy = "0.17"
+
+# --- Slint (desktop UI) ---
+# Pinned exactly: 1.16.1 is the newest release whose MSRV (1.88) fits the
+# workspace's rustc 1.91. 1.17+ require rustc 1.92 — bump rust-toolchain.toml
+# and every rust-version together before moving these.
+slint = { version = "=1.16.1", default-features = false }
+slint-build = "=1.16.1"
 
 # --- pure-Rust, zero-overhead-first choices ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }

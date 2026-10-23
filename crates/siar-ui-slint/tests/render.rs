@@ -45,6 +45,25 @@ fn every_page_renders() {
 }
 
 #[test]
+fn verification_and_identity_screens_render() {
+    let h = Harness::new(1180, 900);
+    let s = populate(&h.hub);
+    h.ui.window().global::<Theme>().set_mode(ThemeMode::Light);
+    h.flush();
+    h.app().set_page(Page::Contacts);
+    h.app()
+        .invoke_select_contact(s.bob_contact.to_string().into());
+    h.flush();
+    assert_drawn(&h.shot("contact-key-changed"));
+    h.app()
+        .invoke_select_contact(s.alice_contact.to_string().into());
+    h.flush();
+    assert_drawn(&h.shot("contact-verified"));
+    h.app().set_page(Page::Settings);
+    assert_drawn(&h.shot("settings-identity"));
+}
+
+#[test]
 fn compact_window_shows_one_pane_at_a_time() {
     let h = Harness::new(560, 700);
     populate(&h.hub);
@@ -81,4 +100,25 @@ fn empty_and_offline_states_render() {
         .update(|s| s.network.set_overall(siar_ui_state::NetworkState::Offline));
     h.flush();
     assert_drawn(&h.shot("empty-offline"));
+}
+
+#[test]
+fn load_earlier_row_renders_above_the_oldest_message() {
+    let h = Harness::new(1180, 760);
+    let s = populate(&h.hub);
+    h.ui.window().global::<Theme>().set_mode(ThemeMode::Light);
+    // A short chat (Bob, two messages) so the row at the top is on screen.
+    h.hub.update(|st| {
+        st.select(s.bob);
+        st.history.insert(
+            s.bob,
+            siar_ui_slint::HistoryPaging {
+                loaded: true,
+                next_before: Some(3),
+                exhausted: false,
+            },
+        );
+    });
+    h.flush();
+    assert_drawn(&h.shot("chat-load-earlier"));
 }

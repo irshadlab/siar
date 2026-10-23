@@ -6,7 +6,7 @@ import { Theme, WindowClass } from "theme.slint";
 import { AppState, ConversationRow, MessageRow } from "app_state.slint";
 import {
     Icon, IconButton, Avatar, Badge, TextField, TextArea, EmptyState,
-    RowSurface, PageTitle, Divider
+    RowSurface, PageTitle, Divider, Button
 } from "components.slint";
 
 // ------------------------------------------------------------------ sidebar
@@ -268,26 +268,44 @@ export component ChatView inherits Rectangle {
         }
         Divider { }
 
+        // Two scroll behaviours, kept apart on purpose:
+        //  * bottom: a NEW message (or a different chat) scrolls to the
+        //    newest. Keyed on the newest message id, so prepending older
+        //    history does not trigger it.
+        //  * anchor: after "Load earlier", keep the message the reader was
+        //    looking at where it was, by compensating for the height added
+        //    above it.
         private property <string> shown-conversation: AppState.selected-id;
-        changed shown-conversation => { scroll-timer.running = true; }
-        private property <int> message-count: AppState.messages.length;
-        changed message-count => {
+        changed shown-conversation => { anchoring = false; scroll-timer.running = true; }
+        private property <string> newest: AppState.newest-message-id;
+        changed newest => {
+            anchoring = false;
             timeline.viewport-y = min(0px, timeline.height - timeline.viewport-height);
             scroll-timer.running = true;
         }
-        // Keep the newest message in view. Deferred one tick so the
-        // viewport has been re-laid-out for the new row first.
-        // A few ticks: variable-height rows settle over more than one layout
-        // pass, so a single scroll can land a row short.
+        private property <int> message-count: AppState.messages.length;
+        changed message-count => {
+            if (anchoring) { scroll-timer.running = true; }
+        }
+        private property <bool> anchoring: false;
+        private property <length> anchor-height: 0px;
+        private property <length> anchor-y: 0px;
+        // Variable-height rows settle over more than one layout pass, so a
+        // single adjustment can land a row short: a few ticks.
         private property <int> ticks: 0;
         scroll-timer := Timer {
             interval: 16ms;
             running: false;
             triggered => {
-                timeline.viewport-y = min(0px, timeline.height - timeline.viewport-height);
+                if (anchoring) {
+                    timeline.viewport-y = min(0px, anchor-y - (timeline.viewport-height - anchor-height));
+                } else {
+                    timeline.viewport-y = min(0px, timeline.height - timeline.viewport-height);
+                }
                 ticks += 1;
                 if (ticks >= 4) {
                     ticks = 0;
+                    anchoring = false;
                     self.running = false;
                 }
             }
@@ -304,6 +322,23 @@ export component ChatView inherits Rectangle {
                 init => { scroll-timer.running = true; }
                 VerticalLayout {
                     padding-bottom: Theme.sp-md;
+                    if AppState.has-more-history: Rectangle {
+                        height: Theme.min-target + 2 * Theme.sp-sm;
+                        HorizontalLayout {
+                            alignment: center;
+                            padding: Theme.sp-sm;
+                            Button {
+                                text: "Load earlier messages";
+                                kind: "secondary";
+                                clicked => {
+                                    anchor-height = timeline.viewport-height;
+                                    anchor-y = timeline.viewport-y;
+                                    anchoring = true;
+                                    AppState.load-earlier();
+                                }
+                            }
+                        }
+                    }
                     for row in AppState.messages: MessageItem {
                         item: row;
                         list-width: timeline.width;

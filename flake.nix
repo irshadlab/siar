@@ -145,7 +145,7 @@
               || rel == "/assets" || lib.hasPrefix "/assets/" rel
             else
               (craneLib.filterCargoSources path type)
-              || (builtins.match ".*\\.(png|jpg|jpeg|svg|ico|css|sql|json|txt|proto|c|h|toml|lock)$" path != null);
+              || (builtins.match ".*\\.(png|jpg|jpeg|svg|ico|css|sql|json|txt|proto|c|h|toml|lock|slint)$" path != null);
 
         src = lib.cleanSourceWith {
           src = ./.;
@@ -268,7 +268,7 @@ DESKTOPEOF
           '';
 
           meta = with lib; {
-            description = "SIAR Desktop GUI client (Dioxus)";
+            description = "SIAR Desktop GUI client (Slint)";
             homepage = "https://github.com/irshadlab/siar";
             license = licenses.agpl3Plus;
             mainProgram = "siar-desktop";

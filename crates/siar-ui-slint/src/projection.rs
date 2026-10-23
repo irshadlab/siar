@@ -16,7 +16,7 @@ use slint::{
 };
 
 use crate::hub::UiHub;
-use crate::slices::{EventView, NoticeLevel, Slices};
+use crate::slices::{EventView, NoticeLevel, Slices, VerificationState};
 use crate::text;
 use crate::ui::{
     AppState, ContactRow, ConversationRow, DeviceRow, EventRow, GroupRow, InviteRow, MainWindow,
@@ -246,6 +246,12 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
             }
         }
     }
+    app.set_newest_message_id(msg_rows.last().map(|r| r.id.clone()).unwrap_or_default());
+    app.set_has_more_history(
+        selected
+            .and_then(|(id, _)| s.history.get(&id))
+            .is_some_and(|h| h.loaded && !h.exhausted),
+    );
     sync_model(&m.messages, msg_rows);
     // Forget decoded images that are no longer on screen.
     IMAGES.with(|c| {
@@ -267,6 +273,9 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
                 c.display_name.clone()
             };
             ContactRow {
+                verification: verification_code(
+                    s.contact_safety.get(&c.device_id).map(|x| x.state),
+                ),
                 hue: text::hue_for(&id),
                 selected: s.selected_contact == Some(c.device_id),
                 initial: text::initial(&name).into(),
@@ -299,11 +308,21 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
                 )
                 .into(),
             );
+            let safety = s.contact_safety.get(&c.device_id);
+            app.set_selected_contact_safety(
+                safety
+                    .map(|x| text::wrap_groups(&x.number, 3))
+                    .unwrap_or_default()
+                    .into(),
+            );
+            app.set_selected_contact_verification(verification_code(safety.map(|x| x.state)));
         }
         None => {
             app.set_selected_contact_id("".into());
             app.set_selected_contact_name("".into());
             app.set_selected_contact_detail("".into());
+            app.set_selected_contact_safety("".into());
+            app.set_selected_contact_verification(0);
         }
     }
 
@@ -372,7 +391,10 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
         })
         .collect();
     app.set_unresolved_events(all_events.iter().filter(|e| !e.resolved).count() as i32);
-    let criticals = s.security_events.unresolved_critical_events();
+    // The banner shows unresolved critical events the user has not already
+    // dismissed. Dismissal is local only (ui-ux-15 §98): the event stays
+    // unresolved and listed under Security.
+    let criticals = s.banner.visible_issues(&s.security_events);
     app.set_critical_count(criticals.len() as i32);
     app.set_critical_title(
         criticals
@@ -444,6 +466,46 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
     );
     sync_model(&m.devices, device_rows);
 
+    // ---- identity & diagnostics -------------------------------------------------------
+    match &s.own_identity {
+        Some(own) => {
+            app.set_own_fingerprint_short(own.short_fingerprint.clone().into());
+            app.set_own_fingerprint_full(own.full_fingerprint.clone().into());
+            app.set_own_key_health(own.key_health_message().into());
+        }
+        None => {
+            app.set_own_fingerprint_short("".into());
+            app.set_own_fingerprint_full("".into());
+            app.set_own_key_health("".into());
+        }
+    }
+    match &s.diagnostics {
+        Some(d) => {
+            app.set_diag_key_id(d.key_id.clone().into());
+            app.set_diag_signature(d.signature_status.clone().into());
+            app.set_diag_transport(d.transport_security_details.clone().into());
+        }
+        None => {
+            app.set_diag_key_id("".into());
+            app.set_diag_signature("".into());
+            app.set_diag_transport("".into());
+        }
+    }
+    let epochs: Vec<String> = s
+        .groups
+        .ordered()
+        .iter()
+        .map(|g| format!("{} · epoch {}", g.display_label, g.epoch))
+        .collect();
+    app.set_diag_epochs(
+        if epochs.is_empty() {
+            "No groups yet".to_string()
+        } else {
+            epochs.join("\n")
+        }
+        .into(),
+    );
+
     // ---- one-shot signals ----------------------------------------------------------
     if let Some(n) = s.notice.take() {
         app.set_notice_kind(match n.level {
@@ -458,6 +520,14 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
     }
     if std::mem::take(&mut s.open_content) {
         app.set_content_open(true);
+    }
+}
+
+fn verification_code(state: Option<VerificationState>) -> i32 {
+    match state {
+        Some(VerificationState::Verified) => 1,
+        Some(VerificationState::KeyChanged) => 2,
+        _ => 0,
     }
 }
 

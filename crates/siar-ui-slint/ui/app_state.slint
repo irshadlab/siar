@@ -43,6 +43,7 @@ export struct MessageRow {
     preview-height: length,
 }
 
+// verification: 0 = not verified, 1 = verified, 2 = key changed since verified
 export struct ContactRow {
     id: string,
     name: string,
@@ -50,6 +51,7 @@ export struct ContactRow {
     short-id: string,
     hue: int,
     selected: bool,
+    verification: int,
 }
 
 export struct GroupRow {
@@ -114,6 +116,13 @@ export global AppState {
     in property <string> my-key-package;
     in property <string> my-account-id;
     in property <string> my-device-id;
+    in property <string> own-fingerprint-short;
+    in property <string> own-fingerprint-full;
+    in property <string> own-key-health;
+    in property <string> diag-key-id;
+    in property <string> diag-epochs;
+    in property <string> diag-signature;
+    in property <string> diag-transport;
 
     // ---- chats ------------------------------------------------------------
     in property <[ConversationRow]> conversations;
@@ -123,6 +132,10 @@ export global AppState {
     in property <bool> selected-is-group: false;
     in property <bool> can-send: false;
     in property <int> total-unread: 0;
+    in property <bool> has-more-history: false;
+    // Changes only when the NEWEST message changes (new message, other
+    // conversation) — not when older history is prepended.
+    in property <string> newest-message-id;
     in-out property <string> conversation-filter;
     in-out property <string> composer-draft;
 
@@ -131,6 +144,8 @@ export global AppState {
     in property <string> selected-contact-id;
     in property <string> selected-contact-name;
     in property <string> selected-contact-detail;
+    in property <string> selected-contact-safety;
+    in property <int> selected-contact-verification: 0;
 
     // ---- groups -----------------------------------------------------------
     in property <[GroupRow]> groups;
@@ -157,6 +172,7 @@ export global AppState {
     // ---- UI → Rust --------------------------------------------------------
     callback send-message(string);
     callback open-conversation(string);
+    callback load-earlier();
     callback filter-conversations(string);
     callback draft-edited(string);
     callback pair-with-ticket(string) -> bool;
@@ -170,6 +186,9 @@ export global AppState {
     callback accept-invite(string, string) -> bool;          // conversation, pasted group state
     callback decline-invite(string);
     callback resolve-event(string);
+    callback dismiss-banner(string);
+    callback review-security();
+    callback set-contact-verified(string, bool);
     callback set-event-filter(int);
     callback settings-changed();
     callback load-attachment(string);

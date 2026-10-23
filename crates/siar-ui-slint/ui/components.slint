@@ -1,0 +1,527 @@
+// Shared components. Everything here consumes semantic tokens from
+// theme.slint only (ui-ux-22 §10), is keyboard-reachable (ui-ux-02 §32),
+// shows a visible focus ring (§72), and never relies on colour alone to
+// carry a state (ui-ux-22 §13).
+
+import { Theme } from "theme.slint";
+
+export component Icon inherits Image {
+    in property <color> tint: Theme.text-secondary;
+    in property <length> size: 20px * Theme.ui-scale;
+    width: size;
+    height: size;
+    colorize: tint;
+    image-fit: contain;
+}
+
+// Draws the focus ring just outside its parent.
+component FocusRing inherits Rectangle {
+    in property <bool> active;
+    in property <length> radius: Theme.radius-sm;
+    in property <length> host-width;
+    in property <length> host-height;
+    x: -2px;
+    y: -2px;
+    width: host-width + 4px;
+    height: host-height + 4px;
+    border-radius: radius + 2px;
+    border-width: active ? 2px : 0px;
+    border-color: Theme.focus-ring;
+    background: transparent;
+}
+
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> enabled: true;
+    // "primary" | "secondary" | "destructive" | "ghost"
+    in property <string> kind: "secondary";
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: text;
+    accessible-enabled: enabled;
+    accessible-action-default => { if (enabled) { root.clicked(); } }
+
+    private property <color> fg:
+        kind == "primary" ? Theme.action-primary-text
+        : kind == "inverse" ? Theme.text-inverse
+        : kind == "destructive" ? Theme.action-destructive
+        : Theme.text-primary;
+
+    min-height: Theme.min-target;
+    border-radius: Theme.radius-sm;
+    opacity: enabled ? 1.0 : 0.5;
+    border-width: kind == "secondary" || kind == "destructive" || kind == "inverse" ? 1px : 0px;
+    border-color: kind == "destructive" ? Theme.action-destructive
+        : kind == "inverse" ? Theme.text-inverse : Theme.border-strong;
+    background:
+        kind == "primary"
+            ? ((ta.pressed || ta.has-hover) && enabled ? Theme.action-primary-hover : Theme.action-primary)
+        : kind == "inverse" ? (ta.has-hover ? Theme.text-inverse.with-alpha(0.15) : transparent)
+        : ta.pressed && enabled ? Theme.surface-pressed
+        : ta.has-hover && enabled ? Theme.surface-hover
+        : transparent;
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { fs.focus(); root.clicked(); }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: Theme.sp-lg;
+        padding-right: Theme.sp-lg;
+        padding-top: Theme.sp-xs;
+        padding-bottom: Theme.sp-xs;
+        spacing: Theme.sp-sm;
+        alignment: center;
+        if root.has-icon: Icon {
+            source: root.icon;
+            tint: root.fg;
+            size: 16px * Theme.ui-scale;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            color: root.fg;
+            font-size: Theme.ty-label-lg;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    FocusRing { active: fs.has-focus; host-width: parent.width; host-height: parent.height; }
+}
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;      // accessible name + tooltip text
+    in property <bool> enabled: true;
+    in property <bool> selected: false;
+    in property <color> tint: Theme.text-secondary;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: label;
+    accessible-enabled: enabled;
+    accessible-action-default => { if (enabled) { root.clicked(); } }
+
+    width: Theme.min-target;
+    height: Theme.min-target;
+    border-radius: Theme.radius-sm;
+    opacity: enabled ? 1.0 : 0.45;
+    background: selected ? Theme.surface-selected
+        : ta.pressed && enabled ? Theme.surface-pressed
+        : ta.has-hover && enabled ? Theme.surface-hover : transparent;
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { fs.focus(); root.clicked(); }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Icon {
+        source: root.icon;
+        tint: root.selected ? Theme.action-primary : root.tint;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+    FocusRing { active: fs.has-focus; host-width: parent.width; host-height: parent.height; }
+}
+
+export component TextField inherits Rectangle {
+    in property <string> placeholder;
+    in property <string> label;
+    in-out property <string> text <=> input.text;
+    in property <bool> read-only: false;
+    in property <bool> mono: false;
+    in property <bool> enabled: true;
+    callback accepted(string);
+    callback edited(string);
+
+    public function copy-all() { input.select-all(); input.copy(); }
+    public function paste-over() { input.select-all(); input.paste(); }
+    public function clear-text() { input.text = ""; }
+
+    min-height: Theme.min-target;
+    border-radius: Theme.radius-sm;
+    background: Theme.surface-input;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.focus-ring : Theme.border-strong;
+    opacity: enabled ? 1.0 : 0.55;
+    accessible-role: text-input;
+    accessible-label: label != "" ? label : placeholder;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-md;
+        padding-right: Theme.sp-md;
+        padding-top: Theme.sp-sm;
+        padding-bottom: Theme.sp-sm;
+        input := TextInput {
+            single-line: true;
+            enabled: root.enabled;
+            read-only: root.read-only;
+            font-size: Theme.ty-body-md;
+            font-family: root.mono ? Theme.mono-family : "";
+            color: Theme.text-primary;
+            selection-background-color: Theme.action-primary;
+            selection-foreground-color: Theme.action-primary-text;
+            vertical-alignment: center;
+            accepted => { root.accepted(self.text); }
+            edited => { root.edited(self.text); }
+        }
+    }
+    Text {
+        x: Theme.sp-md;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 2 * Theme.sp-md;
+        visible: input.text == "";
+        text: root.placeholder;
+        color: Theme.text-muted;
+        font-size: Theme.ty-body-md;
+        overflow: elide;
+    }
+}
+
+// Multi-line input. `submit-on-enter` makes plain Enter send and
+// Shift+Enter insert a newline (ui-ux-06 composer convention).
+export component TextArea inherits Rectangle {
+    in property <string> placeholder;
+    in property <string> label;
+    in-out property <string> text <=> input.text;
+    in property <bool> enabled: true;
+    in property <bool> mono: false;
+    in property <bool> submit-on-enter: false;
+    in property <length> max-input-height: 140px * Theme.ui-scale;
+    in property <length> min-input-height: Theme.min-target;
+    callback submitted(string);
+    callback edited(string);
+
+    public function clear-text() { input.text = ""; }
+    public function paste-over() { input.select-all(); input.paste(); }
+
+    private property <length> content-height: input.preferred-height + 2 * Theme.sp-sm;
+
+    height: min(max-input-height, max(min-input-height, content-height));
+    border-radius: Theme.radius-md;
+    background: Theme.surface-input;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.focus-ring : Theme.border-strong;
+    opacity: enabled ? 1.0 : 0.55;
+    accessible-role: text-input;
+    accessible-label: label != "" ? label : placeholder;
+
+    fs := FocusScope {
+        capture-key-pressed(event) => {
+            if (root.submit-on-enter && event.text == Key.Return && !event.modifiers.shift) {
+                root.submitted(input.text);
+                return accept;
+            }
+            return reject;
+        }
+        Flickable {
+            x: Theme.sp-md;
+            y: 0px;
+            width: parent.width - 2 * Theme.sp-md;
+            height: parent.height;
+            viewport-height: max(self.height, content-height);
+            input := TextInput {
+                x: 0px;
+                y: Theme.sp-sm;
+                width: parent.width;
+                wrap: word-wrap;
+                single-line: false;
+                enabled: root.enabled;
+                font-size: Theme.ty-body-lg;
+                font-family: root.mono ? Theme.mono-family : "";
+                color: Theme.text-primary;
+                selection-background-color: Theme.action-primary;
+                selection-foreground-color: Theme.action-primary-text;
+                edited => { root.edited(self.text); }
+            }
+        }
+    }
+    Text {
+        x: Theme.sp-md;
+        y: Theme.sp-sm;
+        width: parent.width - 2 * Theme.sp-md;
+        visible: input.text == "";
+        text: root.placeholder;
+        color: Theme.text-muted;
+        font-size: Theme.ty-body-lg;
+        overflow: elide;
+    }
+}
+
+// Selectable, read-only technical text (tickets, ids, key packages)
+// with a copy button — ui-ux-22 §32/§41: monospace is for technical text.
+export component CopyField inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> empty-text: "Not available yet";
+    callback copied();
+
+    private property <bool> has-value: value != "";
+
+    background: Theme.surface-raised;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+
+    VerticalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-xs;
+        Text {
+            text: root.label;
+            color: Theme.text-secondary;
+            font-size: Theme.ty-label-md;
+            font-weight: 600;
+        }
+        HorizontalLayout {
+            spacing: Theme.sp-sm;
+            Rectangle {
+                horizontal-stretch: 1;
+                preferred-height: max(input.preferred-height, Theme.min-target - Theme.sp-sm);
+                input := TextInput {
+                    width: parent.width;
+                    y: (parent.height - self.height) / 2;
+                    read-only: true;
+                    wrap: word-wrap;
+                    text: root.has-value ? root.value : root.empty-text;
+                    font-size: Theme.ty-body-sm;
+                    font-family: root.has-value ? Theme.mono-family : "";
+                    color: root.has-value ? Theme.text-primary : Theme.text-muted;
+                    selection-background-color: Theme.action-primary;
+                    selection-foreground-color: Theme.action-primary-text;
+                    accessible-label: root.label;
+                }
+            }
+            IconButton {
+                icon: @image-url("icons/copy.svg");
+                label: "Copy " + root.label;
+                enabled: root.has-value;
+                clicked => {
+                    input.select-all();
+                    input.copy();
+                    root.copied();
+                }
+            }
+        }
+    }
+}
+
+export component Avatar inherits Rectangle {
+    // Rust supplies the initial (Slint has no substring) — keeps the
+    // person identifiable by more than colour (§13).
+    in property <string> initial: "?";
+    in property <int> hue: 210;
+    in property <length> size: 40px * Theme.ui-scale;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    background: Colors.hsv(hue, Theme.dark ? 0.50 : 0.55, Theme.dark ? 0.55 : 0.72, 1.0);
+    accessible-role: none;
+    Text {
+        text: root.initial;
+        color: #ffffff;
+        font-size: root.size * 0.42;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component Badge inherits Rectangle {
+    in property <int> count;
+    visible: count > 0;
+    width: max(20px * Theme.ui-scale, badge-text.preferred-width + 10px * Theme.ui-scale);
+    height: 20px * Theme.ui-scale;
+    border-radius: Theme.radius-pill;
+    background: Theme.action-primary;
+    accessible-role: none;
+    badge-text := Text {
+        text: root.count > 99 ? "99+" : root.count;
+        color: Theme.action-primary-text;
+        font-size: Theme.ty-label-sm;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Status chip: always icon + text + colour (§13).
+export component StatusChip inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <color> tone: Theme.text-secondary;
+    height: 24px * Theme.ui-scale;
+    border-radius: Theme.radius-pill;
+    border-width: 1px;
+    border-color: tone;
+    background: transparent;
+    accessible-role: none;
+    HorizontalLayout {
+        padding-left: Theme.sp-sm;
+        padding-right: Theme.sp-md;
+        spacing: Theme.sp-xs;
+        alignment: center;
+        Icon {
+            source: root.icon;
+            tint: root.tone;
+            size: 13px * Theme.ui-scale;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            color: root.tone;
+            font-size: Theme.ty-label-md;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A selectable list row (conversation, contact, group, device…).
+export component RowSurface inherits Rectangle {
+    in property <bool> selected: false;
+    in property <string> label;     // accessible name
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+
+    border-radius: Theme.radius-md;
+    background: selected ? Theme.surface-selected
+        : ta.pressed ? Theme.surface-pressed
+        : ta.has-hover ? Theme.surface-hover : transparent;
+
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { fs.focus(); root.clicked(); }
+    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == " " || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    @children
+    FocusRing { active: fs.has-focus; radius: Theme.radius-md; host-width: parent.width; host-height: parent.height; }
+}
+
+export component SectionTitle inherits Text {
+    color: Theme.text-secondary;
+    font-size: Theme.ty-label-md;
+    font-weight: 700;
+    accessible-role: none;
+}
+
+export component PageTitle inherits Text {
+    color: Theme.text-primary;
+    font-size: Theme.ty-title-lg;
+    font-weight: 700;
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border-subtle;
+}
+
+// §24 empty / error / offline states: say what happened, what it means,
+// and what to do next.
+export component EmptyState inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> body;
+    in property <color> tone: Theme.text-muted;
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.sp-md;
+        padding: Theme.sp-xl;
+        Icon {
+            source: root.icon;
+            tint: root.tone;
+            size: 40px * Theme.ui-scale;
+            x: (parent.width - self.width) / 2;
+        }
+        Text {
+            text: root.title;
+            color: Theme.text-primary;
+            font-size: Theme.ty-title-md;
+            font-weight: 700;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Text {
+            text: root.body;
+            color: Theme.text-secondary;
+            font-size: Theme.ty-body-md;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        @children
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current;
+    callback selected(int);
+
+    height: Theme.min-target;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    background: Theme.surface-raised;
+    clip: true;
+    accessible-role: tab-list;
+
+    HorizontalLayout {
+        for option[i] in root.options: Rectangle {
+            width: root.width / max(1, root.options.length);
+            background: i == root.current ? Theme.action-primary
+                : ta.has-hover ? Theme.surface-hover : transparent;
+            accessible-role: tab;
+            accessible-label: option;
+            accessible-checkable: true;
+            accessible-checked: i == root.current;
+            accessible-action-default => { root.current = i; root.selected(i); }
+            ta := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.current = i; root.selected(i); }
+            }
+            Text {
+                text: option;
+                color: i == root.current ? Theme.action-primary-text : Theme.text-primary;
+                font-size: Theme.ty-label-md;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

@@ -331,3 +331,185 @@ fn a_full_command_queue_tells_the_user_instead_of_dropping_silently() {
         .get_notice_text()
         .contains("busy"));
 }
+
+#[test]
+fn dismissing_the_banner_hides_it_but_never_resolves_the_event() {
+    let h = Harness::new(1180, 760);
+    populate(&h.hub);
+    h.flush();
+    assert_eq!(h.app().get_critical_count(), 1);
+    let id = h.app().get_critical_id();
+    h.app().invoke_dismiss_banner(id);
+    h.flush();
+    // banner gone...
+    assert_eq!(h.app().get_critical_count(), 0);
+    // ...but the issue is still open and still listed (ui-ux-15 §98).
+    assert_eq!(h.app().get_unresolved_events(), 3);
+    assert_eq!(h.app().get_events().row_count(), 3);
+    h.app().invoke_set_event_filter(2);
+    h.flush();
+    let critical = h.app().get_events().row_data(0).unwrap();
+    assert!(
+        !critical.resolved,
+        "dismissal must not resolve a critical event"
+    );
+}
+
+#[test]
+fn review_jumps_to_the_security_events() {
+    let h = Harness::new(1180, 760);
+    populate(&h.hub);
+    h.app().set_page(Page::Chats);
+    h.app().invoke_review_security();
+    assert_eq!(h.app().get_page(), Page::Security);
+    assert_eq!(
+        h.app().get_security_tab(),
+        siar_ui_slint::SecurityTab::Events
+    );
+}
+
+#[test]
+fn verification_states_reach_the_contact_rows_and_detail() {
+    let h = Harness::new(1180, 760);
+    let s = populate(&h.hub);
+    h.flush();
+    let by_name = |n: &str| {
+        (0..h.app().get_contacts().row_count())
+            .map(|i| h.app().get_contacts().row_data(i).unwrap())
+            .find(|r| r.name == n)
+            .unwrap()
+    };
+    assert_eq!(by_name("Alice Rahman").verification, 1);
+    assert_eq!(by_name("Bob").verification, 2);
+
+    h.app()
+        .invoke_select_contact(s.bob_contact.to_string().into());
+    h.flush();
+    assert_eq!(h.app().get_selected_contact_verification(), 2);
+    // 60 digits shown a few groups at a time, one line per 3 groups
+    let n = h.app().get_selected_contact_safety();
+    assert_eq!(n.lines().count(), 4);
+    assert!(n.lines().all(|l| l.split(' ').count() == 3));
+}
+
+#[test]
+fn marking_verified_is_a_command_not_a_local_assumption() {
+    let mut h = Harness::new(1180, 760);
+    let s = populate(&h.hub);
+    h.app()
+        .invoke_set_contact_verified(s.alice_contact.to_string().into(), true);
+    h.app()
+        .invoke_set_contact_verified(s.alice_contact.to_string().into(), false);
+    h.app().invoke_set_contact_verified("garbage".into(), true);
+    let cmds = h.commands();
+    assert_eq!(cmds.len(), 2);
+    assert!(matches!(
+        cmds[0],
+        AppCommand::SetContactVerified { verified: true, .. }
+    ));
+    assert!(matches!(
+        cmds[1],
+        AppCommand::SetContactVerified {
+            verified: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn identity_and_diagnostics_are_projected() {
+    let h = Harness::new(1180, 760);
+    populate(&h.hub);
+    h.flush();
+    assert_eq!(h.app().get_own_fingerprint_short(), "a1b2 c3d4 e5f6 0718");
+    assert!(h.app().get_own_fingerprint_full().len() > h.app().get_own_fingerprint_short().len());
+    assert_eq!(
+        h.app().get_own_key_health(),
+        "Your security keys are up to date."
+    );
+    assert!(h.app().get_diag_transport().contains("TLS 1.3"));
+    assert_eq!(h.app().get_diag_epochs(), "Group 3f9a21bc · epoch 2");
+    // the hard rule (§134): no private-key text anywhere in diagnostics
+    for text in [
+        h.app().get_diag_key_id(),
+        h.app().get_diag_signature(),
+        h.app().get_diag_transport(),
+    ] {
+        assert!(!text.to_lowercase().contains("private"));
+    }
+}
+
+#[test]
+fn load_earlier_is_offered_only_when_more_history_exists_and_targets_the_open_chat() {
+    let mut h = Harness::new(1180, 760);
+    let s = populate(&h.hub);
+    h.flush();
+    assert!(
+        !h.app().get_has_more_history(),
+        "nothing loaded from storage yet"
+    );
+
+    h.hub.update(|st| {
+        st.history.insert(
+            s.alice,
+            siar_ui_slint::HistoryPaging {
+                loaded: true,
+                next_before: Some(5),
+                exhausted: false,
+            },
+        );
+    });
+    h.flush();
+    assert!(h.app().get_has_more_history());
+    h.app().invoke_load_earlier();
+    assert!(
+        matches!(&h.commands()[0], AppCommand::LoadEarlierMessages { conversation } if *conversation == s.alice)
+    );
+
+    h.hub.update(|st| {
+        st.history.insert(
+            s.alice,
+            siar_ui_slint::HistoryPaging {
+                loaded: true,
+                next_before: None,
+                exhausted: true,
+            },
+        );
+    });
+    h.flush();
+    assert!(!h.app().get_has_more_history());
+}
+
+#[test]
+fn prepending_history_does_not_change_the_newest_message_signal() {
+    use siar_domain::{DeliveryState, MessageId};
+    let h = Harness::new(1180, 760);
+    let s = populate(&h.hub);
+    h.flush();
+    let newest = h.app().get_newest_message_id();
+    assert!(!newest.is_empty());
+    let count_before = h.app().get_messages().row_count();
+
+    h.hub.update(|st| {
+        st.apply_history_page(
+            s.alice,
+            vec![siar_ui_state::TimelineWindow {
+                message_id: MessageId::new(),
+                sequence: 1,
+                content: text("from long ago"),
+                delivery_state: DeliveryState::Delivered,
+                from_me: false,
+            }],
+            Some(1),
+            false,
+        );
+    });
+    h.flush();
+    assert_eq!(h.app().get_messages().row_count(), count_before + 1);
+    // scroll-to-bottom is keyed on this; if it moved, loading history would yank the view down
+    assert_eq!(h.app().get_newest_message_id(), newest);
+    assert_eq!(
+        h.app().get_messages().row_data(0).unwrap().text,
+        "from long ago"
+    );
+}

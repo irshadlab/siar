@@ -8,7 +8,7 @@ use siar_domain::{
     AccountId, AttachmentReference, BlobSize, ConversationId, DeliveryState, DeviceId, MediaType,
     MessageContent, MessageId, MessageText,
 };
-use siar_ui_slint::{SiarUi, UiHub, UiOptions, UiSettings};
+use siar_ui_slint::{ContactSafety, SiarUi, UiHub, UiOptions, UiSettings, VerificationState};
 use siar_ui_state::{
     AppCommand, ConversationKind, ConversationSummary, DeviceKind, DeviceSecurityFlag,
     DeviceSecurityView, DeviceTrustState, GroupSummary, NetworkState, PendingInvite, SavedContact,
@@ -152,6 +152,8 @@ pub struct Sample {
     pub alice: ConversationId,
     pub bob: ConversationId,
     pub team: ConversationId,
+    pub alice_contact: DeviceId,
+    pub bob_contact: DeviceId,
 }
 
 /// A realistic populated state exercising every row type.
@@ -160,6 +162,7 @@ pub fn populate(hub: &UiHub) -> Sample {
     let bob = ConversationId::new();
     let team = ConversationId::new();
     let device_a = DeviceId::new();
+    let device_b = DeviceId::new();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -214,6 +217,29 @@ pub fn populate(hub: &UiHub) -> Sample {
             ticket_text: "ticket-a".into(),
             key_package_b64: None,
         });
+        s.contacts.upsert(SavedContact {
+            device_id: device_b,
+            account_id: AccountId::new(),
+            display_name: "Bob".into(),
+            ticket_text: "ticket-b".into(),
+            key_package_b64: None,
+        });
+        let number = "12345 67890 12345 67890 12345 67890 12345 67890 12345 67890 12345 67890".to_string();
+        s.contact_safety.insert(device_a, ContactSafety { number: number.clone(), state: VerificationState::Verified });
+        s.contact_safety.insert(device_b, ContactSafety { number, state: VerificationState::KeyChanged });
+        s.own_identity = Some(siar_ui_state::OwnIdentityView {
+            account: AccountId::new(),
+            short_fingerprint: "a1b2 c3d4 e5f6 0718".into(),
+            full_fingerprint: "a1b2 c3d4 e5f6 0718 293a 4b5c 6d7e 8f90 a1b2 c3d4 e5f6 0718 293a 4b5c 6d7e 8f90".into(),
+            created_at_millis: now,
+            key_health: siar_ui_state::IdentityKeyHealth::Healthy,
+        });
+        s.diagnostics = Some(siar_ui_state::SecurityDiagnosticDetail {
+            key_id: "a1b2 c3d4 e5f6 0718".into(),
+            epoch_id: String::new(),
+            signature_status: "Messages are signed with this device’s Ed25519 key.".into(),
+            transport_security_details: "QUIC with TLS 1.3 (iroh) · endpoint 7fa09c1e".into(),
+        });
         s.groups.upsert(GroupSummary {
             conversation_id: team,
             display_label: "Group 3f9a21bc".into(),
@@ -267,5 +293,11 @@ pub fn populate(hub: &UiHub) -> Sample {
         unread_count: 0,
         kind: ConversationKind::Direct,
     };
-    Sample { alice, bob, team }
+    Sample {
+        alice,
+        bob,
+        team,
+        alice_contact: device_a,
+        bob_contact: device_b,
+    }
 }

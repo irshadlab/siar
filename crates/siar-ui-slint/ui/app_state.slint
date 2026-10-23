@@ -1,0 +1,176 @@
+// The whole contract between the Slint UI and Rust.
+//
+//  * Rust → UI: `in` properties, filled by `projection.rs` from the
+//    `siar-ui-state` slices (the UI never holds domain objects, only
+//    flat display rows).
+//  * UI → Rust: callbacks. Each one is turned into an `AppCommand` (or a
+//    local slice mutation) by `bridge.rs`. The UI never calls
+//    siar-messaging / siar-transport — the crate doesn't even depend on
+//    them, so that boundary is enforced by the compiler, not by review.
+
+export enum Page { chats, contacts, groups, security, connect, settings }
+export enum SecurityTab { events, devices }
+export enum NoticeKind { info, success, warning, error }
+
+export struct ConversationRow {
+    id: string,
+    title: string,
+    preview: string,
+    initial: string,
+    unread: int,
+    is-group: bool,
+    hue: int,
+    selected: bool,
+}
+
+// kind: 0 = text, 1 = image attachment, 2 = other attachment
+// preview-state (kind 1): 0 = not requested, 1 = loading, 2 = ready, 3 = failed
+// status-icon: 0 = none, 1 = pending, 2 = sent, 3 = delivered, 4 = read,
+//              5 = failed, 6 = carried by peers (NOT delivery — next.md §62)
+export struct MessageRow {
+    id: string,
+    kind: int,
+    text: string,
+    from-me: bool,
+    group-start: bool,
+    status-icon: int,
+    status-label: string,
+    attachment-label: string,
+    preview: image,
+    preview-state: int,
+    preview-error: string,
+    preview-width: length,
+    preview-height: length,
+}
+
+export struct ContactRow {
+    id: string,
+    name: string,
+    initial: string,
+    short-id: string,
+    hue: int,
+    selected: bool,
+}
+
+export struct GroupRow {
+    id: string,
+    label: string,
+    members: string,
+    admin: bool,
+    epoch: string,
+    selected: bool,
+}
+
+export struct InviteRow {
+    id: string,
+    from: string,
+}
+
+// severity: 0 = info, 1 = warning, 2 = critical
+export struct EventRow {
+    id: string,
+    title: string,
+    severity: int,
+    severity-label: string,
+    resolved: bool,
+}
+
+// kind-icon: 0 = desktop/laptop, 1 = phone/tablet, 2 = server, 3 = unknown
+// status: 0 = trusted, 1 = pending, 2 = revoked, 3 = compromised, 4 = unknown
+export struct DeviceRow {
+    id: string,
+    name: string,
+    kind-label: string,
+    kind-icon: int,
+    status: int,
+    status-label: string,
+    last-active: string,
+    is-this-device: bool,
+    flags: string,
+    // Non-empty only on the first row of a section ("This device",
+    // "Trusted devices", "Pending approval", "Revoked / history").
+    section-title: string,
+}
+
+export global AppState {
+    // ---- navigation (UI-owned) -----------------------------------------
+    in-out property <Page> page: Page.chats;
+    in-out property <SecurityTab> security-tab: SecurityTab.events;
+    // Compact layouts show list OR content, never overlapping panes
+    // (ui-ux-02 §17): true = the content pane is showing.
+    in-out property <bool> content-open: false;
+
+    // ---- lifecycle ------------------------------------------------------
+    in property <bool> ready: false;
+    in property <string> startup-error;
+
+    // ---- network (ui-ux-24 §offline) -----------------------------------
+    // 0 = connecting, 1 = online, 2 = offline
+    in property <int> network-kind: 0;
+    in property <string> network-label: "Connecting…";
+
+    // ---- identity -------------------------------------------------------
+    in property <string> my-ticket;
+    in property <string> my-key-package;
+    in property <string> my-account-id;
+    in property <string> my-device-id;
+
+    // ---- chats ------------------------------------------------------------
+    in property <[ConversationRow]> conversations;
+    in property <[MessageRow]> messages;
+    in property <string> selected-id;
+    in property <string> selected-title;
+    in property <bool> selected-is-group: false;
+    in property <bool> can-send: false;
+    in property <int> total-unread: 0;
+    in-out property <string> conversation-filter;
+    in-out property <string> composer-draft;
+
+    // ---- contacts -------------------------------------------------------
+    in property <[ContactRow]> contacts;
+    in property <string> selected-contact-id;
+    in property <string> selected-contact-name;
+    in property <string> selected-contact-detail;
+
+    // ---- groups -----------------------------------------------------------
+    in property <[GroupRow]> groups;
+    in property <[InviteRow]> invites;
+    in property <string> selected-group-id;
+    in property <string> selected-group-label;
+    in property <bool> selected-group-admin: false;
+
+    // ---- security -------------------------------------------------------
+    in property <[EventRow]> events;
+    in property <[DeviceRow]> devices;
+    in-out property <int> event-filter: 0;   // 0 all, 1 unresolved, 2 critical
+    in property <int> unresolved-events: 0;
+    in property <int> critical-count: 0;
+    in property <string> critical-title;
+    in property <string> critical-id;
+
+    // ---- transient notice (validation errors, copy confirmation) -------
+    in-out property <string> notice-text;
+    in-out property <NoticeKind> notice-kind: NoticeKind.info;
+
+    // Theme / density / scale live on the `Theme` global (theme.slint);
+    // the host persists them when this fires.
+    // ---- UI → Rust --------------------------------------------------------
+    callback send-message(string);
+    callback open-conversation(string);
+    callback filter-conversations(string);
+    callback draft-edited(string);
+    callback pair-with-ticket(string) -> bool;
+    callback use-contact(string);
+    callback select-contact(string);
+    callback save-contact(string, string, string, string) -> bool;   // name, account, device, ticket
+    callback remove-contact(string);
+    callback create-group();
+    callback select-group(string);
+    callback add-member(string, string, string, string) -> bool;     // account, device, ticket, key package
+    callback accept-invite(string, string) -> bool;          // conversation, pasted group state
+    callback decline-invite(string);
+    callback resolve-event(string);
+    callback set-event-filter(int);
+    callback settings-changed();
+    callback load-attachment(string);
+}

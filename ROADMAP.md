@@ -236,6 +236,39 @@ section ranges, and the four-item table: `docs/docs/28-production-security-e2ee-
 
 ---
 
+## Desktop UI toolkit change: Dioxus → Slint (2026-10-22)
+
+The desktop shell no longer uses Dioxus (WebView). It is now Slint, in a new
+crate `crates/siar-ui-slint`; `apps/desktop` is a thin core-wiring shell.
+Android stays Jetpack Compose, unchanged. The `ui-ux-NN` specs describe the
+*design* (shell, tokens, states); only their Dioxus-specific implementation
+wording (signals, rsx) is superseded.
+
+**Done and verified** (40 UI tests + 123 ui-state tests + desktop tests, all
+green; plus an end-to-end test with two real cores — pair, send, receive,
+ACK → Delivered):
+- `ui-ux-22` design tokens as the `Theme` global (semantic roles, light/dark/
+  high-contrast, density, UI scale, window classes); components consume
+  semantic tokens only.
+- `ui-ux-02` shell: rail, adaptive sidebar/content (one pane on compact
+  windows), status bar, native window decorations.
+- Chats (`ui-ux-04/05/06` subset): conversation list + filter, bottom-anchored
+  timeline, image previews, honest "carried by peers — not delivered" state,
+  composer (Enter / Shift+Enter).
+- Contacts, groups + invites + add-member, connect/pairing, settings
+  (persisted), security events + banner + devices (`ui-ux-15`).
+- Core wiring fixes vs the Dioxus shell: one stable conversation per peer,
+  per-conversation timelines, frames routed by sender, real delivery ticks
+  (storage poll), user-visible errors instead of log-only.
+
+**Not done / known gaps**
+- "Load earlier messages": needs a decrypting history accessor in the core.
+- Calls, Files, Search destinations (no backend yet).
+- Not run on a real display/GPU (software-renderer + headless tests only).
+- Network "Online" means the transport endpoint is bound, not probed.
+- Slint pinned `=1.16.1` (1.17+ needs rustc 1.92; workspace is on 1.91).
+- Run `cargo hakari generate` (workspace-hack lost its Dioxus-only entry).
+
 ## Tier 2 — UI/UX (27 specs, `ui-ux-01` through `ui-ux-27`)
 
 **1 of 27 specs touched (partially)** — `ui-ux-15` Security Center is

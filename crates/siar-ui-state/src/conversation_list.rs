@@ -52,6 +52,14 @@ impl ConversationListState {
         }
     }
 
+    /// Sets an absolute unread count (restored from storage after a
+    /// restart, where counting up one message at a time doesn't apply).
+    pub fn set_unread(&mut self, conversation: ConversationId, count: u32) {
+        if let Some(c) = self.conversations.iter_mut().find(|c| c.id == conversation) {
+            c.unread_count = count;
+        }
+    }
+
     pub fn increment_unread(&mut self, conversation: ConversationId) {
         if let Some(c) = self.conversations.iter_mut().find(|c| c.id == conversation) {
             c.unread_count = c.unread_count.saturating_add(1);
@@ -139,6 +147,18 @@ mod tests {
             state.ordered()[0].last_message_preview.as_deref(),
             Some("hey")
         );
+    }
+
+    #[test]
+    fn set_unread_overrides_and_ignores_unknown_conversations() {
+        let mut state = ConversationListState::new();
+        let id = ConversationId::new();
+        state.upsert(summary(id, "Bob"));
+        state.increment_unread(id);
+        state.set_unread(id, 7);
+        assert_eq!(state.ordered()[0].unread_count, 7);
+        state.set_unread(ConversationId::new(), 3); // no panic, no change
+        assert_eq!(state.ordered()[0].unread_count, 7);
     }
 
     #[test]

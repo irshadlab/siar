@@ -90,6 +90,17 @@ pub enum AppCommand {
     PairWithTicket {
         ticket_text: String,
     },
+    /// Record (or clear) that the user compared this contact's safety
+    /// number out of band. The core remembers the contact's key at that
+    /// moment, so a later key change is detected as "identity changed".
+    SetContactVerified {
+        device_id: siar_domain::DeviceId,
+        verified: bool,
+    },
+    /// Load the next page of older messages for a 1:1 conversation.
+    LoadEarlierMessages {
+        conversation: siar_domain::ConversationId,
+    },
     /// Start/open the direct conversation with a saved contact.
     UseContact {
         device_id: siar_domain::DeviceId,

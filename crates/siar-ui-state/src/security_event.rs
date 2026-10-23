@@ -178,6 +178,20 @@ impl SecurityEventFilter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SecurityEventId(u64);
 
+impl SecurityEventId {
+    /// The raw sequence number, for UIs that must round-trip an id
+    /// through a string-keyed row (the Slint desktop UI does).
+    pub fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Rebuilds an id from `get()`'s output. An id that matches no event
+    /// is harmless: `SecurityEventState::resolve` ignores it.
+    pub fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
 /// §41's actions have no spec-given enumeration anywhere in this
 /// document — same under-specification as `security_center.rs`'s
 /// `DeviceSecurityFlag`. This is a minimal, honestly-scoped set drawn

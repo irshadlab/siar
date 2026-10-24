@@ -354,7 +354,13 @@ pub(crate) fn install(window: &MainWindow, hub: &UiHub) {
                 return false;
             };
             let state = state.trim().to_string();
-            if state.is_empty() {
+            let carries_state = hub.read(|s| {
+                s.pending_invites
+                    .pending()
+                    .iter()
+                    .any(|i| i.conversation_id == conversation && i.carries_state)
+            });
+            if state.is_empty() && !carries_state {
                 hub.notify(
                     NoticeLevel::Warning,
                     "Paste the group state the admin sent you first.",

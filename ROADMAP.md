@@ -291,7 +291,7 @@ ACK → Delivered):
   `sequence` was the send time in ms, so same-millisecond messages tied and
   reloaded in arbitrary order. It is now strictly increasing per device
   (`next_sequence`, `crates/siar-messaging`), and both sides reload one order.
-- Known limits: groups have no history after restart (needs MLS state);
+- Known limits: groups have no history after restart (MLS ratchets forward, see group notes);
   unread counts aren't persisted; messages from peers still using the old
   random conversation ids can't be matched; attachments reload as references
   (previews load on demand again).
@@ -308,6 +308,49 @@ ACK → Delivered):
 - Limits: unread is computed from the newest page of history (50), so a badge
   tops out there after a long absence; a chat shown while the window is
   unfocused counts as read; groups keep in-session unread only.
+
+**Added 2026-10-23 (group persistence + two core bugs):**
+- MLS group state now survives a restart. `GroupService::new_persistent`
+  keeps one SQLite file per group under `<data dir>/mls` plus an `index.txt`
+  (conversation → file, MLS group id, signing *public* key; no secrets), and
+  `restore_mls_sessions()` reopens them (a bad file loses only its group).
+  A published key package is persisted too, so the one already handed to
+  someone stays valid after a restart (`ensure_key_package_published`). The
+  desktop restores groups into the chat/group lists at start-up.
+  `GroupService::new` is unchanged (scratch directory, not persistent) for
+  the CLI and Android.
+- Bug found by the first real MLS round-trip test: **no member could ever
+  join a group** — groups were created without the ratchet-tree extension, so
+  every Welcome failed with `MissingRatchetTree`. Fixed in
+  `siar-crypto-mls::MlsGroupSession::create`.
+- Bug found by the first group-reload test: the crate's `PostcardCodec`
+  could not read back some openmls state (`WontImplement`), so every reload
+  failed. Replaced with `JsonCodec` (serde_json); this is local on-disk
+  state, not hot-path networking.
+- Tests: 3 crypto-level reload tests, 2 `GroupService` end-to-end tests
+  (create → add → welcome → join → messages → restart BOTH sides → messages
+  again; pre-restart key package still usable), 4 index tests, and a
+  desktop-level restart test.
+- Still open for groups (the invite-state gap listed here earlier is fixed,
+  see the next section): a member can only message members it has saved as
+  contacts (the device directory has no discovery); and group history
+  cannot be re-read after a restart by design (MLS ratchets forward, so old
+  ciphertext is not re-decryptable — it would need plaintext-at-rest).
+
+**Added 2026-10-24 (group invites):**
+- A group invite is now one step for the admin and one tap for the invitee.
+  The Welcome envelope carries a versioned `WelcomeBundle` (MLS welcome +
+  the group's roster/admin record as of the add), so nothing is pasted by
+  hand and the admin needs no way to export state. `join_group_from_invite`
+  refuses a record for another conversation or one that doesn't list this
+  account. An older client's bare welcome still works through the manual
+  paste path (the invite card says so). Verified through two real desktop
+  cores using only UI commands: create → add (with the invitee's key
+  package) → invite arrives → accept with nothing pasted → group messages
+  both ways.
+- Remaining for groups: a member can only message members it has saved as
+  contacts (no device discovery); no history after restart (MLS forward
+  secrecy); group unread isn't persisted.
 
 **Not done / known gaps**
 - Calls, Files, Search destinations (no backend yet).

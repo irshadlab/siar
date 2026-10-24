@@ -365,6 +365,7 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
         .map(|i| InviteRow {
             id: i.conversation_id.to_string().into(),
             from: i.from_device.fmt_short().into(),
+            has_state: i.carries_state,
         })
         .collect();
     sync_model(&m.invites, invite_rows);

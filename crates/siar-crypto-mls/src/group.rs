@@ -65,6 +65,8 @@ pub enum MlsGroupError {
     Deserialize(String),
     #[error("no member in this group matches the requested device")]
     UnknownMember,
+    #[error("failed to reload a persisted group: {0}")]
+    Load(String),
 }
 
 /// The classification of a processed incoming MLS message — the
@@ -142,6 +144,12 @@ impl<P: OpenMlsProvider> MlsGroupSession<P> {
     ) -> Result<Self, MlsGroupError> {
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(CIPHERSUITE)
+            // Without this a Welcome does not carry the ratchet tree, and
+            // `join_from_welcome` (which has no out-of-band tree to pass)
+            // fails with `MissingRatchetTree`: no member could ever have
+            // joined a group. Found by the persistence tests, the first to
+            // exercise a real create → add → join round trip.
+            .use_ratchet_tree_extension(true)
             .build();
         let group = MlsGroup::new(
             &provider,
@@ -214,6 +222,70 @@ impl<P: OpenMlsProvider> MlsGroupSession<P> {
             provider,
             signature_keys,
         })
+    }
+
+    /// Reopens a group that an earlier run persisted through `provider`'s
+    /// storage (only meaningful for a persistent provider, e.g.
+    /// `SqlitePersistentProvider`; an in-memory provider is empty on
+    /// every start, so this returns `None` there).
+    ///
+    /// `group_id` and `signature_public_key` are what `group_id_bytes`
+    /// and `signature_public_key` returned while the group was live —
+    /// the caller persists those two public, non-secret values next to
+    /// the database file (see `GroupService`), because openmls can look a
+    /// group up by id but cannot enumerate them.
+    ///
+    /// `Ok(None)`: the database holds no such group. `Err`: it holds the
+    /// group but its signing key is gone or unreadable — a real
+    /// corruption, deliberately not treated the same as "absent".
+    pub fn load(
+        provider: P,
+        group_id: &[u8],
+        signature_public_key: &[u8],
+    ) -> Result<Option<Self>, MlsGroupError> {
+        let id = GroupId::from_slice(group_id);
+        let Some(group) = MlsGroup::load(provider.storage(), &id)
+            .map_err(|e| MlsGroupError::Load(format!("{e:?}")))?
+        else {
+            return Ok(None);
+        };
+        let signature_keys = SignatureKeyPair::read(
+            provider.storage(),
+            signature_public_key,
+            CIPHERSUITE.signature_algorithm(),
+        )
+        .ok_or_else(|| MlsGroupError::Load("the group's signing key is missing".to_string()))?;
+        Ok(Some(Self {
+            group,
+            provider,
+            signature_keys,
+        }))
+    }
+
+    /// Reads back a signing key pair previously stored by
+    /// `generate_identity` in `provider`'s storage — for a key package
+    /// that was published but not yet used when the process stopped.
+    pub fn load_signature_keys(
+        provider: &P,
+        signature_public_key: &[u8],
+    ) -> Result<SignatureKeyPair, MlsGroupError> {
+        SignatureKeyPair::read(
+            provider.storage(),
+            signature_public_key,
+            CIPHERSUITE.signature_algorithm(),
+        )
+        .ok_or_else(|| MlsGroupError::Load("the signing key is missing".to_string()))
+    }
+
+    /// The MLS group id (public). Persist it to be able to `load` later.
+    pub fn group_id_bytes(&self) -> Vec<u8> {
+        self.group.group_id().as_slice().to_vec()
+    }
+
+    /// This member's signing PUBLIC key (never the private half). Persist
+    /// it alongside `group_id_bytes` to be able to `load` later.
+    pub fn signature_public_key(&self) -> Vec<u8> {
+        self.signature_keys.to_public_vec()
     }
 
     /// Adds one new member (via their published `KeyPackage`) and

@@ -380,24 +380,40 @@ component InviteCard inherits Rectangle {
                 wrap: word-wrap;
             }
         }
-        Text {
-            text: "Accepting needs the group state the admin sent you out of band — that is a current backend limitation, not a UI shortcut.";
+        if root.item.has-state: Text {
+            text: "The invite includes everything needed to join. Accepting adds you to the group.";
             color: Theme.text-secondary;
             font-size: Theme.ty-body-sm;
             wrap: word-wrap;
         }
-        state-in := TextArea {
-            label: "Group state";
-            placeholder: "Paste the group state the admin sent you";
-            mono: true;
-            max-input-height: 90px * Theme.ui-scale;
+        // An invite from an older version carries no group record; the admin
+        // has to send it separately.
+        if !root.item.has-state: Text {
+            text: "This invite came from an older version and needs the group state the admin sent you separately.";
+            color: Theme.text-secondary;
+            font-size: Theme.ty-body-sm;
+            wrap: word-wrap;
+        }
+        // Not under an `if`, so the Accept button can read it; collapsed
+        // to nothing when the invite already carries the group record.
+        Rectangle {
+            visible: !root.item.has-state;
+            clip: true;
+            height: root.item.has-state ? 0px : state-in.height;
+            state-in := TextArea {
+                label: "Group state";
+                placeholder: "Paste the group state the admin sent you";
+                mono: true;
+                max-input-height: 90px * Theme.ui-scale;
+                width: parent.width;
+            }
         }
         HorizontalLayout {
             spacing: Theme.sp-sm;
             Button {
                 text: "Accept";
                 kind: "primary";
-                clicked => { AppState.accept-invite(root.item.id, state-in.text); }
+                clicked => { AppState.accept-invite(root.item.id, root.item.has-state ? "" : state-in.text); }
             }
             Button {
                 text: "Decline";

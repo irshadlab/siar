@@ -91,7 +91,7 @@ pub use group::{IncomingMlsMessage, MlsGroupError, MlsGroupSession};
 pub use identity::{
     decode_key_package, encode_key_package, generate_identity, MlsIdentity, MlsIdentityError,
 };
-pub use persistent::{PersistentProviderError, PostcardCodec, SqlitePersistentProvider};
+pub use persistent::{JsonCodec, PersistentProviderError, SqlitePersistentProvider};
 // Re-exported so callers (e.g. `siar-messaging::group_service`) don't
 // need their own direct dependency on `openmls_rust_crypto` just to
 // construct a provider to hand to `MlsGroupSession::create`/
@@ -99,6 +99,7 @@ pub use persistent::{PersistentProviderError, PostcardCodec, SqlitePersistentPro
 // `OpenMlsProvider` is this crate's own pinned choice (see this file's
 // top doc comment on why that pin was verified, not guessed), not
 // something every caller should have to re-pin independently.
+pub use openmls_basic_credential::SignatureKeyPair;
 pub use openmls_rust_crypto::OpenMlsRustCrypto;
 
 /// The MTI (mandatory-to-implement) RFC 9420 ciphersuite — verified as

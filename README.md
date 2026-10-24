@@ -29,6 +29,7 @@
 >
 > **Official Showcase, Package Center & Live Architecture Documentation:**
 > - 🌐 **[Official Product Presentation](https://siar.irshadlab.org/)**
+> - 🖼️ **[Desktop UI Reference Gallery](docs/screenshots/README.md)** — Dark/Light themes, Contact Verification, MLS Groups & Settings
 > - 📚 **[Comprehensive Technical Wiki (50 Chapters)](wiki/Home.md)** — System Stack, Multi-Device Trust, Routing, DTN, Security Center, Calls, Testing & Operations
 > - 📘 **[End-to-End User & Operations Manual](https://siar.irshadlab.org/guide.html)** — Zero-Knowledge Setup, QR/NFC Pairing, Vault Export/Import & Anti-Forensics
 > - 📑 **[System Architecture & Protocol Specs (mdBook)](https://siar.irshadlab.org/sys-arch/)** — 33+ numbered core specs + 27 UI/UX specs
@@ -52,7 +53,7 @@
 - [Headless Daemon & Embedded Nodes](#headless-daemon--embedded-nodes)
 - [Protocol Extensions & WASM](#protocol-extensions--wasm)
 - [Anonymity Transport Plane](#anonymity-transport-plane)
-- [Workspace Crate Map (39 Domain Crates)](#workspace-crate-map-39-domain-crates)
+- [Workspace Crate Map (41 Domain Crates)](#workspace-crate-map-41-domain-crates)
 - [Deployment Modes](#deployment-modes)
 - [SIAR vs Traditional Messengers](#siar-vs-traditional-messengers)
 - [Implementation Status & Roadmap](#implementation-status--roadmap)
@@ -118,9 +119,9 @@ All engineering and implementation in SIAR strictly follows a dual-specification
 │     Mailboxes, Cloud Ecosystem & Resilient Ops     │   - ui-ux-11..17: Security Center, SOS & Pairing    │
 │                                                    │   - ui-ux-18..27: Tokens, Motion, A11y & Gates      │
 │ • Target Codebases:                                │ • Target Codebases:                                 │
-│   - Pure-Rust domain crates: crates/siar-* (39)    │   - apps/desktop (Dioxus 0.7 Desktop GUI)           │
+│   - Pure-Rust domain crates: crates/siar-* (41)    │   - apps/desktop (Slint 1.16 Native Desktop GUI)     │
 │   - apps/emergency-node (Headless Solar Daemon)    │   - apps/android (Jetpack Compose + JNI UI layer)   │
-│   - apps/cli (Interactive Terminal & Diagnostics)  │   - crates/siar-ui-state (Security Center & Flows)  │
+│   - apps/cli (Interactive Terminal & Diagnostics)  │   - crates/siar-ui-state / siar-ui-slint            │
 │ • Core Invariants:                                 │ • UI Invariants:                                    │
 │   - Zero external infrastructure dependency        │   - UI is strictly a decoupled client of runtime    │
 │   - Feature code never implements transport choice │   - UI never owns durable transport or crypto state │
@@ -138,7 +139,7 @@ All backend runtime engines, protocol framing, cryptographic handshakes, transpo
 
 ### 2. User Interface Development Follows `ui-ux/`
 All user-facing graphical applications, mobile experiences, layout systems, visual states, and reactive UI state machines must strictly follow the **[`ui-ux/`](ui-ux/)** specification corpus:
-- **Application Shells & Navigation**: Multi-pane desktop navigation, mobile tab bars, window state restoration, and back-stack handling follow [`ui-ux-01`](ui-ux/ui-ux-01-product-foundation-cross-platform-interaction-architecture.md), [`ui-ux-02`](ui-ux/ui-ux-02-desktop-dioxus-app-shell-navigation-window-architecture.md), and [`ui-ux-03`](ui-ux/ui-ux-03-android-jetpack-compose-app-shell-navigation-lifecycle-architecture.md).
+- **Application Shells & Navigation**: Multi-pane desktop navigation, mobile tab bars, window state restoration, and back-stack handling follow [`ui-ux-01`](ui-ux/ui-ux-01-product-foundation-cross-platform-interaction-architecture.md), [`ui-ux-02`](ui-ux/ui-ux-02-desktop-dioxus-app-shell-navigation-window-architecture.md) (implemented natively in Slint via [`siar-ui-slint`](crates/siar-ui-slint)), and [`ui-ux-03`](ui-ux/ui-ux-03-android-jetpack-compose-app-shell-navigation-lifecycle-architecture.md).
 - **Conversations & Message Timeline**: Message bubbles, delivery checkmarks (Pending, DTN Relayed, Delivered, Read), media carousels, and composer attachments follow [`ui-ux-04`](ui-ux/ui-ux-04-conversation-list-inbox-architecture.md), [`ui-ux-05`](ui-ux/ui-ux-05-conversation-message-timeline-architecture.md), and [`ui-ux-06`](ui-ux/ui-ux-06-message-composer-attachments-voice-notes-drafts-architecture.md).
 - **Security Center & Trust Flows**: Cryptographic identity management, key rotation warnings, device revocation ceremonies, recovery phrase verification, and SAS visual comparisons follow [`ui-ux-15`](ui-ux/ui-ux-15-security-center-devices-keys-recovery-architecture.md).
 - **Emergency SOS & Offline Degraded States**: High-contrast offline mesh indicators, zero-connection SOS banners, transport fallback indicators, and battery-saver modes follow [`ui-ux-17`](ui-ux/ui-ux-17-emergency-sos-offline-mesh-architecture.md) and [`ui-ux-24`](ui-ux/ui-ux-24-error-loading-empty-offline-degraded-state-architecture.md).
@@ -159,12 +160,13 @@ SIAR is structured into five distinct, decoupled architectural layers:
 ```
 +---------------------------------------------------------------------------------------+
 |                                5. Applications & UI/UX                                |
-|  - apps/android (Jetpack Compose + JNI)   - apps/desktop (Dioxus 0.7 Desktop GUI)     |
+|  - apps/android (Jetpack Compose + JNI)   - apps/desktop (Slint 1.16 Native GUI)      |
 |  - apps/emergency-node (Solar Repeater)   - apps/cli (Dev Diagnostics & CLI Node)     |
 +---------------------------------------------------------------------------------------+
 |                                4. High-Level Services                                 |
 |  - siar-messaging (Message & Group Engine)- siar-calls (Realtime AV1 / Opus Sessions) |
-|  - siar-identity-multidevice (Certs, SAS) - siar-ui-state (Security Center & Flows)   |
+|  - siar-identity-multidevice (Certs, SAS) - siar-ui-state / siar-ui-slint (UI Views)  |
+|  - siar-files (Blob Transfer Service)     - siar-dtn-bundle-service (DTN Sync)        |
 +---------------------------------------------------------------------------------------+
 |                            3. Routing, Policy & DTN Engine                            |
 |  - siar-routing-policy (Multi-Metric)     - siar-dtn-bundle (Spray-and-Wait Forward)  |
@@ -331,15 +333,15 @@ The call architecture supports:
 The platform does not require the user interface to remain alive for core networking to function:
 
 ```
-Dioxus Desktop UI  ──Secure Local IPC──▶  comm-daemon / runtime
-                                              ├── Identity
-                                              ├── Messaging
-                                              ├── Files & DTN
-                                              ├── Routing & Multipath
-                                              ├── Power policy
-                                              └── Recovery
-                                                      │
-                                             Iroh / LAN / BLE / Wi-Fi
+Slint Desktop UI   ──Secure Local IPC / Direct Core Wiring──▶  comm-daemon / runtime
+                                                                  ├── Identity
+                                                                  ├── Messaging
+                                                                  ├── Files & DTN
+                                                                  ├── Routing & Multipath
+                                                                  ├── Power policy
+                                                                  └── Recovery
+                                                                          │
+                                                                 Iroh / LAN / BLE / Wi-Fi
 ```
 
 **`apps/emergency-node`** is a standalone headless daemon deployable on:
@@ -396,9 +398,9 @@ The anonymity plane is an additive routing class integrated with SIAR's existing
 
 ---
 
-## Workspace Crate Map (39 Domain Crates)
+## Workspace Crate Map (41 Domain Crates)
 
-SIAR is a modular Rust cargo workspace comprising **39 domain crates**, **4 application environments**, 2 Android JNI runtime bridges, and fuzz testing targets:
+SIAR is a modular Rust cargo workspace comprising **41 domain crates**, **4 application environments**, 2 Android JNI runtime bridges, and fuzz testing targets:
 
 ```text
 siar/
@@ -409,7 +411,7 @@ siar/
 │   │   ├── rust-jni-glue/                # Shared JNI glue, memory safety, and JVM callbacks
 │   │   └── build-native.sh               # Multi-ABI cargo-ndk build automation script
 │   ├── cli/                              # Interactive Terminal Messenger & Diagnostics Node
-│   ├── desktop/                          # Desktop GUI Application (Dioxus 0.7 Desktop UI)
+│   ├── desktop/                          # Native Desktop GUI (Slint 1.16 Shell & Core Wiring)
 │   └── emergency-node/                   # Headless Emergency DTN Relay & Booster Daemon
 ├── crates/
 │   ├── [Core Domain, Identity & Trust]
@@ -444,13 +446,15 @@ siar/
 │   │   ├── siar-event-registry/          # Global schema registry of system events and audit subscribers
 │   │   ├── siar-blob-manifest/           # SIMD BLAKE3 Merkle DAG blob chunking & AEAD encryption
 │   │   ├── siar-file-transfer-service/   # Peer-assisted swarm blob chunk distribution coordinator
+│   │   ├── siar-files/                   # High-level file transfer service, chunked AEAD v2, stream-to-many
 │   │   ├── siar-resource-limits/         # Token-bucket backpressure, ring buffers & queue drop policies
 │   │   ├── siar-crash-recovery/          # WAL recovery, transactional checkpoints & corrupt state isolation
 │   │   ├── siar-startup-recovery/        # Cold-boot consistency verification & orphaned ticket repair
 │   │   └── siar-remote-ingestion/        # Ingestion gateway for external telemetry and bridge adapters
 │   ├── [Messaging Orchestration & UI State Machines]
 │   │   ├── siar-messaging/               # MessageService, GroupService, Ticket manager, multi-node tests
-│   │   └── siar-ui-state/                # Framework-agnostic UI state machines & Security Center
+│   │   ├── siar-ui-state/                # Framework-agnostic UI state machines & Security Center
+│   │   └── siar-ui-slint/                # Slint 1.16 UI component library, semantic Theme tokens & shell
 │   ├── [Realtime Media, Voice/Video & Hardware Codecs]
 │   │   ├── siar-media-core/              # Media traits, raw video/audio buffers, sample clocks
 │   │   ├── siar-media-audio/             # Pure-Rust lock-free audio DSP (Opus, AEC, NS, AGC, <10ms latency)
@@ -476,7 +480,7 @@ SIAR deploys in three distinct forms:
 | App | Platform | UI Framework |
 | :--- | :--- | :--- |
 | `apps/android` | Android (minSdk 26) | Jetpack Compose + JNI bridge to Rust core |
-| `apps/desktop` | Linux, Windows | Dioxus 0.7 Desktop (WebView2/GTK) |
+| `apps/desktop` | Linux, Windows | Slint 1.16 Native Desktop GUI (`crates/siar-ui-slint`) |
 | `apps/cli` | Any POSIX | Interactive terminal — identity, tickets, DTN |
 
 ### 2. Headless Off-Grid Repeater Daemon
@@ -519,7 +523,7 @@ All coverage figures are from the `sys-arch/` specification corpus (33 numbered 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                              SIAR IMPLEMENTATION MATURITY OVERVIEW                               │
-│                              (as of 2026-09-17 · rustc 1.91 verified)                           │
+│                              (as of 2026-10-24 · rustc 1.91 verified)                           │
 ├───────────────────────────────┬──────────────────────────────┬──────────────────────────────────┤
 │ Architectural Layer           │ Spec Coverage                │ Verified State                   │
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
@@ -533,12 +537,19 @@ All coverage figures are from the `sys-arch/` specification corpus (33 numbered 
 │  03 · siar-routing-policy     │ ✅ 200/200 — SPEC COMPLETE   │ Multi-metric scoring, RoutePlan, │
 │                               │   263 tests, 0 warnings      │ hysteresis, decide_route,        │
 │                               │                              │ multidevice routing, 19 rounds   │
-│  04 · siar-event-log          │ 🟡 ~10/95  (~11%)            │ Monotonic sequence log           │
-│  05 · siar-blob-manifest      │ 🟡 ~23/210 (~11%)            │ BLAKE3 Merkle DAG, AEAD encrypt  │
-│  06 · siar-dtn-bundle         │ 🟡 ~50/192 (~26%)            │ Spray-and-Wait, bundle framing   │
-│  07 · siar-capability         │ 🟡 ~19/164 (~12%)            │ 2-phase capability negotiation   │
-│  08 · siar-resource-limits    │ 🟡 ~56/193 (~29%)            │ Token-bucket backpressure        │
-│  09 · siar-crash-recovery     │ 🟡 ~15/186  (~8%)            │ WAL recovery, checkpoint isolator│
+│  04 · siar-event-log          │ ✅ Substantially Complete    │ Monotonic sequence log, outbox,  │
+│                               │   Phases 1–8 complete        │ reassembly, HLC, search, audit   │
+│  05 · siar-blob-manifest      │ 🟡 Round 27 Complete         │ BLAKE3 Merkle DAG, siar-files    │
+│       & siar-files            │   693 tests, 0 warnings      │ chunked AEAD v2, stream-to-many, │
+│                               │                              │ QUIC files/1, pull-by-reference  │
+│  06 · siar-dtn-bundle         │ 🟡 ~83/192 (~43%)            │ Spray-and-Wait, bundle framing,  │
+│                               │   119 tests, Round 5         │ store-carry-forward forwarding   │
+│  07 · siar-capability         │ 🟡 ~113/164 (~69%)           │ 2-phase capability negotiation,  │
+│                               │   122 tests, Round N+3       │ hierarchical negotiation, UI     │
+│  08 · siar-resource-limits    │ ✅ ~192/193 — SPEC COMPLETE  │ Token-bucket backpressure, DoD   │
+│                               │   434 tests, 0 warnings      │ passed, ResourceRuntime facade   │
+│  09 · siar-crash-recovery     │ ✅ 186/186 — SPEC COMPLETE   │ WAL recovery, isolation, DoD     │
+│                               │   498 tests, 0 warnings      │ passed, executable audit clean   │
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
 │ Tier 1 — Security Backbone    │                              │                                  │
 │  28 · siar-crypto / mls       │ 🟡 ~46/127 (~36%)            │ Ed25519/X25519, MLS E2EE,        │
@@ -546,23 +557,25 @@ All coverage figures are from the `sys-arch/` specification corpus (33 numbered 
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
 │ Tier 2 — UI/UX (27 specs)     │                              │                                  │
 │  ui-ux-15 · Security Center   │ 🟡 ~183/221 (~83%)           │ RecoveryScope, RevocationCaps,   │
-│                               │                              │ CompromiseResponse, desktop UI   │
-│  ui-ux-01..14, 16..27         │ ⚪ Not yet reconciled        │ Pre-existing UI code in          │
-│                               │                              │ apps/desktop & apps/android      │
+│                               │                              │ CompromiseResponse, contact SAS  │
+│  ui-ux-01..14, 16..27         │ 🟡 Slint Desktop Transition  │ Desktop migrated Dioxus → Slint  │
+│                               │   (2026-10-22)               │ (crates/siar-ui-slint): Theme    │
+│                               │                              │ tokens, persistent history & MLS │
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
 │ Multi-Transport Layer         │ ✅ Production Hardened        │ Pooled stream multiplexer,       │
-│                               │                              │ multi-node end-to-end test suite │
+│                               │                              │ files/1 over QUIC, multi-node e2e│
 └───────────────────────────────┴──────────────────────────────┴──────────────────────────────────┘
 ```
 
-> **Tier 0 progress** — **3 of 9 foundational core specs are spec-complete** (01, 02, 03).
-> Specs 04–09 are in progress; each has a real crate with real code — gaps are depth, not breadth.
+> **Tier 0 progress** — **6 of 9 foundational core specs are spec-complete or substantially complete** (01, 02, 03, 04, 08, 09).
+> Specs 05, 06, and 07 are in active, verified development (`siar-files` has completed 27 rounds with 693 passing tests; `siar-dtn-bundle` has 119 tests; `siar-capability` has 122 tests).
 > See [`ROADMAP.md`](ROADMAP.md) for section-by-section coverage notes and the next-priority ordering.
 
 **Quality discipline applied to every spec round:**
 - Compile + test + `cargo clippy -D warnings` + `cargo fmt` + doc-warning-free — verified clean before a round is marked done
-- Zero regressions in any dependent crate at any point across all 19 rounds of spec work
-- Real bugs caught by tests (not review): pooled-connection reuse silently dropping messages after the first; expired operation never enforced at routing-decision level; DTN `file_chunk()` constructor contradicting its own spec example; stickiness test using a stale pre-mutation health snapshot
+- Over 1,700+ passing tests across workspace crates
+- Zero regressions in any dependent crate at any point across all rounds of spec work
+- Real bugs caught by tests (not review): pooled-connection reuse silently dropping messages after the first; expired operation never enforced at routing-decision level; DTN `file_chunk()` constructor contradicting its own spec example; stickiness test using a stale pre-mutation health snapshot; Stoolap top-N memory overflow in GC paging; self-deadlock on transfer cancellation
 
 **Resolved reconciliation questions** (see [`MIGRATION.md`](MIGRATION.md) for full disposition):
 - **Device certificate reconciliation**: Retired plan.md-era `siar_crypto::device_cert` and `siar_domain::device::{DeviceRegistry, DeviceEvent}` in favor of root-key-signed `siar-identity-multidevice` with additive `TransportKeyBinding`.
@@ -703,11 +716,15 @@ SIAR Interactive Messenger
 cargo run --bin siar-desktop
 ```
 
-Features:
-- **Contact Roster** — peer tickets, online reachability status, link health indicators
-- **MLS Group Conversations** — 1:1 and multi-member MLS groups with forward secrecy
-- **Security Center** — device key management, revocation, recovery codes, compromise response
-- **Media Attachments** — drag-and-drop file sharing with automatic BLAKE3 Merkle DAG chunking
+> 🖼️ **Visual Design Reference**: See [`docs/screenshots/README.md`](docs/screenshots/README.md) for full UI references across dark/light themes, contact verification, groups, and settings.
+
+Features (Migrated to native Slint 1.16 in [`crates/siar-ui-slint`](crates/siar-ui-slint)):
+- **Adaptive 3-Pane Shell** (`ui-ux-02`, `ui-ux-22`) — Navigation rail (64px), conversation list (320px), responsive message timeline with light/dark/high-contrast theme tokens.
+- **Persistent Conversation History** — 1:1 encrypted messages survive app restarts with smooth scroll-anchored pagination ("Load earlier messages").
+- **Unread Tracking & Read Marks** — Per-chat highest incoming sequence persisted to disk (`read-marks.txt`); zero phantom badge drift.
+- **Contact Security & SAS Verification** (`ui-ux-08`, `ui-ux-15`) — 60-digit Short Authentication String numeric safety numbers computed from `siar-identity-multidevice`; persistent `device=<key>` pinning; global warning banner with "Review" / "Dismiss" actions when keys change.
+- **MLS Group Chat & Seamless Invites** (`ui-ux-09`) — Multi-member MLS (RFC 9420) group states persist locally in SQLite; one-step invites via `WelcomeBundle` and one-tap join.
+- **Own Identity & Hardware Diagnostics** (`ui-ux-18`) — Short/full fingerprint disclosure on demand, device public identifiers, and transport link status summary.
 
 ### 3. Headless Emergency Relay Node (`siar-emergency-node`)
 
@@ -777,7 +794,7 @@ SIAR employs a two-tier open-source licensing model designed for maximum library
 ├──────────────────────────────────────┬──────────────────────────────────────┤
 │    Core Libraries (crates/*)         │    Standalone Apps (apps/*)          │
 │    - siar-crypto / siar-crypto-mls   │    - apps/android (Jetpack Compose)  │
-│    - siar-transport / siar-routing-policy│ - apps/desktop (Dioxus GUI)       │
+│    - siar-transport / siar-routing-policy│ - apps/desktop (Slint GUI)        │
 │    - siar-storage / siar-messaging   │    - apps/cli (Terminal Node)        │
 │    - siar-dtn-bundle / siar-protocol │    - apps/emergency-node (Daemon)    │
 │                                      │                                      │

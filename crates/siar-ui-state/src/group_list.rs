@@ -83,6 +83,10 @@ pub struct PendingInvite {
     /// is dispatched — see this module's top doc comment on why this
     /// can't be auto-populated from the welcome alone.
     pub state_input: String,
+    /// The welcome payload already carries the group state (the admin's
+    /// client sent it), so the user has nothing to paste. `false` for an
+    /// invite from an older client that sent a bare welcome.
+    pub carries_state: bool,
 }
 
 #[derive(Debug, Default)]
@@ -194,6 +198,7 @@ mod tests {
             from_device: DeviceId::new(),
             welcome_bytes: vec![1],
             state_input: String::new(),
+            carries_state: false,
         });
         let second_device = DeviceId::new();
         state.add(PendingInvite {
@@ -201,6 +206,7 @@ mod tests {
             from_device: second_device,
             welcome_bytes: vec![2],
             state_input: String::new(),
+            carries_state: false,
         });
         assert_eq!(state.pending().len(), 1);
         assert_eq!(state.pending()[0].from_device, second_device);
@@ -215,6 +221,7 @@ mod tests {
             from_device: DeviceId::new(),
             welcome_bytes: vec![1],
             state_input: String::new(),
+            carries_state: false,
         });
         let removed = state.remove(conversation_id);
         assert!(removed.is_some());
@@ -232,12 +239,14 @@ mod tests {
             from_device: DeviceId::new(),
             welcome_bytes: vec![],
             state_input: String::new(),
+            carries_state: false,
         });
         state.add(PendingInvite {
             conversation_id: b,
             from_device: DeviceId::new(),
             welcome_bytes: vec![],
             state_input: String::new(),
+            carries_state: false,
         });
 
         state.set_state_input(a, "pasted-text".to_string());

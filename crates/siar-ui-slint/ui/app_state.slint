@@ -66,6 +66,8 @@ export struct GroupRow {
 export struct InviteRow {
     id: string,
     from: string,
+    // The invite already carries the group record: nothing to paste.
+    has-state: bool,
 }
 
 // severity: 0 = info, 1 = warning, 2 = critical

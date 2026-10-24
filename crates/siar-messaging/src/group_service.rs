@@ -58,9 +58,13 @@
 //!   not "how do I learn about a device in the first place."
 
 use crate::key_package_directory::KeyPackageDirectory;
+use crate::mls_store::{GroupRecord, MlsStore, PendingRecord};
 use crate::PeerTicket;
 use siar_crypto::{DeviceIdentity, Session};
-use siar_crypto_mls::{generate_identity, IncomingMlsMessage, MlsGroupSession, OpenMlsRustCrypto};
+use siar_crypto_mls::{
+    generate_identity, IncomingMlsMessage, MlsGroupSession, SignatureKeyPair,
+    SqlitePersistentProvider,
+};
 use siar_domain::{
     now_millis, AccountId, ConversationId, DeliveryState, DeviceId, DurableGroupEvent, GroupState,
     MessageContent, MessageId, MessageText,
@@ -94,6 +98,10 @@ pub enum GroupServiceError {
     MlsIdentity(#[from] siar_crypto_mls::MlsIdentityError),
     #[error("no local MLS session for this conversation — call create_group_mls or join_group_mls first")]
     UnknownMlsSession,
+    /// The MLS state directory or one of its SQLite files couldn't be
+    /// opened, written or indexed.
+    #[error("MLS state storage failed: {0}")]
+    MlsStorage(String),
     /// Mirrors `MessageServiceError::Malformed` — a decrypted
     /// `GroupMlsApplication` payload that didn't postcard-decode as
     /// `MessageContent`. Not a `siar_storage::StorageError` (nothing
@@ -207,7 +215,9 @@ pub struct GroupService {
     /// drops the guard *before* any `.await` (network send), so a
     /// std lock is both correct and cheaper than pulling in a second
     /// mutex flavor for one field.
-    mls_sessions: Mutex<HashMap<ConversationId, MlsGroupSession>>,
+    mls_sessions: Mutex<HashMap<ConversationId, MlsGroupSession<SqlitePersistentProvider>>>,
+    /// Where each group's SQLite file and the rediscovery index live.
+    mls_store: MlsStore,
     /// Holds this device's most recently generated-but-not-yet-consumed
     /// `(provider, identity)` pair from `publish_key_package` — see
     /// `MlsGroupSession::join_from_welcome`'s doc comment for exactly
@@ -218,12 +228,63 @@ pub struct GroupService {
     /// after a successful join (single-use, matching the key package
     /// itself being single-use). Same in-memory-only caveat as
     /// `mls_sessions`.
-    pending_identity: Mutex<
-        Option<(
-            siar_crypto_mls::OpenMlsRustCrypto,
-            siar_crypto_mls::MlsIdentity,
-        )>,
-    >,
+    pending_identity: Mutex<Option<PendingKeyPackage>>,
+}
+
+/// What a `GroupMlsWelcome` envelope carries: the MLS Welcome plus the
+/// durable group bookkeeping (members, admins, epoch) as of the moment the
+/// new member was added.
+///
+/// MLS tells a joiner the cryptographic state but not the application's
+/// own roster/admin record, and nothing else delivers it — so before this,
+/// the admin had to copy that record to the invitee by hand, and the
+/// admin's UI had no way to show it. Sending it in the same message makes
+/// an invite one step for the admin and one tap for the invitee.
+///
+/// The first byte is a format version, so a future change can't be
+/// mistaken for this one; an older client's bare Welcome (no version byte
+/// this layout recognises) decodes to `None` and takes the manual path.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WelcomeBundle {
+    pub welcome: Vec<u8>,
+    pub state: GroupState,
+}
+
+const WELCOME_BUNDLE_V1: u8 = 1;
+
+impl WelcomeBundle {
+    pub fn encode(&self) -> Result<Vec<u8>, GroupServiceError> {
+        let mut out = vec![WELCOME_BUNDLE_V1];
+        out.extend(postcard::to_allocvec(self).map_err(|_| GroupServiceError::Malformed)?);
+        Ok(out)
+    }
+
+    /// `None` for anything that isn't a v1 bundle (including a bare
+    /// Welcome from an older client).
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        let (&version, rest) = bytes.split_first()?;
+        if version != WELCOME_BUNDLE_V1 {
+            return None;
+        }
+        postcard::from_bytes(rest).ok()
+    }
+}
+
+/// A published, not-yet-used key package's secrets: the provider whose
+/// storage holds its private keys, the signing key, and which file that
+/// is (so it can be recorded in the index once a welcome consumes it).
+struct PendingKeyPackage {
+    provider: SqlitePersistentProvider,
+    signature_keys: SignatureKeyPair,
+    file: String,
+}
+
+fn open_mls_file(
+    store: &MlsStore,
+    file: &str,
+) -> Result<SqlitePersistentProvider, GroupServiceError> {
+    SqlitePersistentProvider::open(&store.path_of(file))
+        .map_err(|e| GroupServiceError::MlsStorage(e.to_string()))
 }
 
 impl GroupService {
@@ -241,6 +302,63 @@ impl GroupService {
         directory: Arc<dyn DeviceDirectory>,
         groups: Arc<dyn GroupRepository + Send + Sync>,
     ) -> Self {
+        // Not persistent: a private scratch directory nobody reopens. This
+        // keeps the CLI/Android/test behaviour of `new` exactly as it was
+        // (MLS state dies with the process); only callers that pass a real
+        // directory to `new_persistent` get durable groups.
+        let store =
+            MlsStore::temporary().expect("couldn’t create a scratch directory for MLS state");
+        Self::with_store(
+            device_id,
+            local_account,
+            identity,
+            endpoint,
+            messages,
+            directory,
+            groups,
+            store,
+        )
+    }
+
+    /// Like `new`, but MLS group state lives in `mls_dir` and survives a
+    /// restart: call [`restore_mls_sessions`](Self::restore_mls_sessions)
+    /// right after construction to reopen what an earlier run left there.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_persistent(
+        device_id: DeviceId,
+        local_account: AccountId,
+        identity: DeviceIdentity,
+        endpoint: Arc<SiarEndpoint>,
+        messages: Arc<dyn MessageRepository + Send + Sync>,
+        directory: Arc<dyn DeviceDirectory>,
+        groups: Arc<dyn GroupRepository + Send + Sync>,
+        mls_dir: impl Into<std::path::PathBuf>,
+    ) -> Result<Self, GroupServiceError> {
+        let store =
+            MlsStore::new(mls_dir).map_err(|e| GroupServiceError::MlsStorage(e.to_string()))?;
+        Ok(Self::with_store(
+            device_id,
+            local_account,
+            identity,
+            endpoint,
+            messages,
+            directory,
+            groups,
+            store,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_store(
+        device_id: DeviceId,
+        local_account: AccountId,
+        identity: DeviceIdentity,
+        endpoint: Arc<SiarEndpoint>,
+        messages: Arc<dyn MessageRepository + Send + Sync>,
+        directory: Arc<dyn DeviceDirectory>,
+        groups: Arc<dyn GroupRepository + Send + Sync>,
+        mls_store: MlsStore,
+    ) -> Self {
         Self {
             device_id,
             local_account,
@@ -250,8 +368,75 @@ impl GroupService {
             directory,
             groups,
             mls_sessions: Mutex::new(HashMap::new()),
+            mls_store,
             pending_identity: Mutex::new(None),
         }
+    }
+
+    /// Reopens every MLS group an earlier run persisted, and returns the
+    /// conversations that came back. A group that fails to reload (missing
+    /// or corrupt file) is logged and skipped — it must not stop the
+    /// others, or the app, from starting.
+    pub fn restore_mls_sessions(&self) -> Vec<ConversationId> {
+        let index = self.mls_store.load();
+        let mut restored = Vec::new();
+        for record in index.groups {
+            let loaded = open_mls_file(&self.mls_store, &record.file).and_then(|provider| {
+                MlsGroupSession::load(provider, &record.group_id, &record.signature_public_key)
+                    .map_err(GroupServiceError::from)
+            });
+            match loaded {
+                Ok(Some(session)) => {
+                    self.mls_sessions
+                        .lock()
+                        .expect("mls_sessions lock poisoned")
+                        .insert(record.conversation, session);
+                    restored.push(record.conversation);
+                }
+                Ok(None) => {
+                    tracing::warn!(conversation = ?record.conversation, "MLS file holds no such group")
+                }
+                Err(e) => {
+                    tracing::warn!(conversation = ?record.conversation, error = %e, "couldn’t reopen an MLS group")
+                }
+            }
+        }
+        restored
+    }
+
+    /// Makes sure this device has a published key package, reusing the one
+    /// from before a restart if there is one: a key package already given
+    /// to someone is worthless if its private half died with the process.
+    /// Falls back to generating a fresh one.
+    pub fn ensure_key_package_published(
+        &self,
+        directory: &dyn KeyPackageDirectory,
+    ) -> Result<(), GroupServiceError> {
+        if let Some(pending) = self.mls_store.load().pending {
+            let reopened = open_mls_file(&self.mls_store, &pending.file).and_then(|provider| {
+                let keys =
+                    MlsGroupSession::load_signature_keys(&provider, &pending.signature_public_key)?;
+                Ok((provider, keys))
+            });
+            match reopened {
+                Ok((provider, signature_keys)) => {
+                    *self
+                        .pending_identity
+                        .lock()
+                        .expect("pending_identity lock poisoned") = Some(PendingKeyPackage {
+                        provider,
+                        signature_keys,
+                        file: pending.file,
+                    });
+                    directory.publish(self.device_id, pending.key_package);
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "couldn’t reuse the saved key package; making a new one")
+                }
+            }
+        }
+        self.publish_key_package(directory)
     }
 
     pub fn group_state(
@@ -514,9 +699,18 @@ impl GroupService {
         conversation: ConversationId,
         founder: AccountId,
     ) -> Result<GroupState, GroupServiceError> {
-        let provider = OpenMlsRustCrypto::default();
+        let file = format!("{conversation}.sqlite3");
+        let provider = open_mls_file(&self.mls_store, &file)?;
         let identity = generate_identity(self.device_id, &provider)?;
         let session = MlsGroupSession::create(provider, &identity)?;
+        self.mls_store
+            .record_group(GroupRecord {
+                conversation,
+                file,
+                group_id: session.group_id_bytes(),
+                signature_public_key: session.signature_public_key(),
+            })
+            .map_err(|e| GroupServiceError::MlsStorage(e.to_string()))?;
 
         self.mls_sessions
             .lock()
@@ -583,6 +777,13 @@ impl GroupService {
         });
         self.groups.upsert(&state)?;
 
+        // The Welcome travels with the roster/admin record it belongs to.
+        let welcome_payload = WelcomeBundle {
+            welcome: welcome_bytes,
+            state: state.clone(),
+        }
+        .encode()?;
+
         let now = now_millis();
         for device in fanout_before {
             let envelope = Envelope {
@@ -619,7 +820,7 @@ impl GroupService {
                 timestamp_millis: now,
                 sequence: now,
                 kind: EnvelopeKind::GroupMlsWelcome,
-                payload: welcome_bytes.clone(),
+                payload: welcome_payload.clone(),
             };
             if let Err(e) = self
                 .endpoint
@@ -634,6 +835,28 @@ impl GroupService {
         }
 
         Ok(())
+    }
+
+    /// Accepts an invite whose Welcome payload is a [`WelcomeBundle`]:
+    /// joins the MLS group and returns the group record that came with it.
+    ///
+    /// The record is checked before anything is trusted: it must be for
+    /// THIS conversation and must list this account as a member. A mismatch
+    /// is refused rather than adopted, since the roster otherwise comes
+    /// from whoever sent the invite.
+    pub fn join_group_from_invite(
+        &self,
+        conversation: ConversationId,
+        payload: &[u8],
+    ) -> Result<GroupState, GroupServiceError> {
+        let bundle = WelcomeBundle::decode(payload).ok_or(GroupServiceError::Malformed)?;
+        if bundle.state.conversation_id != conversation
+            || !bundle.state.is_member(self.local_account)
+        {
+            return Err(GroupServiceError::Malformed);
+        }
+        self.join_group_mls(conversation, &bundle.welcome, bundle.state.clone())?;
+        Ok(bundle.state)
     }
 
     /// The MLS-path counterpart to `remove_member` — but unlike that
@@ -829,14 +1052,28 @@ impl GroupService {
         welcome_bytes: &[u8],
         initial_state: GroupState,
     ) -> Result<(), GroupServiceError> {
-        let (provider, identity) = self
+        let pending = self
             .pending_identity
             .lock()
             .expect("pending_identity lock poisoned")
             .take()
             .ok_or(GroupServiceError::NoPendingKeyPackageIdentity)?;
-        let session =
-            MlsGroupSession::join_from_welcome(provider, identity.signature_keys, welcome_bytes)?;
+        let file = pending.file;
+        let session = MlsGroupSession::join_from_welcome(
+            pending.provider,
+            pending.signature_keys,
+            welcome_bytes,
+        )?;
+        // The key package is spent; the group now lives in its file.
+        self.mls_store
+            .record_group(GroupRecord {
+                conversation,
+                file,
+                group_id: session.group_id_bytes(),
+                signature_public_key: session.signature_public_key(),
+            })
+            .and_then(|()| self.mls_store.clear_pending())
+            .map_err(|e| GroupServiceError::MlsStorage(e.to_string()))?;
 
         self.mls_sessions
             .lock()
@@ -874,15 +1111,27 @@ impl GroupService {
         &self,
         directory: &dyn KeyPackageDirectory,
     ) -> Result<(), GroupServiceError> {
-        let provider = OpenMlsRustCrypto::default();
+        let file = format!("kp-{}.sqlite3", ConversationId::new());
+        let provider = open_mls_file(&self.mls_store, &file)?;
         let identity = generate_identity(self.device_id, &provider)?;
         let key_package_bytes =
             siar_crypto_mls::encode_key_package(identity.key_package.key_package())?;
+        self.mls_store
+            .record_pending(PendingRecord {
+                file: file.clone(),
+                signature_public_key: identity.signature_keys.to_public_vec(),
+                key_package: key_package_bytes.clone(),
+            })
+            .map_err(|e| GroupServiceError::MlsStorage(e.to_string()))?;
 
         *self
             .pending_identity
             .lock()
-            .expect("pending_identity lock poisoned") = Some((provider, identity));
+            .expect("pending_identity lock poisoned") = Some(PendingKeyPackage {
+            provider,
+            signature_keys: identity.signature_keys,
+            file,
+        });
         directory.publish(self.device_id, key_package_bytes);
         Ok(())
     }

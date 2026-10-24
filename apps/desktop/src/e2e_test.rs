@@ -484,3 +484,150 @@ fn unread(n: &Node, c: siar_domain::ConversationId) -> u32 {
             .unwrap_or(0)
     })
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
+async fn groups_and_the_shared_key_package_come_back_after_a_restart() {
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-groups-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let first = start_node(&tmp.join("a")).await;
+    let founder = first.hub.read(|s| s.identity.account.unwrap());
+    let key_package_before = first.hub.read(|s| s.identity.key_package.clone());
+    assert!(!key_package_before.is_empty());
+
+    first
+        .tx
+        .send(AppCommand::CreateGroup { founder })
+        .await
+        .unwrap();
+    wait_until("group created", || {
+        first.hub.read(|s| s.groups.ordered().len() == 1)
+    })
+    .await;
+    let conversation = first.hub.read(|s| s.groups.ordered()[0].conversation_id);
+
+    // "Restart": a brand-new core over the same data directory.
+    let second = start_node(&tmp.join("a")).await;
+    wait_until("group restored into the UI", || {
+        second.hub.read(|s| s.groups.get(conversation).is_some())
+    })
+    .await;
+    assert!(
+        second.hub.read(|s| s.is_group(conversation)),
+        "it is in the chat list as a group"
+    );
+    assert!(second
+        .hub
+        .read(|s| s.groups.get(conversation).unwrap().is_admin));
+    // the key package handed out before the restart is still the one shown
+    assert_eq!(
+        second.hub.read(|s| s.identity.key_package.clone()),
+        key_package_before
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
+async fn group_invite_is_one_step_for_the_admin_and_one_tap_for_the_invitee() {
+    use base64::Engine;
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-invite-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let (a, b) = (
+        start_node(&tmp.join("a")).await,
+        start_node(&tmp.join("b")).await,
+    );
+    let ids = |n: &Node| {
+        n.hub.read(|s| {
+            (
+                s.identity.account.unwrap(),
+                s.identity.device.unwrap(),
+                s.identity.ticket.clone(),
+                s.identity.key_package.clone(),
+            )
+        })
+    };
+    let ((acct_a, _dev_a, _ticket_a, _), (acct_b, dev_b, ticket_b, kp_b)) = (ids(&a), ids(&b));
+
+    // A needs to know how to reach B (a saved contact, in app terms).
+    save_contact(&a, &b, "B").await;
+
+    // Admin: create the group, then add B with B's key package.
+    a.tx.send(AppCommand::CreateGroup { founder: acct_a })
+        .await
+        .unwrap();
+    wait_until("group created", || {
+        a.hub.read(|s| s.groups.ordered().len() == 1)
+    })
+    .await;
+    let conv = a.hub.read(|s| s.groups.ordered()[0].conversation_id);
+    let key_package_bytes = base64::engine::general_purpose::STANDARD
+        .decode(kp_b)
+        .unwrap();
+    a.tx.send(AppCommand::AddGroupMember {
+        conversation: conv,
+        new_member: acct_b,
+        input: siar_ui_state::AddMemberInput {
+            peer_account: acct_b,
+            peer_device: dev_b,
+            peer_ticket_text: ticket_b,
+            key_package_bytes,
+        },
+    })
+    .await
+    .unwrap();
+
+    // Invitee: the invite arrives already carrying the roster — nothing to paste.
+    wait_until("B has an invite", || {
+        b.hub.read(|s| !s.pending_invites.pending().is_empty())
+    })
+    .await;
+    assert!(b.hub.read(|s| s.pending_invites.pending()[0].carries_state));
+    b.tx.send(AppCommand::AcceptGroupInvite { conversation: conv })
+        .await
+        .unwrap();
+    wait_until("B joined", || b.hub.read(|s| s.groups.get(conv).is_some())).await;
+    let (members, is_admin) = b.hub.read(|s| {
+        let g = s.groups.get(conv).unwrap();
+        (g.member_count, g.is_admin)
+    });
+    assert_eq!(members, 2);
+    assert!(!is_admin, "the invitee is a member, not an admin");
+    assert!(
+        b.hub.read(|s| s.pending_invites.pending().is_empty()),
+        "the invite is consumed"
+    );
+
+    // Group messages flow admin → member…
+    a.tx.send(AppCommand::SendGroupMessage {
+        conversation: conv,
+        text: MessageText::parse("hello group".into()).unwrap(),
+    })
+    .await
+    .unwrap();
+    wait_until("B received", || {
+        b.hub.read(|s| {
+            s.timelines.get(&conv).is_some_and(|t| {
+                t.visible()
+                    .any(|e| !e.from_me && text_of(e) == "hello group")
+            })
+        })
+    })
+    .await;
+
+    // …and member → admin, once B can reach A (a saved contact).
+    save_contact(&b, &a, "A").await;
+    b.tx.send(AppCommand::SendGroupMessage {
+        conversation: conv,
+        text: MessageText::parse("hi admin".into()).unwrap(),
+    })
+    .await
+    .unwrap();
+    wait_until("A received", || {
+        a.hub.read(|s| {
+            s.timelines
+                .get(&conv)
+                .is_some_and(|t| t.visible().any(|e| !e.from_me && text_of(e) == "hi admin"))
+        })
+    })
+    .await;
+}

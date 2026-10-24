@@ -52,11 +52,13 @@ tls_codec = { version = "0.5", features = ["derive", "serde", "mls"] }
 # this crate doesn't depend on `rusqlite` directly — see `persistent.rs`
 # for why (its `Connection` re-export is enough).
 openmls_sqlite_storage = "0.3.0-rc.1"
-# `PostcardCodec` (`persistent.rs`) implements `openmls_sqlite_storage`'s
-# `Codec` trait using `postcard` — reusing this workspace's existing
-# wire-format choice (architecture.md §59: "Avoid JSON for hot-path
-# networking") for local storage too, rather than pulling in
-# `serde_json` as a second serialization format for one crate.
-postcard = { workspace = true }
+# `JsonCodec` (`persistent.rs`) implements `openmls_sqlite_storage`'s
+# `Codec` trait with `serde_json`. This is local on-disk state, not
+# hot-path networking, so architecture.md §59's "avoid JSON" does not
+# apply — and postcard CANNOT do this job: it rejects some of openmls's
+# stored types on read (`WontImplement`, found by tests/persistence.rs,
+# the first test to reload a group), so the earlier postcard choice made
+# every reload fail. openmls's own tests use JSON for the same reason.
+serde_json = { workspace = true }
 serde = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

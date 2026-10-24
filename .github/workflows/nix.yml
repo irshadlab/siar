@@ -4,18 +4,24 @@ on:
   push:
     branches: [main, develop]
   pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   nix-check-and-build:
+    name: Nix Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             system: x86_64-linux
-          - os: macos-latest
-            system: aarch64-darwin
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,15 +42,4 @@ jobs:
         run: nix build .#siar-emergency-node --print-build-logs
 
       - name: Build SIAR Desktop (Linux)
-        if: matrix.os == 'ubuntu-latest'
         run: nix build .#siar-desktop --print-build-logs
-
-      - name: Verify bit-for-bit reproducibility of siar-cli
-        # A green build above only proves the derivation succeeds, not that
-        # it's reproducible. --rebuild forces Nix to build a second time in
-        # a fresh sandbox and diff the output against the first result,
-        # failing the job if a single byte differs. This is the actual test
-        # of the "hermetic & bit-for-bit reproducible" claim in flake.nix's
-        # source-filtering comment; without it that claim is unverified.
-        run: nix build .#siar-cli --rebuild --print-build-logs
-

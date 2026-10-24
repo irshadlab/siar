@@ -513,3 +513,36 @@ fn prepending_history_does_not_change_the_newest_message_signal() {
         "from long ago"
     );
 }
+
+#[test]
+fn an_invite_that_carries_the_group_record_needs_nothing_pasted() {
+    let mut h = Harness::new(1180, 760);
+    populate(&h.hub);
+    let conv = siar_domain::ConversationId::new();
+    h.hub.update(|s| {
+        s.pending_invites.add(siar_ui_state::PendingInvite {
+            conversation_id: conv,
+            from_device: siar_domain::DeviceId::new(),
+            welcome_bytes: vec![1],
+            state_input: String::new(),
+            carries_state: true,
+        });
+    });
+    h.flush();
+    let rows = h.app().get_invites();
+    let row = (0..rows.row_count())
+        .map(|i| rows.row_data(i).unwrap())
+        .find(|r| r.has_state)
+        .unwrap();
+    assert!(
+        h.app().invoke_accept_invite(row.id.clone(), "".into()),
+        "empty paste is fine for this invite"
+    );
+    assert!(
+        matches!(&h.commands()[0], AppCommand::AcceptGroupInvite { conversation } if *conversation == conv)
+    );
+    // an old-style invite still insists on the pasted state
+    let legacy = rows.row_data(0).unwrap();
+    assert!(!legacy.has_state);
+    assert!(!h.app().invoke_accept_invite(legacy.id, "".into()));
+}

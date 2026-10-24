@@ -148,6 +148,8 @@ pub struct Bootstrapped {
     /// Read access to stored messages, so the UI can show real delivery
     /// ticks (Sent / Delivered) instead of staying on "Saving…".
     pub messages: Arc<dyn MessageRepository + Send + Sync>,
+    /// Groups whose MLS state was reopened from disk at start-up.
+    pub restored_groups: Vec<siar_domain::ConversationId>,
     /// Per-device data directory (verification marks live here).
     pub data_dir: std::path::PathBuf,
     /// When this device's identity key was first created (file creation
@@ -271,15 +273,24 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
     let group_identity = identity
         .try_clone()
         .context("cloning device identity for GroupService")?;
-    let group_service = Arc::new(GroupService::new(
-        device_id,
-        local_account,
-        group_identity,
-        endpoint.clone(),
-        messages.clone(),
-        device_directory.clone(),
-        groups,
-    ));
+    // MLS group state lives on disk (one SQLite file per group, under
+    // `<data dir>/mls`), so groups and the key package this device handed
+    // out survive a restart. `restore_mls_sessions` reopens them; a group
+    // that fails to reopen is logged and skipped, never fatal.
+    let group_service = Arc::new(
+        GroupService::new_persistent(
+            device_id,
+            local_account,
+            group_identity,
+            endpoint.clone(),
+            messages.clone(),
+            device_directory.clone(),
+            groups,
+            paths.data_dir.join("mls"),
+        )
+        .context("opening MLS group storage")?,
+    );
+    let restored_groups = group_service.restore_mls_sessions();
 
     // Publish once at startup, immediately reclaim the bytes from the
     // same in-process directory to display them — this device is the
@@ -288,7 +299,9 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
     // succeeds unless publishing itself failed. A logged warning, not
     // a hard bootstrap failure, since losing "can be added to a group"
     // shouldn't take down 1:1 messaging too.
-    let key_package_b64 = match group_service.publish_key_package(key_package_directory.as_ref()) {
+    let key_package_b64 = match group_service
+        .ensure_key_package_published(key_package_directory.as_ref())
+    {
         Ok(()) => key_package_directory.take(device_id).map(|bytes| {
             use base64::Engine;
             base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -315,6 +328,7 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
         contact_repo,
         saved_contacts,
         messages: message_view,
+        restored_groups,
         data_dir: paths.data_dir.clone(),
         identity_created_at_millis,
     })

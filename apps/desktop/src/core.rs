@@ -79,6 +79,7 @@ pub(crate) async fn start(boot: Bootstrapped, hub: UiHub) -> Arc<Core> {
         messages,
         data_dir,
         identity_created_at_millis,
+        restored_groups,
         ..
     } = boot;
     let local_key = my_ticket.ed25519_verifying;
@@ -163,6 +164,16 @@ pub(crate) async fn start(boot: Bootstrapped, hub: UiHub) -> Arc<Core> {
                 })
                 .collect(),
         );
+        // Groups reopened from disk: put them back in the lists.
+        for conversation in &restored_groups {
+            match core.group_service.group_state(*conversation) {
+                Ok(Some(g)) => core.apply_group_summary(s, &g),
+                Ok(None) => {
+                    tracing::warn!(?conversation, "restored MLS group has no bookkeeping row")
+                }
+                Err(e) => tracing::warn!(error = %e, "couldn’t read a restored group’s state"),
+            }
+        }
         for (conversation, name) in seeded {
             s.ensure_conversation(conversation, name, ConversationKind::Direct);
             s.sendable.insert(conversation);
@@ -372,21 +383,23 @@ impl Core {
         });
     }
 
-    fn upsert_group_summary(&self, g: &siar_domain::GroupState) {
-        self.hub.update(|s| {
-            s.groups.upsert(GroupSummary {
-                conversation_id: g.conversation_id,
-                display_label: format!("Group {}", g.conversation_id.fmt_short()),
-                member_count: g.members().len(),
-                is_admin: g.is_admin(self.local_account),
-                epoch: g.epoch.number(),
-            });
-            s.ensure_conversation(
-                g.conversation_id,
-                format!("Group {}", g.conversation_id.fmt_short()),
-                ConversationKind::Group,
-            );
+    fn apply_group_summary(&self, s: &mut siar_ui_slint::Slices, g: &siar_domain::GroupState) {
+        s.groups.upsert(GroupSummary {
+            conversation_id: g.conversation_id,
+            display_label: format!("Group {}", g.conversation_id.fmt_short()),
+            member_count: g.members().len(),
+            is_admin: g.is_admin(self.local_account),
+            epoch: g.epoch.number(),
         });
+        s.ensure_conversation(
+            g.conversation_id,
+            format!("Group {}", g.conversation_id.fmt_short()),
+            ConversationKind::Group,
+        );
+    }
+
+    fn upsert_group_summary(&self, g: &siar_domain::GroupState) {
+        self.hub.update(|s| self.apply_group_summary(s, g));
     }
 }
 
@@ -683,6 +696,25 @@ pub(crate) async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<A
                     tracing::warn!(?conversation, "AcceptGroupInvite with no pending invite");
                     continue;
                 };
+                if invite.carries_state {
+                    // The invite brought the roster/admin record with it.
+                    match core
+                        .group_service
+                        .join_group_from_invite(conversation, &invite.welcome_bytes)
+                    {
+                        Ok(group_state) => {
+                            core.upsert_group_summary(&group_state);
+                            core.hub
+                                .notify(NoticeLevel::Success, "You joined the group.");
+                        }
+                        Err(e) => {
+                            // Keep it listed: a transient failure shouldn’t destroy the invite.
+                            core.hub.update(|s| s.pending_invites.add(invite));
+                            core.fail("Joining the group failed", e);
+                        }
+                    }
+                    continue;
+                }
                 let parsed: Result<siar_domain::GroupState, String> =
                     base64_decode(&invite.state_input)
                         .and_then(|b| postcard::from_bytes(&b).map_err(|e| e.to_string()));
@@ -879,12 +911,17 @@ async fn incoming_loop(
         ) {
             match envelope.kind {
                 EnvelopeKind::GroupMlsWelcome => {
+                    // Does the invite carry the group record itself (this
+                    // version), or is it a bare welcome from an older client?
+                    let carries_state =
+                        siar_messaging::WelcomeBundle::decode(&envelope.payload).is_some();
                     core.hub.update(|s| {
                         s.pending_invites.add(PendingInvite {
                             conversation_id: envelope.conversation_id,
                             from_device: envelope.sender,
                             welcome_bytes: envelope.payload,
                             state_input: String::new(),
+                            carries_state,
                         });
                     });
                     core.hub.notify(

@@ -122,3 +122,22 @@ fn load_earlier_row_renders_above_the_oldest_message() {
     h.flush();
     assert_drawn(&h.shot("chat-load-earlier"));
 }
+
+#[test]
+fn invite_cards_render_with_and_without_the_group_record() {
+    let h = Harness::new(1180, 760);
+    populate(&h.hub); // already holds one older-style invite (needs pasted state)
+    h.ui.window().global::<Theme>().set_mode(ThemeMode::Light);
+    h.hub.update(|st| {
+        st.pending_invites.add(siar_ui_state::PendingInvite {
+            conversation_id: siar_domain::ConversationId::new(),
+            from_device: siar_domain::DeviceId::new(),
+            welcome_bytes: vec![1],
+            state_input: String::new(),
+            carries_state: true,
+        });
+    });
+    h.flush();
+    h.app().set_page(Page::Groups);
+    assert_drawn(&h.shot("groups-invites"));
+}

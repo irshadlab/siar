@@ -58,28 +58,22 @@ pub enum PersistentProviderError {
     Migrate(String),
 }
 
-/// `openmls_sqlite_storage::Codec` implemented with `postcard` — see
-/// this crate's `Cargo.toml` for why `postcard` over `serde_json`.
-/// `Codec::Error` just needs `std::error::Error + Debug + Send + Sync +
-/// 'static` (checked directly from `openmls_sqlite_storage`'s trait
-/// definition); `postcard::Error` is a standard serde-adjacent error
-/// enum and satisfies that shape the same way every other error type
-/// this crate maps through `thiserror` does — not independently
-/// fetched/confirmed line-by-line the way the openmls-specific API
-/// surface elsewhere in this crate was, since this bound is a generic
-/// Rust error-trait expectation, not an openmls-specific quirk.
+/// `openmls_sqlite_storage::Codec` implemented with `serde_json` — see
+/// this crate's `Cargo.toml` for why not postcard (it cannot read back
+/// some openmls types). `Codec::Error` just needs `std::error::Error +
+/// Debug + Send + Sync + 'static`, which `serde_json::Error` satisfies.
 #[derive(Debug, Default)]
-pub struct PostcardCodec;
+pub struct JsonCodec;
 
-impl Codec for PostcardCodec {
-    type Error = postcard::Error;
+impl Codec for JsonCodec {
+    type Error = serde_json::Error;
 
     fn to_vec<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Self::Error> {
-        postcard::to_allocvec(value)
+        serde_json::to_vec(value)
     }
 
     fn from_slice<T: serde::de::DeserializeOwned>(slice: &[u8]) -> Result<T, Self::Error> {
-        postcard::from_bytes(slice)
+        serde_json::from_slice(slice)
     }
 }
 
@@ -94,7 +88,7 @@ impl Codec for PostcardCodec {
 /// for storage.
 pub struct SqlitePersistentProvider {
     crypto: RustCrypto,
-    storage: SqliteStorageProvider<PostcardCodec, Connection>,
+    storage: SqliteStorageProvider<JsonCodec, Connection>,
 }
 
 impl SqlitePersistentProvider {
@@ -110,7 +104,7 @@ impl SqlitePersistentProvider {
     pub fn open(path: &Path) -> Result<Self, PersistentProviderError> {
         let connection =
             Connection::open(path).map_err(|e| PersistentProviderError::Open(format!("{e:?}")))?;
-        let mut storage = SqliteStorageProvider::<PostcardCodec, Connection>::new(connection);
+        let mut storage = SqliteStorageProvider::<JsonCodec, Connection>::new(connection);
         storage
             .run_migrations()
             .map_err(|e| PersistentProviderError::Migrate(format!("{e:?}")))?;
@@ -125,7 +119,7 @@ impl SqlitePersistentProvider {
 impl OpenMlsProvider for SqlitePersistentProvider {
     type CryptoProvider = RustCrypto;
     type RandProvider = RustCrypto;
-    type StorageProvider = SqliteStorageProvider<PostcardCodec, Connection>;
+    type StorageProvider = SqliteStorageProvider<JsonCodec, Connection>;
 
     fn storage(&self) -> &Self::StorageProvider {
         &self.storage

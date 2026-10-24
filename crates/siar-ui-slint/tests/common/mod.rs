@@ -252,6 +252,7 @@ pub fn populate(hub: &UiHub) -> Sample {
             from_device: DeviceId::new(),
             welcome_bytes: vec![1, 2, 3],
             state_input: String::new(),
+            carries_state: false,
         });
         s.security_events.push(SecurityEventKind::DeviceLinked, now, None, None, vec![]);
         s.security_events.push(SecurityEventKind::IdentityChanged, now, None, None, vec![]);

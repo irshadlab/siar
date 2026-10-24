@@ -50,5 +50,8 @@ pub use ticket::PeerTicket;
 // an actual compile of the import path.
 pub use group_service::{
     DeviceDirectory, GroupService, GroupServiceError, InMemoryDeviceDirectory, MemberDevice,
+    WelcomeBundle,
 };
 pub use key_package_directory::{InMemoryKeyPackageDirectory, KeyPackageDirectory};
+
+pub mod mls_store;

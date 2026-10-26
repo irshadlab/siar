@@ -332,8 +332,7 @@ ACK → Delivered):
   again; pre-restart key package still usable), 4 index tests, and a
   desktop-level restart test.
 - Still open for groups (the invite-state gap listed here earlier is fixed,
-  see the next section): a member can only message members it has saved as
-  contacts (the device directory has no discovery); and group history
+  see the next section): group history
   cannot be re-read after a restart by design (MLS ratchets forward, so old
   ciphertext is not re-decryptable — it would need plaintext-at-rest).
 
@@ -351,6 +350,68 @@ ACK → Delivered):
 - Remaining for groups: a member can only message members it has saved as
   contacts (no device discovery); no history after restart (MLS forward
   secrecy); group unread isn't persisted.
+
+**Added 2026-10-25 (live audit, core hardening, backup):**
+- Live hardware audit (Arch / Wayland / Niri, GPU renderer, live relay):
+  the app starts and renders correctly. Fixed from it: segmented controls
+  (theme/density/size) had NO keyboard support and are now one Tab stop with
+  arrow/Home/End; the Paste button now focuses its field first; read-only
+  copy fields show a focus ring; diagnostics copy buttons confirm. Not
+  reproduced: the claim that "Tab skips every text input" — a headless test
+  passes with and without `forward-focus`; the one-line fix is kept (harmless)
+  but nothing is claimed for it. The audit's patch used identifiers that
+  don't exist in this code, so the fixes were re-implemented, not applied.
+- **Transport identity bug (critical, pre-existing):** the iroh endpoint key
+  was `SecretKey::generate()` on every launch, so a device's address (the
+  core of its ticket) changed at each restart; saved tickets went stale, a
+  restarted peer's messages were dropped as "unpaired", and per-peer
+  conversation ids (derived from endpoint ids) changed, orphaning history.
+  Now derived from the persistent identity with a domain-separated KDF
+  (`DeviceIdentity::derive_secret`), so it is stable across restarts and
+  restores with no extra secret file. **Upgrade note:** every device's address
+  changes ONCE on upgrading to this build; saved tickets must be re-shared
+  once. `apps/cli` still generates per launch (it has no persistent identity
+  either).
+- Backup/restore (`crates/siar-backup`, `siar-desktop backup|restore|
+  backup-info`): Argon2id + XChaCha20-Poly1305, header bound as AAD (any
+  flipped bit anywhere is detected — tested at every byte), hostile KDF
+  parameters/paths/duplicates/oversize rejected before any work or write,
+  restore only into an empty folder, staged then renamed (a failure leaves
+  nothing behind), mode 0600. A single-instance lock (`siar.lock`) now stops
+  two copies sharing one data folder and makes backup/restore refuse a
+  running app. Disaster-recovery test on real cores: restore gives the same
+  account/device ids, key package, verified contact, group and decryptable
+  history, and can message its peer. Not yet in the UI.
+- Persistent security log (stoolap table `security_events`): events and
+  resolved state survive restarts; a standing key-change warning is not
+  re-raised at launch once seen, but a NEW change during a session still is.
+- MLS persistence uses SQLite (not stoolap) on purpose: `siar-crypto-mls`
+  already built on `openmls_sqlite_storage`; messages, contacts, groups and
+  everything else stay in stoolap. Moving MLS state to stoolap would mean
+  implementing openmls's ~90-method `StorageProvider` trait — possible, not
+  done, and not recommended without a reason.
+
+**Added 2026-10-25 (group discovery + roster sync):**
+- Group members no longer have to be saved contacts. The Welcome carries
+  every member's address (`WelcomeBundle` v2, `DirectoryEntry`; v1 still
+  read) and an add-member commit carries the new member's address and the
+  roster change (`CommitBundle`). Learned addresses are kept in the new
+  stoolap table `peer_directory`, so they survive a restart.
+- Bug fixed on the way: when a member was added, only the ADMIN's stored
+  roster changed — every other member's roster and send list stayed stale,
+  so anyone added later was invisible to them. Existing members now apply
+  the change themselves.
+- Trust rules (tested): an invite's addresses are accepted only for accounts
+  in the group record that came with it, never for yourself, capped at 256;
+  a member-add only changes a roster if it arrives from a device that is a
+  known ADMIN in the receiver's own view (a valid MLS commit from an
+  unverified sender merges cryptographically but changes neither roster nor
+  address book).
+- Verified through three real desktop cores using only UI commands: B and
+  C, who never met and have no contacts, message each other and the admin;
+  B restarts and still reaches both.
+- Still open for groups: no history after a restart (MLS ratchets forward);
+  group unread isn't persisted; removing a member is not wired in the UI.
 
 **Not done / known gaps**
 - Calls, Files, Search destinations (no backend yet).

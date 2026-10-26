@@ -8,10 +8,12 @@
 //! the UI) and one bounded `AppCommand` channel (actions out of it).
 
 mod bootstrap;
+mod cli;
 mod core;
 mod history;
 mod peers;
 mod read_marks;
+mod security_log;
 mod verification;
 
 #[cfg(test)]
@@ -38,10 +40,35 @@ fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match cli::parse(&args) {
+        Ok(cli::Command::Run) => run_app(),
+        Ok(command) => cli::execute(command),
+        Err(why) => {
+            eprintln!("{why}\n\n{}", cli::USAGE);
+            std::process::exit(2);
+        }
+    }
+}
+
+fn run_app() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("siar-core")
         .build()?;
+
+    // One copy of the app per data folder. Two would write the same
+    // database and key files; a backup also needs the folder quiet. The OS
+    // releases the lock if we crash, so it can never get stuck.
+    let data_dir = bootstrap::resolve_data_paths().ok().map(|p| p.data_dir);
+    let lock = data_dir.as_deref().map(siar_backup::InstanceLock::acquire);
+    let already_running = matches!(lock, Some(Err(siar_backup::LockError::Held)));
+    if let Some(Err(siar_backup::LockError::Io(e))) = &lock {
+        // Can't lock (read-only folder, odd file system): carry on rather
+        // than refuse to start, but say so.
+        tracing::warn!(error = %e, "couldn’t take the data folder lock");
+    }
+    let _lock = lock.and_then(Result::ok);
 
     // Appearance settings are optional: no data dir or a damaged file just
     // means defaults, never a failed start.
@@ -78,6 +105,29 @@ fn main() -> Result<()> {
     .map_err(|e| anyhow!("couldn't create the window: {e}"))?;
 
     let hub = ui.hub();
+    if already_running {
+        // Show why, instead of silently doing nothing (or worse, starting a
+        // second core on a database the first one is using).
+        hub.update(|s| {
+            s.startup_error = Some(
+                "Siar is already running with this data folder.\n\nSwitch to the open window, or close it and try again."
+                    .into(),
+            );
+        });
+    } else {
+        spawn_core(&runtime, hub, command_rx);
+    }
+
+    let result = ui.run().map_err(|e| anyhow!("UI event loop failed: {e}"));
+    runtime.shutdown_timeout(Duration::from_secs(2));
+    result
+}
+
+fn spawn_core(
+    runtime: &tokio::runtime::Runtime,
+    hub: siar_ui_slint::UiHub,
+    command_rx: mpsc::Receiver<AppCommand>,
+) {
     runtime.spawn(async move {
         match bootstrap::bootstrap_messaging().await {
             Ok(boot) => core::run(boot, hub, command_rx).await,
@@ -91,8 +141,4 @@ fn main() -> Result<()> {
             }
         }
     });
-
-    let result = ui.run().map_err(|e| anyhow!("UI event loop failed: {e}"));
-    runtime.shutdown_timeout(Duration::from_secs(2));
-    result
 }

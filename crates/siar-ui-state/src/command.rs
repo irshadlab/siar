@@ -97,6 +97,11 @@ pub enum AppCommand {
         device_id: siar_domain::DeviceId,
         verified: bool,
     },
+    /// The user resolved a security event: persist that, so it stays
+    /// resolved after a restart. (The in-memory log is already updated.)
+    ResolveSecurityEvent {
+        event_id: u64,
+    },
     /// Load the next page of older messages for a 1:1 conversation.
     LoadEarlierMessages {
         conversation: siar_domain::ConversationId,

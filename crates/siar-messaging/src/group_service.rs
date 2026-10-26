@@ -125,7 +125,7 @@ pub enum GroupServiceError {
 /// `PeerTicket` already carries for a 1:1 peer, paired with the
 /// `DeviceId` group membership is tracked by (plan.md §7's
 /// `DeviceId` != transport identity).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberDevice {
     pub device_id: DeviceId,
     pub ticket: PeerTicket,
@@ -140,6 +140,13 @@ pub struct MemberDevice {
 /// contact/ticket store; tests can supply a closure-backed stub.
 pub trait DeviceDirectory: Send + Sync {
     fn devices_for(&self, account: AccountId) -> Vec<MemberDevice>;
+
+    /// Remember how to reach `device` of `account`. Called when an invite
+    /// or a membership change TELLS this device about another member, so a
+    /// member no longer has to be a saved contact to be reachable.
+    /// Default: ignore (a directory that is read-only, or backed by
+    /// something else, simply keeps its own view).
+    fn learn(&self, _account: AccountId, _device: MemberDevice) {}
 }
 
 /// Reference `DeviceDirectory` implementation — in-memory, populated by
@@ -156,11 +163,43 @@ pub trait DeviceDirectory: Send + Sync {
 #[derive(Default)]
 pub struct InMemoryDeviceDirectory {
     devices: Mutex<HashMap<AccountId, Vec<MemberDevice>>>,
+    /// When set, addresses LEARNED from invites/commits (not ones an app
+    /// registers itself, e.g. from saved contacts, which have their own
+    /// storage) are written here and reloaded at start-up.
+    persist: Option<Arc<dyn siar_storage::PeerDirectoryRepository + Send + Sync>>,
 }
 
 impl InMemoryDeviceDirectory {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A directory that remembers what it learns across restarts. Rows it
+    /// can't understand (damaged, or from a future version) are skipped
+    /// with a warning: a bad entry must not stop the app starting.
+    pub fn persistent(repo: Arc<dyn siar_storage::PeerDirectoryRepository + Send + Sync>) -> Self {
+        let directory = Self {
+            devices: Mutex::default(),
+            persist: Some(repo.clone()),
+        };
+        match repo.list() {
+            Ok(rows) => {
+                for row in rows {
+                    let parsed = (|| {
+                        let account = row.account_id.parse::<AccountId>().ok()?;
+                        let device_id = row.device_id.parse::<DeviceId>().ok()?;
+                        let ticket = PeerTicket::decode(&row.ticket_text).ok()?;
+                        Some((account, MemberDevice { device_id, ticket }))
+                    })();
+                    match parsed {
+                        Some((account, device)) => directory.register(account, device),
+                        None => tracing::warn!("skipping an unreadable saved member address"),
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "couldn’t read saved member addresses"),
+        }
+        directory
     }
 
     /// Adds `device` to `account`'s known devices. Idempotent by
@@ -188,6 +227,20 @@ impl DeviceDirectory for InMemoryDeviceDirectory {
             .get(&account)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn learn(&self, account: AccountId, device: MemberDevice) {
+        if let Some(repo) = &self.persist {
+            let row = siar_storage::StoredPeerDevice {
+                account_id: account.to_string(),
+                device_id: device.device_id.to_string(),
+                ticket_text: device.ticket.encode(),
+            };
+            if let Err(e) = repo.upsert(&row) {
+                tracing::warn!(error = %e, "couldn’t save a learned member address");
+            }
+        }
+        self.register(account, device);
     }
 }
 
@@ -231,42 +284,121 @@ pub struct GroupService {
     pending_identity: Mutex<Option<PendingKeyPackage>>,
 }
 
-/// What a `GroupMlsWelcome` envelope carries: the MLS Welcome plus the
-/// durable group bookkeeping (members, admins, epoch) as of the moment the
-/// new member was added.
+/// One member device's address, as told to another member.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DirectoryEntry {
+    pub account: AccountId,
+    pub device: DeviceId,
+    /// `PeerTicket::encode` text: how to reach it, plus its keys.
+    pub ticket: String,
+}
+
+impl DirectoryEntry {
+    fn of(account: AccountId, d: &MemberDevice) -> Self {
+        Self {
+            account,
+            device: d.device_id,
+            ticket: d.ticket.encode(),
+        }
+    }
+
+    fn into_device(self) -> Option<(AccountId, MemberDevice)> {
+        let ticket = PeerTicket::decode(&self.ticket).ok()?;
+        Some((
+            self.account,
+            MemberDevice {
+                device_id: self.device,
+                ticket,
+            },
+        ))
+    }
+}
+
+/// Most directory entries one invite may carry. A real group is far
+/// smaller; the cap only bounds what a hostile invite can make us parse.
+const MAX_DIRECTORY_ENTRIES: usize = 256;
+
+/// What a `GroupMlsWelcome` envelope carries: the MLS Welcome, the group's
+/// roster/admin record as of the add, and how to reach every other member.
 ///
-/// MLS tells a joiner the cryptographic state but not the application's
-/// own roster/admin record, and nothing else delivers it — so before this,
-/// the admin had to copy that record to the invitee by hand, and the
-/// admin's UI had no way to show it. Sending it in the same message makes
-/// an invite one step for the admin and one tap for the invitee.
+/// MLS gives a joiner the cryptographic state, but not the application's
+/// own roster, and nothing else delivers it — so before this the admin had
+/// to hand-copy that record to the invitee. And without the member
+/// addresses the joiner could only message members it had separately
+/// saved as contacts. Sending both in the invite makes joining one step.
 ///
-/// The first byte is a format version, so a future change can't be
-/// mistaken for this one; an older client's bare Welcome (no version byte
-/// this layout recognises) decodes to `None` and takes the manual path.
+/// The first byte is a format version. Version 1 (roster only) is still
+/// understood; a bare Welcome from an older client decodes to `None` and
+/// takes the manual path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WelcomeBundle {
     pub welcome: Vec<u8>,
     pub state: GroupState,
+    pub directory: Vec<DirectoryEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct WelcomeBundleV1 {
+    welcome: Vec<u8>,
+    state: GroupState,
 }
 
 const WELCOME_BUNDLE_V1: u8 = 1;
+const WELCOME_BUNDLE_V2: u8 = 2;
 
 impl WelcomeBundle {
     pub fn encode(&self) -> Result<Vec<u8>, GroupServiceError> {
-        let mut out = vec![WELCOME_BUNDLE_V1];
+        let mut out = vec![WELCOME_BUNDLE_V2];
         out.extend(postcard::to_allocvec(self).map_err(|_| GroupServiceError::Malformed)?);
         Ok(out)
     }
 
-    /// `None` for anything that isn't a v1 bundle (including a bare
-    /// Welcome from an older client).
+    /// `None` for anything that isn't a known bundle version (including a
+    /// bare Welcome from an older client).
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         let (&version, rest) = bytes.split_first()?;
-        if version != WELCOME_BUNDLE_V1 {
-            return None;
+        match version {
+            WELCOME_BUNDLE_V2 => postcard::from_bytes(rest).ok(),
+            WELCOME_BUNDLE_V1 => {
+                let v1: WelcomeBundleV1 = postcard::from_bytes(rest).ok()?;
+                Some(Self {
+                    welcome: v1.welcome,
+                    state: v1.state,
+                    directory: Vec::new(),
+                })
+            }
+            _ => None,
         }
-        postcard::from_bytes(rest).ok()
+    }
+}
+
+/// What a `GroupMlsCommit` envelope carries when the commit adds a member:
+/// the MLS commit, plus who was added and how to reach them. Existing
+/// members otherwise learn neither — the commit only advances their MLS
+/// state — so a member added later would be invisible to everyone but the
+/// admin who added them.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CommitBundle {
+    pub commit: Vec<u8>,
+    pub added: DirectoryEntry,
+}
+
+const COMMIT_BUNDLE_V1: u8 = 1;
+
+impl CommitBundle {
+    pub fn encode(&self) -> Result<Vec<u8>, GroupServiceError> {
+        let mut out = vec![COMMIT_BUNDLE_V1];
+        out.extend(postcard::to_allocvec(self).map_err(|_| GroupServiceError::Malformed)?);
+        Ok(out)
+    }
+
+    /// `None` for a bare MLS commit (an older client, or a commit that
+    /// isn't an add).
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        let (&version, rest) = bytes.split_first()?;
+        (version == COMMIT_BUNDLE_V1)
+            .then(|| postcard::from_bytes(rest).ok())
+            .flatten()
     }
 }
 
@@ -646,6 +778,86 @@ impl GroupService {
             .collect()
     }
 
+    /// This device as another member would address it.
+    fn own_member_device(&self) -> MemberDevice {
+        MemberDevice {
+            device_id: self.device_id,
+            ticket: PeerTicket {
+                endpoint_addr: self.endpoint.addr(),
+                x25519_public: self.identity.x25519_public().to_bytes(),
+                ed25519_verifying: self.identity.verifying_key().to_bytes(),
+            },
+        }
+    }
+
+    /// Adopts addresses an invite or commit told us about — but only for
+    /// accounts that really are members, never for ourselves, and never
+    /// more than a sane number, so a hostile message can't plant arbitrary
+    /// entries or make us parse an unbounded list.
+    fn learn_directory(&self, state: &GroupState, entries: Vec<DirectoryEntry>) {
+        for entry in entries.into_iter().take(MAX_DIRECTORY_ENTRIES) {
+            if entry.account == self.local_account || !state.is_member(entry.account) {
+                continue;
+            }
+            if let Some((account, device)) = entry.into_device() {
+                self.directory.learn(account, device);
+            }
+        }
+    }
+
+    /// An existing member's side of "an admin added someone": record the
+    /// roster change and learn how to reach the new member. Without this
+    /// only the admin's roster ever changed, so everyone else kept sending
+    /// to the old member list.
+    fn apply_member_added(
+        &self,
+        conversation: ConversationId,
+        sender: DeviceId,
+        added: DirectoryEntry,
+    ) {
+        let Ok(Some(mut state)) = self.groups.get(conversation) else {
+            tracing::warn!(
+                ?conversation,
+                "commit for a group with no stored roster; roster not updated"
+            );
+            return;
+        };
+        // Only an admin may add members: find the sender's account in OUR
+        // view of the group and check it.
+        let sender_account = state.members().iter().map(|m| m.account).find(|a| {
+            self.directory
+                .devices_for(*a)
+                .iter()
+                .any(|d| d.device_id == sender)
+        });
+        let Some(sender_account) = sender_account.filter(|a| state.is_admin(*a)) else {
+            tracing::warn!(
+                ?conversation,
+                "member-add commit from a device that isn't a known admin; roster not updated"
+            );
+            return;
+        };
+        let _ = sender_account;
+        let account = added.account;
+        if !state.is_member(account) {
+            let next = state.epoch.next();
+            state.apply(&DurableGroupEvent::MemberAdded {
+                account,
+                epoch: next,
+            });
+            state.apply(&DurableGroupEvent::EpochAdvanced { new_epoch: next });
+            if let Err(e) = self.groups.upsert(&state) {
+                tracing::warn!(error = %e, "couldn’t save the updated roster");
+                return;
+            }
+        }
+        if account != self.local_account {
+            if let Some((account, device)) = added.into_device() {
+                self.directory.learn(account, device);
+            }
+        }
+    }
+
     async fn fanout_event(
         &self,
         state: &GroupState,
@@ -777,10 +989,51 @@ impl GroupService {
         });
         self.groups.upsert(&state)?;
 
+        // The added member's address, as known to this admin (it is needed
+        // anyway to deliver the welcome).
+        let added_entry = self
+            .directory
+            .devices_for(new_member)
+            .into_iter()
+            .find(|d| d.device_id == new_member_device)
+            .map(|d| DirectoryEntry::of(new_member, &d));
+        // Existing members learn who was added and how to reach them.
+        let commit_payload = match &added_entry {
+            Some(added) => CommitBundle {
+                commit: commit_bytes.clone(),
+                added: added.clone(),
+            }
+            .encode()?,
+            None => commit_bytes.clone(), // can't describe them: a bare commit, as before
+        };
+        // The new member learns how to reach everyone else, including us.
+        let mut directory_entries: Vec<DirectoryEntry> = Vec::new();
+        let own = self.own_member_device();
+        let mut push = |account: AccountId, d: &MemberDevice| {
+            let entry = DirectoryEntry::of(account, d);
+            if !directory_entries
+                .iter()
+                .any(|e| e.account == entry.account && e.device == entry.device)
+            {
+                directory_entries.push(entry);
+            }
+        };
+        push(self.local_account, &own);
+        for m in state.members() {
+            if m.account == new_member {
+                continue;
+            }
+            for d in self.directory.devices_for(m.account) {
+                if d.device_id != new_member_device {
+                    push(m.account, &d);
+                }
+            }
+        }
         // The Welcome travels with the roster/admin record it belongs to.
         let welcome_payload = WelcomeBundle {
             welcome: welcome_bytes,
             state: state.clone(),
+            directory: directory_entries,
         }
         .encode()?;
 
@@ -794,7 +1047,7 @@ impl GroupService {
                 timestamp_millis: now,
                 sequence: now,
                 kind: EnvelopeKind::GroupMlsCommit,
-                payload: commit_bytes.clone(),
+                payload: commit_payload.clone(),
             };
             if let Err(e) = self
                 .endpoint
@@ -856,6 +1109,7 @@ impl GroupService {
             return Err(GroupServiceError::Malformed);
         }
         self.join_group_mls(conversation, &bundle.welcome, bundle.state.clone())?;
+        self.learn_directory(&bundle.state, bundle.directory);
         Ok(bundle.state)
     }
 
@@ -1203,26 +1457,39 @@ impl GroupService {
                 Ok(None)
             }
             EnvelopeKind::GroupMlsCommit | EnvelopeKind::GroupMlsApplication => {
-                let mut sessions = self
-                    .mls_sessions
-                    .lock()
-                    .expect("mls_sessions lock poisoned");
-                let Some(session) = sessions.get_mut(&conversation) else {
-                    tracing::warn!(
-                        ?conversation,
-                        "MLS frame for unknown local session; dropping"
-                    );
-                    return Ok(None);
+                // An add-member commit may arrive wrapped with the new
+                // member's address; a bare commit (older client) still works.
+                let bundle = matches!(envelope.kind, EnvelopeKind::GroupMlsCommit)
+                    .then(|| CommitBundle::decode(&envelope.payload))
+                    .flatten();
+                let mls_payload: &[u8] = bundle
+                    .as_ref()
+                    .map(|b| b.commit.as_slice())
+                    .unwrap_or(&envelope.payload);
+                let outcome = {
+                    let mut sessions = self
+                        .mls_sessions
+                        .lock()
+                        .expect("mls_sessions lock poisoned");
+                    let Some(session) = sessions.get_mut(&conversation) else {
+                        tracing::warn!(
+                            ?conversation,
+                            "MLS frame for unknown local session; dropping"
+                        );
+                        return Ok(None);
+                    };
+                    session.process_incoming(mls_payload)?
                 };
-                match session.process_incoming(&envelope.payload)? {
-                    IncomingMlsMessage::CommitMerged => Ok(None),
+                match outcome {
+                    IncomingMlsMessage::CommitMerged => {
+                        if let Some(b) = bundle {
+                            self.apply_member_added(conversation, envelope.sender, b.added);
+                        }
+                        Ok(None)
+                    }
                     // openmls 0.9.0-rc.2's own-message-echo case (see
                     // `IncomingMlsMessage::Ignored`'s doc comment in
-                    // `siar-crypto-mls` for the full explanation) —
-                    // genuinely nothing for a caller here to do with it
-                    // either, same `Ok(None)` shape as `CommitMerged`
-                    // and the "no envelope content produced" branches
-                    // above.
+                    // `siar-crypto-mls`): nothing for a caller to do.
                     IncomingMlsMessage::Ignored => Ok(None),
                     IncomingMlsMessage::Application(plaintext) => {
                         let content: MessageContent = postcard::from_bytes(&plaintext)
@@ -1313,5 +1580,86 @@ mod device_directory_tests {
 
         assert!(dir.devices_for(bob).is_empty());
         assert_eq!(dir.devices_for(alice).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod persistent_directory_tests {
+    use super::*;
+    use siar_storage::{PeerDirectoryRepository, StoolapPeerDirectoryRepository};
+
+    fn device(seed: u8) -> MemberDevice {
+        let identity = siar_crypto::DeviceIdentity::generate();
+        MemberDevice {
+            device_id: DeviceId::new(),
+            ticket: PeerTicket {
+                endpoint_addr: iroh::EndpointAddr::new(
+                    iroh::SecretKey::from_bytes(&[seed; 32]).public(),
+                ),
+                x25519_public: identity.x25519_public().to_bytes(),
+                ed25519_verifying: identity.verifying_key().to_bytes(),
+            },
+        }
+    }
+
+    #[test]
+    fn learned_addresses_survive_a_restart_but_registered_ones_are_not_duplicated_there() {
+        let repo: Arc<dyn PeerDirectoryRepository + Send + Sync> = Arc::new(
+            StoolapPeerDirectoryRepository::new(siar_storage::open_in_memory().unwrap()),
+        );
+        let (learned_account, registered_account) = (AccountId::new(), AccountId::new());
+        let (learned, registered) = (device(1), device(2));
+
+        let first = InMemoryDeviceDirectory::persistent(repo.clone());
+        first.learn(learned_account, learned.clone());
+        first.register(registered_account, registered); // a saved contact: its own storage's job
+        assert_eq!(first.devices_for(learned_account), vec![learned.clone()]);
+
+        let second = InMemoryDeviceDirectory::persistent(repo.clone()); // a "restart"
+        assert_eq!(second.devices_for(learned_account), vec![learned]);
+        assert!(second.devices_for(registered_account).is_empty());
+        assert_eq!(repo.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn learning_the_same_device_again_replaces_it_everywhere() {
+        let repo: Arc<dyn PeerDirectoryRepository + Send + Sync> = Arc::new(
+            StoolapPeerDirectoryRepository::new(siar_storage::open_in_memory().unwrap()),
+        );
+        let account = AccountId::new();
+        let mut d = device(3);
+        let dir = InMemoryDeviceDirectory::persistent(repo.clone());
+        dir.learn(account, d.clone());
+        d.ticket.endpoint_addr =
+            iroh::EndpointAddr::new(iroh::SecretKey::from_bytes(&[4; 32]).public());
+        dir.learn(account, d.clone());
+        assert_eq!(dir.devices_for(account), vec![d.clone()]);
+        assert_eq!(
+            InMemoryDeviceDirectory::persistent(repo).devices_for(account),
+            vec![d]
+        );
+    }
+
+    #[test]
+    fn unreadable_rows_are_skipped_not_fatal() {
+        let repo: Arc<dyn PeerDirectoryRepository + Send + Sync> = Arc::new(
+            StoolapPeerDirectoryRepository::new(siar_storage::open_in_memory().unwrap()),
+        );
+        let good_account = AccountId::new();
+        let good = device(5);
+        repo.upsert(&siar_storage::StoredPeerDevice {
+            account_id: "not-a-uuid".into(),
+            device_id: "x".into(),
+            ticket_text: "garbage".into(),
+        })
+        .unwrap();
+        repo.upsert(&siar_storage::StoredPeerDevice {
+            account_id: good_account.to_string(),
+            device_id: good.device_id.to_string(),
+            ticket_text: good.ticket.encode(),
+        })
+        .unwrap();
+        let dir = InMemoryDeviceDirectory::persistent(repo);
+        assert_eq!(dir.devices_for(good_account), vec![good]);
     }
 }

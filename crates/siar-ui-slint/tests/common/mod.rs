@@ -83,6 +83,18 @@ impl Harness {
         self.ui.window().global::<siar_ui_slint::AppState>()
     }
 
+    /// A real key press + release through the window, like the OS delivers it.
+    pub fn press(&self, key: impl Into<slint::SharedString>) {
+        let text: slint::SharedString = key.into();
+        let w = self.ui.window().window();
+        w.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+        w.dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+    }
+
+    pub fn tab(&self) {
+        self.press(slint::platform::Key::Tab);
+    }
+
     pub fn flush(&self) {
         self.hub.flush_now();
     }

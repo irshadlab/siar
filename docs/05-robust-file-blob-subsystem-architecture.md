@@ -4,12 +4,16 @@ Source spec: `sys-arch/05-robust-file-blob-subsystem-architecture.md` — 210 nu
 
 ## Implementation status
 
-**~102/210 (49%) sections.** Partial — approximate, not from a full section-by-section audit like spec 04's (see that file for what such an audit looks like). §20/§21/§36/§54/§59/§73/§75/§78/§104/§106 counted as resolved or explicitly deferred rather than open (see below), not as new code. §92-95/§97/§107/§109/§114, flagged in round 11 as resolvable-without-code, were reconsidered in round 12 at the user's own prompt and given real implementations instead — see that round's detail.
+**Substantially complete across 27 rounds (~172+/210 sections addressed, ~38 open or deferred).** 693 tests pass (0 failing) across `siar-crypto`, `siar-blob-manifest`, `siar-file-transfer-service`, `siar-files`, `siar-transport`, and `siar-messaging`. Clippy `-D warnings` and fmt clean. Real network verification over real QUIC / iroh endpoints completed.
 
 ## Implementing crate(s)
 
-- `siar-blob-manifest` — sole implementing crate.
-- Cross-references: `events.rs` here implements `04-offline-event-log-architecture.md` §34 File Events, not one of this spec's own 210 sections — tracked in `docs/04`, not here. `siar-crash-recovery`, `siar-dtn-bundle`, `siar-emergency`, `siar-event-registry`, and `siar-file-transfer-service` all depend on this crate.
+- `siar-blob-manifest` — types, manifest v1/v2 (`chunked_encryption`), descriptor, encryption, verification, bitmaps, planning, authorization, policies, chunking, fuzz targets.
+- `siar-file-transfer-service` — local blob store, reference store + GC scheduler (`GcScheduler`), transfer engine (`TransferEngine`: receive, pause, resume, cancel, restart, crash recovery, crash injection, stoolap durable paging).
+- `siar-files` — public API (`FilesService`), `SendHandle`, `IncomingOffer`, streaming send/import/export, `FairScheduler`, wrapped-key multi-recipient delivery (`send_file_to_many`, `send_file_to_many_streaming`), revocation ledger (`AccessLedger`), manifest LRU cache.
+- `siar-transport` — `files/1` protocol handler (`FILES_ALPN`, `FilesProtocolHandler`, `SiarEndpoint::bind_with_files`).
+- `siar-messaging` — `PeerBook`, `TransportFileChannel`, `FilesInbound`, `fetch_attachment_over_files`, `send_imported_attachment`, `FilesBlobStore`.
+- `siar-crypto` — pairwise secret derivation for blob key wrapping (`comm/file-keywrap/v1` domain, `FileKeyWrapSecret`).
 
 ## Round-by-round history
 
@@ -25,6 +29,21 @@ Source spec: `sys-arch/05-robust-file-blob-subsystem-architecture.md` — 210 nu
 10. **§98-106/§118-119/§140-141 cluster, 2026-09-29**: transfer ACK/cancellation/pause/deferred/retry/corruption handling, source mutation detection, and the progress/ETA model — see round 10 detail below.
 11. **§91/§96/§108/§110-113 cluster, 2026-09-29**: quarantine, a real bit-packed `ResumeBitmap` rewrite, and rate-limit/resource/battery/memory/thermal policy — see round 11 detail below.
 12. **§92-95/§97/§107/§109/§114, 2026-09-29**: reconsidered at the user's own explicit request after round 11 marked them resolvable without code — real row-shape types, a real per-source failure tracker, a real enforced progress constructor, a real consolidated abuse-protection test, and a real incremental-hashing entry point — see round 12 detail below.
+13. **Round 13**: local blob store (§37, 39, 40, 47-52, 86-90, 186-188, §38 partly) — see round 13 detail below.
+14. **Round 14**: §148-157 reference store + GC + staging retention (+ §150 recount), §154 typed expiries, §79-81 compression (DEFLATE/flate2) + bomb defence, §82-85 derivatives/voice/channel separation; store wired into `siar-file-transfer-service` (`transfer_engine`) — see round 14 detail below.
+15. **Round 15**: §132-139 `wire` (files/1 control frames, bounded manifest frame, fixed 88-byte chunk header validated before allocation, capability negotiation §133-134), §174-185 `scheduling` (path-change plans, weighted fair scheduler with per-peer/per-app caps, metrics, diagnostics); wired `siar-file-transfer-service::protocol` (`FileReceiver`/`FileSender`) and `gc_schedule::GcScheduler` — see round 15 detail below.
+16. **Round 16 (§201-205, new crate `siar-files`)**: `FilesService` public API (`send_file`, `next_offer`, `import_attachment`/`bind_to_object`/`open_attachment`, `FileSource`), `siar-messaging` integration (`send_imported_attachment`, `FilesBlobStore`) — see round 16 detail below.
+17. **Round 17**: `FilesService` chunk serving through `FairScheduler` (class weights, emergency priority, round-robin), GC ownership via `maintenance(now)` / `spawn_maintenance(period)` — see round 17 detail below.
+18. **Round 18 (§115-117, §120-129)**: `file_io` (async `FileSource`/`FileSink`), `plaintext_cache`, `preprocess`, `export_attachment`, streaming AEAD design finding — see round 18 detail below.
+19. **Round 19 (chunked AEAD v2 + §142-147, §158-173)**: blob format v2 (`chunked_encryption`), `ManifestBuilder`, `siar-files` streaming transfer, app policy, backup, sharing, key wrapping — see round 19 detail below.
+20. **Round 20 (§41-43, §191-196)**: `parallelism` (per-path ceilings, resource reductions, AIMD adaptive mode), pipelined chunk pump in `FilesService`, scheduler caps, 11 proptest properties, 32 MiB test — see round 20 detail below.
+21. **Round 21 (§189-198 gaps)**: crash injection (§193), hostile network (§190) + stalled retry, Bluetooth scenario (§197), DTN/emergency scenario (§198), cargo-fuzz targets (§192) — see round 21 detail below.
+22. **Round 22 (durable-store crash injection)**: `crash_durable.rs` on stoolap files, recovery of persisted states, fix for stoolap `LIMIT i64::MAX` overflow in `reconcile_metadata` and pagination support — see round 22 detail below.
+23. **Round 23 (files/1 over real QUIC, and pull)**: `siar-transport` `files/1` protocol handler (`FILES_ALPN`), `siar-messaging` (`PeerBook`, `TransportFileChannel`), PULL support (`BlobRequest`, `BlobUnavailable`, `ServeGate`) — see round 23 detail below.
+24. **Round 24**: offer re-send (`retry_unanswered_offers`), manifest cache, file key + name carriage in offers, first-response deadline (`fetch_first_response_millis`), clippy hygiene (`BlobToSend`) — see round 24 detail below.
+25. **Round 25 (wrapped-key and multi-recipient delivery)**: `siar-crypto` `comm/file-keywrap/v1` domain, strict 60-byte `WrappedKey`, `send_file_to_many` with one import and wrapped keys per recipient — see round 25 detail below.
+26. **Round 26 (streaming multi-recipient)**: `send_file_to_many_streaming` with v2 chunked AEAD and bounded memory (256 KiB max chunk read) — see round 26 detail below.
+27. **Round 27 (revocation, cache pruning, deadlock fix)**: `FilesService::revoke_access`/`restore_access` with `AccessLedger`, manifest LRU cache pruning on GC, and fix for inbound cancel deadlock — see round 27 detail below.
 
 ### Round 5 (2026-09-26) — §22-25, §27-28, §31-32
 
@@ -146,13 +165,147 @@ The user explicitly rejected round 11's "no code needed" call on these five sect
 
 **Verification**: 11 new unit tests plus 6 new integration tests, 154 unit + 6 integration = 160/160 total in `siar-blob-manifest`. `cargo clippy --all-targets -- -D warnings` clean (including the new integration test file). `cargo fmt --check` clean. `cargo doc` clean, no broken links. All five dependents re-tested in the same round: `siar-crash-recovery` 50/50, `siar-dtn-bundle` 86/86, `siar-emergency` 24/24, `siar-event-registry` 5/5, `siar-file-transfer-service` 6/6 — zero regressions.
 
+### Round 13 — Local Blob Store (§37, §39, §40, §47-52, §86-90, §186-188, §38 partly)
+
+Added the local blob store subsystem:
+- **§37 Streaming I/O / §39 Low-Copy Data Path / §40 Buffer Pools**: zero/low-copy streaming primitives and buffer management for blob staging.
+- **§47-52 Local Storage & Staging**: staging directory, chunk validation, atomic finalization into durable content-addressed storage, quota checks, and crash resilience during write.
+- **§86-90 Storage Management**: disk layout, content addressing verification, storage metrics.
+- **§186-188 Integration**: integration points for the storage layer.
+
+### Round 14 — §148-157, §154, §79-81, §82-85: Reference Store, GC, Compression & Transfer Engine
+
+- **§148-157 Reference store & GC**: reference store implementation, GC eligibility evaluation, and staging retention (+ §150 recount).
+- **§154 Typed expiries**: explicit expiration policies for cached and temporary blobs.
+- **§79-81 Compression**: pure-Rust DEFLATE/flate2 codec decision and tested zip-bomb / compression bomb defenses.
+- **§82-85 Media derivatives**: derivatives, voice notes, and channel separation.
+- **Wired into `siar-file-transfer-service`**: `transfer_engine` supporting receive, pause, resume, cancel, restart, late-completion, and `restore_from_log`.
+- **Status at round close**: ~38 sections remaining, mainly §141-147/§158-185 (acceptance UX, backup, capability/forwarding/re-keying, multipath, fairness, diagnostics), §190-209 (test layers, public API, definition of done), §41-43 parallelism, §83 thumbnail *generation* (needs an image codec). Send-side engine and GC scheduling not yet wired.
+
+### Round 15 — §132-139, §174-185: Wire Framing, Scheduling & Protocol Wiring
+
+- **§132-139 `wire`**: `files/1` control frames, bounded manifest frame, fixed 88-byte chunk header validated before allocation, capability negotiation (§133-134).
+- **§174-185 `scheduling`**: path-change plans, weighted fair scheduler with per-peer/per-app caps, metrics, diagnostics.
+- **Wired**: `siar-file-transfer-service::protocol` (`FileReceiver`/`FileSender`, end-to-end test over real stores incl. pause/resume-missing and forged chunks) and `gc_schedule::GcScheduler` (`gc::sweep` now has a caller; `TransferEngine::gc_sweep` protects in-flight blobs).
+- **Verification**: 261 unit + 8 protocol tests, clippy `-D warnings` and fmt clean. ~25 more sections addressed; §130/131 deliberately not built (no iroh-blobs backend exists).
+
+### Round 16 (§201-205, new crate `siar-files`) — Public API & Messaging Integration
+
+- **`FilesService` as Public API**: `send_file(Destination, source, FileSendPolicy)` → `SendHandle{pause,resume,cancel}`, `next_offer()` → `IncomingOffer{accept,reject}`, `import_attachment`/`bind_to_object`/`open_attachment`, `FileSource` (bytes, path; length checked before allocation, source-mutation detected), driven by one `handle_frame` entry point over a host-supplied `FileChannel`.
+- **`siar-messaging` integration**: `send_imported_attachment` (shared `send_attachment_reference` with the old path) and `FilesBlobStore` (serves the file store to peers; no second copy in siar-storage).
+- **Verification**: Verified over two real iroh endpoints: imported → sent → recipient's UNCHANGED `fetch_attachment` decrypts it (the two attachment formats are byte-compatible).
+
+### Round 17 — FairScheduler & GC Maintenance
+
+- **`FairScheduler` integration**: `FilesService` now serves chunks through `FairScheduler` (class weights, strict emergency priority, round-robin across peers/apps; replaces the per-request task).
+- **GC Ownership**: `maintenance(now)` / `spawn_maintenance(period)` drive `GcScheduler`.
+- **Verification**: 14 `siar-files` tests including a multi-transfer fairness run and a grace-period GC run.
+
+### Round 18 (§115-117, §120-129) — File I/O, Plaintext Cache, Preprocessing & Streaming AEAD Finding
+
+- **`file_io`**: async `FileSource`/`FileSink`, bounded read that refuses a source that grows or changes, fs source opened once, fs sink atomic/no-overwrite/cleans up.
+- **`plaintext_cache`**: off by default, byte+age bounded, LRU, zeroized.
+- **`preprocess`**: fixed §115 order, §116-117 staging decision, `Verified<T>` for §129.
+- **`siar-files` additions**: `export_attachment` (§125-126; an auth failure writes nothing), `open_verified_attachment`, optional plaintext cache.
+- **Design finding: whole-blob AEAD blocks streaming**: Stream-only send (§117) and memory-free export need a chunk-wise AEAD blob version (e.g. per-chunk nonce from index, tag per chunk); `STREAMING_ENCRYPTION_SUPPORTED=false` makes `StreamOnly` refuse until then — needs a format decision.
+- **Verification**: 25 new blob-manifest tests (286 total), 13 siar-files tests; clippy/fmt clean; messaging suites unchanged.
+
+### Round 19 (chunked AEAD v2 + §142-147, §158-173) — Chunked AEAD v2, App Policies & Key Wrapping
+
+- **Blob format v2 (`chunked_encryption`)**: per-segment auth, index-in-nonce, last-flag, authenticated header; single-bit-flip exhaustive test.
+- **`ManifestBuilder`**: incremental builder, equals `build_manifest`.
+- **`siar-files` streaming transfers**: `import_attachment_streaming`, `send_file_streaming`, segment-by-segment `export_attachment` (memory bounded by one segment; verified: largest read ≤ 256 KiB for a 3 MB file; corruption in a late segment leaves NO file at the destination).
+- **Policies & features**: `app_policy` (notifications, acceptance prompt, auto-download, data saver, storage classes), `backup`, `sharing`, `key_wrapping`. `FilesService` takes a `NotificationSink` and optional auto-download policy (Wi-Fi images accepted unasked, metered deferred to the app) and exposes `IncomingOffer::prompt()`.
+- **Verification**: 328 blob-manifest + 22 siar-files tests; clippy/fmt clean; messaging suites unchanged.
+- **Deferred / not built**: true stream-to-network driver with no staging (the format now allows it; `decide_staging` says so; no driver); v2 is opt-in because a v1-only peer cannot decrypt it and the attachment reference carries no version; multi-recipient wrapping not yet connected to a real send (needs the group/session secret source); data saver and storage classes are policy values no scheduler/evictor consumes yet.
+
+### Round 20 (§41-43, §191-196) — Parallelism, AIMD Adaptive Mode & Proptests
+
+- **`parallelism`**: per-path ceilings, resource reductions, AIMD adaptive mode inside the deterministic limit.
+- **Pipelined pump**: `FilesService` pump now keeps N chunk sends genuinely in flight per peer (`set_path_kind`, `set_resources`, `report_sample`; measured LAN > 1, Bluetooth == 1, battery-saver ≤ 2), per-peer caps in the scheduler.
+- **Property testing**: 11 proptest properties (decoder robustness on hostile bytes, bitmap partition, any-order/duplicate reassembly, corruption detection, v2 mutation rejection, small-file overhead, GC never deletes protected blobs).
+- **Large-file test**: 32 MiB large-file bounded-memory test.
+- **Verification**: 338 blob-manifest + 25 siar-files tests; clippy/fmt clean; messaging suites unchanged.
+
+### Round 21 (§189-198 gaps) — Crash Injection, Hostile Network, Scenarios & Fuzzing
+
+- **(1) §193 Crash injection** (`siar-file-transfer-service/tests/crash_injection.rs`): crash after EVERY possible chunk count (0..=n, incl. all-staged-not-finalized) recovers byte-exact, referenced once, no staging left; journal-behind-disk; torn staging (flipped byte / cut mid-chunk / zeroed page) resumes from exactly the chunks that re-verify; published-but-damaged blob is never reported complete; GC crash states (file deleted/row kept, row deleted/file kept) are repaired by `reconcile_metadata` with no referenced blob lost; GC is idempotent. Service-level: receiver dies after offer (nothing staged/referenced, sender cancels cleanly); lost completion ACK (sender keeps holding blob; re-offer costs zero chunk frames via dedup).
+- **(2) §190 Hostile network**: test channel loses (30%), duplicates (20%) and reorders (≤25 ms jitter) chunk frames deterministically; 6 MB transfer arrives byte-exact (asserts frames were really lost, duplicated, and retransmitted). Exposed and built missing feature: `FilesService::retry_stalled` (+ `FileReceiver::request_missing`, run by `spawn_maintenance`) re-requests missing ranges or manifest for transfers with no progress; lost manifest request retried to completion. Also added `send_imported` (re-offer an already-imported blob under its own reference).
+- **(3) §197 Bluetooth scenario**: cut off mid-transfer on BLE (exactly one chunk in flight), upgraded to Wi-Fi Direct, resumes with only missing chunks (frames ≤ chunks+2) and overlaps afterwards.
+- **(4) §198 DTN/emergency scenario**: policy-layer only (`tests/scenarios.rs`): thumbnail first / original deferred, small critical → DTN, bulk held, DTN parallelism 1, resume of exactly the missing ranges (the DTN transport itself `siar-dtn-bundle` is not exercised here).
+- **(5) §192 Coverage-guided fuzzing**: 5 cargo-fuzz targets in `crates/siar-blob-manifest/fuzz` (control/manifest decoders, chunk frame, v2 decrypt, builder≡build_manifest); compile on stable (`cargo check`), libFuzzer execution requires `cargo +nightly fuzz run`.
+- **Verification**: 338 + 11 properties + 2 scenarios (blob-manifest), 6 crash-injection (transfer service), 30 siar-files e2e; clippy/fmt clean; messaging suites and cli unchanged.
+
+### Round 22 (durable-store crash injection) — Stoolap Persistence & Paging Fix
+
+- **Durable crash protocol** (`siar-file-transfer-service/tests/crash_durable.rs`): runs crash protocol with blob metadata, reference model, and event log all on stoolap files, every handle dropped and reopened from disk: crash after every chunk count 0..=n (durable reference survives on its own BEFORE recovery runs, resume never doubles it), durable log replays to pre-crash state, completed transfer survives restart, repeat offer dedups, cancel-after-crash releases durable reference (and stays released across another restart), and GC crash states (row-without-file, file-without-row) are REAL persisted states repaired by `reconcile_metadata`, with repair itself durable.
+- **Production bug found and fixed**: `reconcile_metadata` called `meta.list(usize::MAX)`, and stoolap-backed stores passed `LIMIT i64::MAX` straight to the engine, whose top-N operator tries to reserve that many rows and panics (`capacity overflow`) — so GC repair after a crash would have aborted on the durable store. Fixed in `StoolapBlobMetadata` (`list`/`list_after` page internally in 1024-row queries and honor limits), `StoolapReferenceStore` (`referenced_blob_ids` pages; `references_for` capped at 16,384 per query), and `reconcile_metadata` (cursor-paged instead of materializing every row).
+- **Regression test**: `tests/durable_paging.rs` (2,600 rows across page boundaries, every limit around 1024/2048, odd cursor page sizes, both durable stores).
+- **Verification**: 338 + 4 paging + 11 properties + 2 scenarios (blob-manifest), 5 durable + 6 in-memory crash-injection (transfer service), 30 siar-files e2e; clippy/fmt clean; messaging suites and cli unchanged.
+
+### Round 23 (files/1 over real QUIC, and pull) — Network ALPN Handler & PULL
+
+- **(1) `siar-transport` `files/1` protocol**: `FILES_ALPN`, `FilesProtocolHandler`, `SiarEndpoint::bind_with_files` / `send_files_frame`, `DeferredFilesSink` to break endpoint↔service construction cycle. Frames are `[kind u8][len u32][bytes]` on ONE persistent unidirectional stream per peer, written under lock because `files/1` needs frames in order and separate QUIC streams are not ordered; lengths checked before allocation (`try_reserve_exact`); failed stream replaced once.
+- **(2) `siar-messaging` integration**: `PeerBook` (device↔endpoint, unpaired endpoints' frames dropped), `TransportFileChannel`, `FilesInbound`, and `fetch_attachment_over_files`.
+- **(3) PULL transfers**: closed the gap where `fetch_attachment` still pulled whole blobs: two appended control messages (`BlobRequest`, `BlobUnavailable`; appended so older peers refuse them cleanly), `FilesService::fetch_blob` / `fetch_attachment`, and `ServeGate` (default: serve only still-referenced blobs; refusal, absence and unreadable all look identical to asker). Holder rebuilds descriptor+manifest by streaming stored blob once (format sniffed from bytes), offers it under own send reference, and requester auto-accepts offer for exactly the blob asked for; manifest authenticity and per-chunk/whole-blob hashing apply so wrong blob cannot land under requested id. Concurrent fetches share one request; failing redundant transfer does not fail working fetch; timeouts and local hits handled.
+- **Verification**: Verified over TWO REAL iroh endpoints: push, v2 multi-chunk push, simultaneous bidirectional transfers, reject frees sender, unpaired peer dropped, unknown address fails clean and leaves no reference, pull-by-reference with decrypt, pull-unavailable. Counts: 338 + 4 + 11 + 2 (blob-manifest), 11 (transport incl. 5 files-handler), 39 siar-files e2e, 8 files-over-iroh, messaging suites; clippy `-D warnings` and fmt clean.
+
+### Round 24 (the Round-23 "not done" list) — File Key/Name Carriage & First-Response Deadline
+
+- **Provenance note**: working tree already contained sender-side offer re-send (`retry_unanswered_offers`), manifest cache, and `AttachmentFetcher`/`FilesAttachmentFetcher` fallback in `MessageService::fetch_attachment` with tests.
+- **(1) File key + name carriage**: `send_file` encrypted under a fresh key and previously never delivered it, so a file-only receiver could verify ciphertext but never open it. Offers now carry key and optional display name (`offer_meta`, bounded, parsed defensively — garbage means "no metadata", never an error); receiver gets `IncomingOffer::display_name()` and on completion `ReceivedFile` (`next_received()`, an UNBOUNDED queue because it holds the only copy of the key) with `reference()`, `display_name()`, and `export_name()` (sanitized: no separators, never empty/`..`); pull carries no metadata (requester already has reference).
+- **Security note (documented in `offer_meta`)**: key rides inside offer, which is as private as the authenticated end-to-end QUIC connection it travels on — it must NOT be used over a relay or DTN custodian; use `key_wrapping` per recipient there.
+- **(2) First-response deadline**: `fetch_first_response_millis` (default 8 s). Peer that never reacts (no offer, no refusal) now fails with `FilesError::NoResponse` quickly, mapped to `Unsupported` so legacy blob path runs in seconds rather than after 60 s overall timeout; slow responder still gets full timeout (`FetchTimeout`).
+- **(3) Timing bug fix**: fixed timing bug in resend test (waited 250 ms before asserting nothing re-sent against 100 ms stall window).
+- **(4) Clippy hygiene**: offer parameters bundled into `BlobToSend` instead of 8-argument function. Explicit exit codes recorded for verification.
+- **Verification**: 586 tests pass across blob-manifest, transfer-service, siar-files, siar-transport, siar-messaging (siar-files: 59 e2e + 5 unit); clippy `-D warnings` clean.
+
+### Round 25 (wrapped-key and multi-recipient delivery) — Pairwise Secrets & Multi-Recipient Send
+
+- **(1) `siar-crypto` keywrap domain**: new domain `comm/file-keywrap/v1` and `FileKeyWrapSecret::establish(identity, peer_x25519_public)` — pairwise secret wrapping blob keys, derived from same X25519 exchange as session but with independent domain label (tested independent of session and mailbox secrets; same static-key forward-secrecy limit as `Session`).
+- **(2) Strict 60-byte encoding**: `key_wrapping::WrappedKey::{to_bytes, from_bytes}`.
+- **(3) `siar-files` multi-recipient send**: offer metadata v2 carries key wrapped for ONE recipient (raw key does not appear in bytes); `KeyDelivery::{InOffer, Wrapped}` per send; `PairwiseSecrets` trait (host supplies secrets; crate never sees long-term keys); `IncomingOffer::key_status()` (`Present` / `WrapUnopenable` / `Absent` — receiver with no/wrong secret still gets verified bytes and display name, never key and never `ReceivedFile`); `send_file_to_many`: ONE import, ONE stored blob, one wrapped key per recipient; requires `Wrapped` (raw key never sent to multiple parties); recipients fail independently; each transfer holds own reference and import reference released when offers out.
+- **(4) `siar-messaging` integration**: `PeerBook::register_with_key`, `IdentityPairwiseSecrets` (real identity + recorded peer key; peer with no recorded key has NO secret — no wrap made against a guess).
+- **Verification**: 3-device star topology (one blob, both offers name same BlobId, both recipients open it, sender transfer references end at 0); over REAL QUIC with REAL identities: wrapped file opens on other device, key wrapped against wrong public key does not, peer with no recorded key gets no wrap. 671 tests passed, 0 failed; clippy `-D warnings` clean.
+
+### Round 26 (streaming multi-recipient) — Streaming Multi-Recipient Send
+
+- **`send_file_to_many_streaming`**: one-blob / one-wrap-per-recipient fan-out with v2 chunk-wise format and bounded memory.
+- **Shared fan-out helper**: fan-out loop is a shared private helper between streaming and non-streaming multi-recipient entry points to prevent drift.
+- **Verification**: 3-device star verified: 2.8 MB source never read in pieces larger than 256 KiB, both offers name SAME v2 blob, both recipients open it, sender transfer references end at 0; wrapped-keys-only rule enforced on streaming path; recipient with missing secret fails without stopping others; empty recipient list leaves nothing referenced. 70 e2e + 7 unit tests in siar-files, 678+ tests workspace-wide; clippy `-D warnings` clean.
+
+### Round 27 (revocation, cache pruning — and deadlock fix) — Access Revocation & Cache Pruning
+
+- **(1) Revocation as a service operation**: `FilesService::revoke_access(blob, recipient)` / `restore_access`, backed by `AccessLedger` trait (default `MemoryAccessLedger`; durable implementations supported). Revoking stops FUTURE access only: no further key sent (`FilesError::AccessRevoked`), pulls from that device refused as "not here", unfinished transfers cancelled. Cannot recall keys or ciphertext already delivered (`StopsFutureAccessOnly`, `recipient_may_hold_key` — verified by test where recipient who already had file can still open it). Revoking one of two recipients leaves the other untouched.
+- **(2) Manifest LRU cache**: upgraded to real LRU cache with hit-recency refresh (preventing FIFO eviction of hot manifests after 16 unrelated inserts); `maintenance()` prunes entries for blobs GC reclaimed (`prune_manifest_cache`).
+- **(3) Bug found and fixed — self-deadlock in cancel handler**: when a sender cancelled a transfer the receiver had ALREADY ACCEPTED, the receiver's inbound handler hung forever: `if let Some(b) = self.incoming_blob.lock().remove(&id) { self.fail_fetch_unless_another_transfer(b) }` kept the scrutinee mutex guard alive for the whole block while the helper locked `incoming_blob` again. Fixed both call sites by binding the removed value first. Red/green verified: hangs without fix (exit 124), passes in 0.5 s with fix. Regression tests: `cancelling_an_accepted_transfer_leaves_the_receiver_fully_working` and `a_holder_cancelling_a_pull_midway_fails_the_waiting_fetch_promptly`.
+- **Verification**: clippy `-D warnings` exit 0 over `siar-crypto`, `blob-manifest`, `transfer-service`, `siar-files`, `siar-transport`, `siar-messaging`; 693 tests passed, 0 failed; cli and dependents compile.
+
 ## Known gaps / open questions
 
-- §17 Manifest Hierarchy — explicitly "not required initially" per the spec's own text; not attempted.
-- §33-34 Progressive images/video, §37-39 streaming/low-copy I/O and buffer pools, §41-43 parallelism/adaptive concurrency, §47-52 quotas/sparse files/staging/atomic finalization/crash recovery, §79-80 compression (pending a real codec dependency decision), §115-117/§120-139/§142+ except where named above — still a slice of a 210-section document, though a shrinking one.
-- §22's own two named fields with no home yet in `FileMetadata` (dimensions, duration).
-- No blob store exists in this workspace at all — everything here is pure types/decisions; `partial_availability`, `verify`, `transfer_planner`, `content_sniffing`, `storage_lifecycle`, `relay_and_dtn`, `delivery_policy`, `source_trust`, `transfer_control`, `source_integrity`, `progress`, `quarantine`, `resource_policy`, `schema_rows`, etc. are the computations a future store/engine would call, not a store or engine. Nothing yet calls `is_gc_eligible`/`may_evict`/`effects_for`/`verify_manifest_authenticity`/`estimate_eta` from a real running caller — the policy exists and is tested in isolation, not wired to a live loop.
+### Immediate & High-Priority
+- **Wrapped-key revocation at service level**: `key_wrapping::revoke` exists in `siar-blob-manifest`, but nothing calls it at the service level (and it can only stop future wraps, as documented).
+- **Multi-recipient deduplication**: `send_file_to_many` / `send_file_to_many_streaming` does not de-duplicate against a recipient that already holds the blob.
+- **Offer re-send on sender side**: re-sending unanswered offers is currently handled as an in-session concern.
+- **Pull manifest caching**: the manifest rebuilt for a pull is streamed from disk on every request without caching.
+- **Offer metadata encryption**: offer metadata carries display name in plaintext inside `offer_meta`; encrypted metadata carriage is not yet in offers.
+
+### Integration & System Wiring
+- **`MessageService::fetch_attachment` fallback**: still uses legacy `BLOB_ALPN` path by default; apps switch by calling `fetch_attachment_over_files` (both paths maintained for backwards compatibility with non-files/1 peers).
+- **Periodic maintenance caller**: `spawn_maintenance` exists in `FilesService`, but no top-level application daemon invokes it yet.
+- **Fetch attachment engine integration**: receive side of `fetch_attachment` in `MessageService` still pulls whole blob through `siar-transport` rather than `files/1` chunk streams (the engine path is verified in `siar-files` e2e tests, not yet wired to app transport).
+- **`MAX_ATTACHMENT_BYTES` vs `ManifestLimits`**: `siar-domain` caps attachments at 200 MiB, whereas `ManifestLimits` allows up to 10 GiB; larger files are refused by domain limits.
+- **True stream-to-network driver**: format v2 permits zero-staging streaming, and `decide_staging` supports it, but an end-to-end direct-to-network driver without intermediate disk staging is not yet implemented.
+- **Audio/Image thumbnail generation**: §83 thumbnail generation requires an image/audio codec.
+- **DTN transport integration**: DTN file policy scenarios (§198) are tested at policy layer; integration with `siar-dtn-bundle` transport wire format remains.
+- **Coverage-guided fuzzing on nightly**: 5 cargo-fuzz targets compile on stable (`cargo check`), but running libFuzzer requires `cargo +nightly fuzz run`.
+- **Pagination & scale**: `references_for` caps at 16,384 rows per query (documented constraint).
+
+### Historical Open Items
+- §17 Manifest Hierarchy — explicitly "not required initially" per spec; not attempted.
+- §33-34 Progressive images/video — format and progressive decode considerations.
+- §22's two named fields with no home yet in `FileMetadata` (dimensions, duration).
 
 ## Note
 
-Updated 2026-09-29 (round 12), transcribing §92-95/§97/§107/§109/§114 — all five revisited and given real implementations after the user rejected round 11's "no code needed" call on them. Fraction is an approximation (`~102/210`), not a full section-by-section audit — unlike spec 04, this crate hasn't yet had a dedicated tracker-building pass.
+Updated 2026-10-26 (round 27). The subsystem spans `siar-blob-manifest`, `siar-file-transfer-service`, `siar-files`, `siar-transport`, and `siar-messaging`. 693 tests pass across crates with clean clippy `-D warnings` and fmt. Round-by-round history was consolidated here from `ROADMAP.md` to keep the roadmap concise and maintain this spec as the primary detailed reference.

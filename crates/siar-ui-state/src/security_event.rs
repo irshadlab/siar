@@ -108,6 +108,48 @@ impl SecurityEventKind {
     /// spec-literal, so a future correction against clearer guidance
     /// is an easy find-and-fix rather than an assumption buried in
     /// behavior.
+    /// Every kind, for exhaustive round-trip tests and migrations.
+    pub const ALL: [Self; 12] = [
+        Self::DeviceLinked,
+        Self::DeviceRevoked,
+        Self::DeviceLinkDenied,
+        Self::IdentityChanged,
+        Self::VerificationFailed,
+        Self::RecoveryConfigured,
+        Self::RecoveryChanged,
+        Self::BackupFailed,
+        Self::KeyRotation,
+        Self::SuspiciousAuthorization,
+        Self::SecurityPolicyChanged,
+        Self::KeyExpiryActionRequired,
+    ];
+
+    /// Stable name for storage. Persisted rows must survive reordering or
+    /// renaming a variant, so this is an explicit table, never `Debug` or
+    /// a discriminant. Never change an existing string.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DeviceLinked => "device_linked",
+            Self::DeviceRevoked => "device_revoked",
+            Self::DeviceLinkDenied => "device_link_denied",
+            Self::IdentityChanged => "identity_changed",
+            Self::VerificationFailed => "verification_failed",
+            Self::RecoveryConfigured => "recovery_configured",
+            Self::RecoveryChanged => "recovery_changed",
+            Self::BackupFailed => "backup_failed",
+            Self::KeyRotation => "key_rotation",
+            Self::SuspiciousAuthorization => "suspicious_authorization",
+            Self::SecurityPolicyChanged => "security_policy_changed",
+            Self::KeyExpiryActionRequired => "key_expiry_action_required",
+        }
+    }
+
+    /// `None` for a name this build doesn't know (e.g. written by a newer
+    /// version): the caller skips that row instead of failing to start.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+
     pub const fn severity(self) -> SecurityEventSeverity {
         match self {
             Self::DeviceLinked
@@ -209,6 +251,35 @@ pub enum SecurityEventAction {
     Dismiss,
 }
 
+impl SecurityEventAction {
+    pub const ALL: [Self; 7] = [
+        Self::Revoke,
+        Self::Approve,
+        Self::Deny,
+        Self::Review,
+        Self::RotateCredentials,
+        Self::VerifyBackup,
+        Self::Dismiss,
+    ];
+
+    /// Stable storage name (see `SecurityEventKind::as_str`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Revoke => "revoke",
+            Self::Approve => "approve",
+            Self::Deny => "deny",
+            Self::Review => "review",
+            Self::RotateCredentials => "rotate_credentials",
+            Self::VerifyBackup => "verify_backup",
+            Self::Dismiss => "dismiss",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.as_str() == s)
+    }
+}
+
 /// §40, field-for-field (`Timestamp` as `u64` millis, this workspace's
 /// existing convention — see `security_center.rs`'s own note on the
 /// same choice).
@@ -262,6 +333,39 @@ impl SecurityEventState {
             actions,
         });
         id
+    }
+
+    /// Reinstates events saved by an earlier run, keeping their ids so a
+    /// later `resolve` of the same event still matches its stored row.
+    /// Replaces whatever is in memory; new events continue after the
+    /// highest restored id (ids are never reused).
+    pub fn restore(&mut self, mut events: Vec<SecurityEvent>) {
+        events.sort_by_key(|e| e.id.0);
+        events.dedup_by_key(|e| e.id.0);
+        self.next_id = events
+            .last()
+            .map(|e| e.id.0 + 1)
+            .unwrap_or(0)
+            .max(self.next_id);
+        self.events = events;
+    }
+
+    /// Is there already an unresolved event of this kind about this
+    /// contact? Lets a check that re-runs every launch (e.g. "this
+    /// contact's key changed") avoid raising the same warning again.
+    pub fn has_unresolved(&self, kind: SecurityEventKind, contact: Option<AccountId>) -> bool {
+        self.events
+            .iter()
+            .any(|e| !e.resolved && e.kind == kind && e.related_contact == contact)
+    }
+
+    /// Has an event of this kind about this contact EVER been recorded,
+    /// resolved or not? For start-up checks: a standing condition the user
+    /// already dealt with must not be announced again at every launch.
+    pub fn has_any(&self, kind: SecurityEventKind, contact: Option<AccountId>) -> bool {
+        self.events
+            .iter()
+            .any(|e| e.kind == kind && e.related_contact == contact)
     }
 
     /// §47: "Rust owns resolved state." The one way an event's
@@ -445,5 +549,78 @@ mod tests {
         state.push(SecurityEventKind::DeviceLinked, 1_000, None, None, vec![]);
         state.push(SecurityEventKind::BackupFailed, 2_000, None, None, vec![]);
         assert_eq!(state.unresolved_critical_events().len(), 0);
+    }
+
+    #[test]
+    fn every_kind_and_action_round_trips_through_its_stable_name() {
+        for k in SecurityEventKind::ALL {
+            assert_eq!(SecurityEventKind::parse(k.as_str()), Some(k));
+        }
+        for a in SecurityEventAction::ALL {
+            assert_eq!(SecurityEventAction::parse(a.as_str()), Some(a));
+        }
+        // names are unique, so a stored row can never be ambiguous
+        let names: std::collections::HashSet<_> =
+            SecurityEventKind::ALL.iter().map(|k| k.as_str()).collect();
+        assert_eq!(names.len(), SecurityEventKind::ALL.len());
+        assert_eq!(SecurityEventKind::parse("from_the_future"), None);
+        assert_eq!(SecurityEventAction::parse(""), None);
+    }
+
+    #[test]
+    fn restored_events_keep_their_ids_and_new_ones_continue_after_them() {
+        let mut a = SecurityEventState::new();
+        let first = a.push(SecurityEventKind::IdentityChanged, 10, None, None, vec![]);
+        let second = a.push(SecurityEventKind::KeyRotation, 20, None, None, vec![]);
+        a.resolve(second);
+        let saved: Vec<SecurityEvent> = a.events().into_iter().cloned().collect();
+
+        let mut b = SecurityEventState::new();
+        b.restore(saved);
+        assert_eq!(b.events().len(), 2);
+        let third = b.push(SecurityEventKind::DeviceLinked, 30, None, None, vec![]);
+        assert!(
+            third.get() > second.get().max(first.get()),
+            "ids are never reused"
+        );
+        // resolving by a restored id still hits the right event
+        b.resolve(first);
+        assert!(b.events().iter().all(|e| e.id == third || e.resolved));
+    }
+
+    #[test]
+    fn has_unresolved_matches_kind_and_contact_and_ignores_resolved() {
+        let mut s = SecurityEventState::new();
+        let who = AccountId::new();
+        assert!(!s.has_unresolved(SecurityEventKind::IdentityChanged, Some(who)));
+        let id = s.push(
+            SecurityEventKind::IdentityChanged,
+            1,
+            None,
+            Some(who),
+            vec![],
+        );
+        assert!(s.has_unresolved(SecurityEventKind::IdentityChanged, Some(who)));
+        assert!(!s.has_unresolved(SecurityEventKind::IdentityChanged, Some(AccountId::new())));
+        assert!(!s.has_unresolved(SecurityEventKind::KeyRotation, Some(who)));
+        s.resolve(id);
+        assert!(!s.has_unresolved(SecurityEventKind::IdentityChanged, Some(who)));
+    }
+
+    #[test]
+    fn has_any_remembers_resolved_events_too() {
+        let mut s = SecurityEventState::new();
+        let who = AccountId::new();
+        assert!(!s.has_any(SecurityEventKind::IdentityChanged, Some(who)));
+        let id = s.push(
+            SecurityEventKind::IdentityChanged,
+            1,
+            None,
+            Some(who),
+            vec![],
+        );
+        s.resolve(id);
+        assert!(s.has_any(SecurityEventKind::IdentityChanged, Some(who)));
+        assert!(!s.has_unresolved(SecurityEventKind::IdentityChanged, Some(who)));
     }
 }

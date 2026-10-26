@@ -19,7 +19,7 @@ use siar_messaging::{
 };
 use siar_protocol::v1::EnvelopeKind;
 use siar_protocol::WireMessage;
-use siar_storage::{ContactRepository, MessageRepository};
+use siar_storage::{ContactRepository, MessageRepository, SecurityEventRepository};
 use siar_ui_slint::{ContactSafety, NoticeLevel, UiHub, VerificationState};
 use siar_ui_state::{
     AppCommand, ConversationKind, ConversationSummary, GroupSummary, IdentityKeyHealth,
@@ -38,6 +38,7 @@ pub struct Core {
     group_service: Arc<GroupService>,
     device_directory: Arc<InMemoryDeviceDirectory>,
     contact_repo: Arc<dyn ContactRepository + Send + Sync>,
+    security_repo: Arc<dyn SecurityEventRepository + Send + Sync>,
     messages: Arc<dyn MessageRepository + Send + Sync>,
     local_account: AccountId,
     hub: UiHub,
@@ -75,6 +76,7 @@ pub(crate) async fn start(boot: Bootstrapped, hub: UiHub) -> Arc<Core> {
         key_package_b64,
         device_directory,
         contact_repo,
+        security_repo,
         saved_contacts,
         messages,
         data_dir,
@@ -89,6 +91,7 @@ pub(crate) async fn start(boot: Bootstrapped, hub: UiHub) -> Arc<Core> {
         group_service,
         device_directory,
         contact_repo,
+        security_repo,
         messages,
         local_account,
         hub: hub.clone(),
@@ -116,6 +119,21 @@ pub(crate) async fn start(boot: Bootstrapped, hub: UiHub) -> Arc<Core> {
             Err(e) => tracing::warn!(error = %e, "saved contact has an unparseable ticket"),
         }
     }
+    // The security log from earlier runs. Restored BEFORE the start-up
+    // safety checks run, so a warning that is still standing is recognised
+    // as already raised instead of being raised again.
+    let restored_events: Vec<_> = match core.security_repo.list() {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(crate::security_log::from_stored)
+            .collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "couldn’t read the saved security log");
+            Vec::new()
+        }
+    };
+    hub.update(|s| s.security_events.restore(restored_events));
+
     let (short_fp, full_fp) = key_fingerprint(&local_key);
     let seeded_safety: Vec<_> = saved_contacts
         .iter()
@@ -146,7 +164,7 @@ pub(crate) async fn start(boot: Bootstrapped, hub: UiHub) -> Arc<Core> {
             ),
         });
         for (device, account, safety) in seeded_safety {
-            core.apply_safety(s, device, account, safety);
+            core.apply_safety(s, device, account, safety, true);
         }
         s.identity.account = Some(local_account);
         s.identity.device = Some(device_id);
@@ -224,19 +242,43 @@ impl Core {
         device: DeviceId,
         account: AccountId,
         safety: ContactSafety,
+        at_startup: bool,
     ) {
         let was_changed = s
             .contact_safety
             .get(&device)
             .is_some_and(|c| c.state == VerificationState::KeyChanged);
-        if safety.state == VerificationState::KeyChanged && !was_changed {
-            s.security_events.push(
+        // Raise the warning once per transition INTO the changed state, and
+        // not at all if the same warning from an earlier run is still open.
+        if safety.state == VerificationState::KeyChanged
+            && !was_changed
+            && !if at_startup {
+                // A standing condition the user already saw (even if they
+                // resolved it) is not announced again at every launch.
+                s.security_events
+                    .has_any(SecurityEventKind::IdentityChanged, Some(account))
+            } else {
+                // During a session a NEW change warns again, unless the
+                // same warning is still open.
+                s.security_events
+                    .has_unresolved(SecurityEventKind::IdentityChanged, Some(account))
+            }
+        {
+            let id = s.security_events.push(
                 SecurityEventKind::IdentityChanged,
                 now_millis(),
                 None,
                 Some(account),
                 vec![SecurityEventAction::Review],
             );
+            if let Some(event) = s.security_events.events().into_iter().find(|e| e.id == id) {
+                if let Err(e) = self
+                    .security_repo
+                    .upsert(&crate::security_log::to_stored(event))
+                {
+                    tracing::warn!(error = %e, "couldn’t save a security event");
+                }
+            }
         }
         s.contact_safety.insert(device, safety);
     }
@@ -503,6 +545,11 @@ pub(crate) async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<A
                 }
                 Err(e) => core.fail("That ticket couldn’t be read", e),
             },
+            AppCommand::ResolveSecurityEvent { event_id } => {
+                if let Err(e) = core.security_repo.set_resolved(event_id) {
+                    core.fail("That change couldn’t be saved", e);
+                }
+            }
             AppCommand::SetContactVerified {
                 device_id,
                 verified,
@@ -534,7 +581,7 @@ pub(crate) async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<A
                     Ok(()) => {
                         let safety = core.safety_for(device_id, &ticket);
                         core.hub.update(|s| {
-                            core.apply_safety(s, device_id, contact.account_id, safety)
+                            core.apply_safety(s, device_id, contact.account_id, safety, false)
                         });
                         core.hub.notify(
                             NoticeLevel::Success,
@@ -784,7 +831,7 @@ pub(crate) async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<A
                         let safety = core.safety_for(device_id, &ticket);
                         let conversation = core.peers().register(ticket);
                         core.hub.update(|s| {
-                            core.apply_safety(s, device_id, account_id, safety);
+                            core.apply_safety(s, device_id, account_id, safety, false);
                             s.contacts.upsert(SavedContact {
                                 device_id,
                                 account_id,
@@ -941,7 +988,15 @@ async fn incoming_loop(
                             content,
                         );
                     }),
-                    Ok(None) => {} // a commit merged, or nothing to show
+                    Ok(None) => {
+                        // A commit may have changed the roster (someone was
+                        // added): show the new member count and epoch.
+                        if let Ok(Some(g)) =
+                            core.group_service.group_state(envelope.conversation_id)
+                        {
+                            core.upsert_group_summary(&g);
+                        }
+                    }
                     Err(e) => tracing::warn!(error = %e, "failed to handle incoming group frame"),
                 },
             }

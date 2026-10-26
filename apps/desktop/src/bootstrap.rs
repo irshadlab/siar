@@ -14,10 +14,17 @@ use siar_messaging::{
     GroupService, InMemoryDeviceDirectory, InMemoryKeyPackageDirectory, KeyPackageDirectory,
     MemberDevice, MessageService, PeerTicket,
 };
-use siar_storage::{ContactRepository, MessageRepository, StoolapContactRepository, StoredContact};
+use siar_storage::{
+    ContactRepository, MessageRepository, SecurityEventRepository, StoolapContactRepository,
+    StoredContact,
+};
 use siar_transport::SiarEndpoint;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// Domain separator for the transport key derivation. Versioned: changing
+/// it changes every device's address, so it must never be edited casually.
+const IROH_KEY_CONTEXT: &str = "siar 2026-10 iroh endpoint secret key v1";
 
 /// Where this device's identity/account id/database live on disk —
 /// closes a real gap flagged across earlier sessions: both `apps/cli`
@@ -37,10 +44,18 @@ pub struct DataPaths {
     database: std::path::PathBuf,
 }
 
-pub fn resolve_data_paths() -> Result<DataPaths> {
+/// Where this device's data lives, WITHOUT touching the disk. Commands
+/// that may fail before doing anything (a restore with the wrong
+/// passphrase) use this, so a failure leaves no empty folder behind.
+pub fn data_dir_path() -> Result<std::path::PathBuf> {
     let dirs = directories::ProjectDirs::from("dev", "irshad", "siar")
         .context("couldn't resolve a data directory for this platform")?;
-    let data_dir = dirs.data_dir();
+    Ok(dirs.data_dir().to_path_buf())
+}
+
+pub fn resolve_data_paths() -> Result<DataPaths> {
+    let data_dir = data_dir_path()?;
+    let data_dir = data_dir.as_path();
     std::fs::create_dir_all(data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     Ok(DataPaths {
@@ -132,6 +147,8 @@ pub struct Bootstrapped {
     /// `RemoveContact`) — see `contact_repo.rs`'s own doc comment for
     /// exactly what this does and doesn't close.
     pub contact_repo: Arc<dyn ContactRepository + Send + Sync>,
+    /// The persistent security log (see `security_log.rs`).
+    pub security_repo: Arc<dyn SecurityEventRepository + Send + Sync>,
     /// Every contact already on disk, loaded once at startup so
     /// `app.rs` can seed `ContactListState` and re-`register` each one
     /// into `device_directory` without a second async round-trip.
@@ -218,17 +235,27 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
     let message_view: Arc<dyn MessageRepository + Send + Sync> = messages.clone();
     let outbox = Arc::new(siar_storage::StoolapOutboxRepository::new(db.clone()));
     let groups = Arc::new(siar_storage::StoolapGroupRepository::new(db.clone()));
+    let security_repo: Arc<dyn SecurityEventRepository + Send + Sync> = Arc::new(
+        siar_storage::StoolapSecurityEventRepository::new(db.clone()),
+    );
     let contact_repo: Arc<dyn ContactRepository + Send + Sync> =
         Arc::new(StoolapContactRepository::new(db.clone()));
     let blobs: Arc<dyn siar_storage::BlobRepository + Send + Sync> =
-        Arc::new(siar_storage::StoolapBlobRepository::new(db));
+        Arc::new(siar_storage::StoolapBlobRepository::new(db.clone()));
     let blob_store: Arc<dyn siar_transport::BlobStore> =
         Arc::new(siar_messaging::StorageBlobStore(blobs.clone()));
 
     let (tx, rx) = mpsc::channel::<siar_transport::IncomingFrame>(64);
-    // iroh-base 1.0.3's `SecretKey::generate()` takes no RNG argument —
-    // see apps/cli/src/main.rs's identical fix for the full explanation.
-    let iroh_secret = iroh::SecretKey::generate();
+    // The transport key is DERIVED from the persistent device identity, not
+    // generated per launch. It used to be `SecretKey::generate()`, which
+    // gave the device a new endpoint id (and so a new ticket) on every
+    // start: saved contacts could no longer reach it, its peers dropped its
+    // messages as "unpaired", and the per-peer conversation ids (derived
+    // from endpoint ids) changed so stored history was orphaned.
+    // Deriving (with a domain-separated KDF, so the signing key itself is
+    // never reused) makes it stable across restarts and across a restore
+    // from backup, with no extra secret file to protect.
+    let iroh_secret = iroh::SecretKey::from_bytes(&identity.derive_secret(IROH_KEY_CONTEXT));
     let endpoint = Arc::new(SiarEndpoint::bind(iroh_secret, tx, blob_store).await?);
 
     let my_ticket = PeerTicket {
@@ -237,7 +264,12 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
         ed25519_verifying: identity.verifying_key().to_bytes(),
     };
 
-    let device_directory = Arc::new(InMemoryDeviceDirectory::new());
+    // Remembers member addresses learned from group invites and commits,
+    // so a group member who isn't also a saved contact stays reachable
+    // after a restart.
+    let device_directory = Arc::new(InMemoryDeviceDirectory::persistent(Arc::new(
+        siar_storage::StoolapPeerDirectoryRepository::new(db.clone()),
+    )));
     let key_package_directory = Arc::new(InMemoryKeyPackageDirectory::new());
 
     // Re-populate `device_directory` from every saved contact before
@@ -326,6 +358,7 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
         key_package_b64,
         device_directory,
         contact_repo,
+        security_repo,
         saved_contacts,
         messages: message_view,
         restored_groups,

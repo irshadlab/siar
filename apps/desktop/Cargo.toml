@@ -30,5 +30,7 @@ directories.workspace = true
 uuid.workspace = true
 siar-ui-slint.workspace = true
 siar-identity-multidevice.workspace = true
+siar-backup.workspace = true
+rpassword.workspace = true
 blake3.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

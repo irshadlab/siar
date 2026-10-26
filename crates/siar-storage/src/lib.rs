@@ -27,7 +27,9 @@ mod error;
 mod group_repo;
 mod message_repo;
 mod outbox_repo;
+mod peer_directory_repo;
 mod schema;
+mod security_event_repo;
 
 pub use blob_repo::{BlobRepository, StoolapBlobRepository};
 pub use contact_repo::{ContactRepository, StoolapContactRepository, StoredContact};
@@ -35,6 +37,12 @@ pub use error::StorageError;
 pub use group_repo::{GroupRepository, StoolapGroupRepository};
 pub use message_repo::{MessageRepository, StoolapMessageRepository, StoredMessage};
 pub use outbox_repo::{OutboxOperation, OutboxRepository, StoolapOutboxRepository};
+pub use peer_directory_repo::{
+    PeerDirectoryRepository, StoolapPeerDirectoryRepository, StoredPeerDevice,
+};
+pub use security_event_repo::{
+    SecurityEventRepository, StoolapSecurityEventRepository, StoredSecurityEvent,
+};
 
 use std::sync::Arc;
 use stoolap::Database;

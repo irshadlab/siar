@@ -1,0 +1,17 @@
+[package]
+name = "siar-backup"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"
+description = "Encrypted backup and restore of a Siar data directory, plus the single-instance lock that keeps both safe."
+
+[dependencies]
+argon2.workspace = true
+chacha20poly1305.workspace = true
+rand_core.workspace = true
+zeroize.workspace = true
+postcard.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

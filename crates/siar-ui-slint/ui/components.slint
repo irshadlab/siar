@@ -150,6 +150,9 @@ export component IconButton inherits Rectangle {
 }
 
 export component TextField inherits Rectangle {
+    // Without this, Tab skips the field entirely (found on real hardware):
+    // the wrapper Rectangle isn't a focus target, only the inner TextInput is.
+    forward-focus: input;
     in property <string> placeholder;
     in property <string> label;
     in-out property <string> text <=> input.text;
@@ -160,7 +163,7 @@ export component TextField inherits Rectangle {
     callback edited(string);
 
     public function copy-all() { input.select-all(); input.copy(); }
-    public function paste-over() { input.select-all(); input.paste(); }
+    public function paste-over() { input.focus(); input.select-all(); input.paste(); }
     public function clear-text() { input.text = ""; }
 
     min-height: Theme.min-target;
@@ -206,6 +209,7 @@ export component TextField inherits Rectangle {
 // Multi-line input. `submit-on-enter` makes plain Enter send and
 // Shift+Enter insert a newline (ui-ux-06 composer convention).
 export component TextArea inherits Rectangle {
+    forward-focus: input;
     in property <string> placeholder;
     in property <string> label;
     in-out property <string> text <=> input.text;
@@ -218,7 +222,7 @@ export component TextArea inherits Rectangle {
     callback edited(string);
 
     public function clear-text() { input.text = ""; }
-    public function paste-over() { input.select-all(); input.paste(); }
+    public function paste-over() { input.focus(); input.select-all(); input.paste(); }
 
     private property <length> content-height: input.preferred-height + 2 * Theme.sp-sm;
 
@@ -287,8 +291,10 @@ export component CopyField inherits Rectangle {
 
     background: Theme.surface-raised;
     border-radius: Theme.radius-md;
-    border-width: 1px;
-    border-color: Theme.border-subtle;
+    // The read-only text is a Tab stop (so it can be selected with the
+    // keyboard); it must show focus like everything else does.
+    border-width: input.has-focus ? 2px : 1px;
+    border-color: input.has-focus ? Theme.focus-ring : Theme.border-subtle;
 
     VerticalLayout {
         padding: Theme.sp-md;
@@ -496,11 +502,40 @@ export component Segmented inherits Rectangle {
 
     height: Theme.min-target;
     border-radius: Theme.radius-sm;
-    border-width: 1px;
-    border-color: Theme.border-strong;
+    border-width: fs.has-focus ? 2px : 1px;
+    border-color: fs.has-focus ? Theme.focus-ring : Theme.border-strong;
     background: Theme.surface-raised;
     clip: true;
     accessible-role: tab-list;
+
+    // One Tab stop for the whole control; Left/Right (and Home/End) move
+    // the selection — the standard radio-group / tab-list pattern. Before
+    // this the theme, density and size controls were mouse-only.
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow && root.current > 0) {
+                root.current = root.current - 1;
+                root.selected(root.current);
+                return accept;
+            }
+            if (event.text == Key.RightArrow && root.current < root.options.length - 1) {
+                root.current = root.current + 1;
+                root.selected(root.current);
+                return accept;
+            }
+            if (event.text == Key.Home && root.current != 0) {
+                root.current = 0;
+                root.selected(0);
+                return accept;
+            }
+            if (event.text == Key.End && root.current != root.options.length - 1) {
+                root.current = root.options.length - 1;
+                root.selected(root.current);
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     HorizontalLayout {
         for option[i] in root.options: Rectangle {
@@ -514,7 +549,7 @@ export component Segmented inherits Rectangle {
             accessible-action-default => { root.current = i; root.selected(i); }
             ta := TouchArea {
                 mouse-cursor: MouseCursor.pointer;
-                clicked => { root.current = i; root.selected(i); }
+                clicked => { fs.focus(); root.current = i; root.selected(i); }
             }
             Text {
                 text: option;

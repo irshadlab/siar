@@ -167,5 +167,46 @@ pub(crate) fn apply(db: &Database) -> Result<(), StorageError> {
     )
     .map_err(StorageError::from_stoolap)?;
 
+    // Security log (ui-ux-15 §43): events survive a restart so a resolved
+    // warning stays resolved and a standing one isn't re-raised at launch.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS security_events (
+            event_id           INTEGER NOT NULL,
+            kind               TEXT NOT NULL,
+            occurred_at_millis INTEGER NOT NULL,
+            resolved           INTEGER NOT NULL DEFAULT 0,
+            related_device     TEXT,
+            related_account    TEXT,
+            actions            TEXT NOT NULL DEFAULT ''
+        )",
+        (),
+    )
+    .map_err(StorageError::from_stoolap)?;
+
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_security_events_id
+         ON security_events (event_id)",
+        (),
+    )
+    .map_err(StorageError::from_stoolap)?;
+
+    // Group members' addresses learned from invites and commits, so they
+    // stay reachable across restarts without being saved contacts.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS peer_directory (
+            account_id  TEXT NOT NULL,
+            device_id   TEXT NOT NULL,
+            ticket_text TEXT NOT NULL
+        )",
+        (),
+    )
+    .map_err(StorageError::from_stoolap)?;
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_peer_directory_device
+         ON peer_directory (account_id, device_id)",
+        (),
+    )
+    .map_err(StorageError::from_stoolap)?;
+
     Ok(())
 }

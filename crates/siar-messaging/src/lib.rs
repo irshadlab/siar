@@ -49,8 +49,8 @@ pub use ticket::PeerTicket;
 // does. This was latent until something (this desktop UI work) forced
 // an actual compile of the import path.
 pub use group_service::{
-    DeviceDirectory, GroupService, GroupServiceError, InMemoryDeviceDirectory, MemberDevice,
-    WelcomeBundle,
+    CommitBundle, DeviceDirectory, DirectoryEntry, GroupService, GroupServiceError,
+    InMemoryDeviceDirectory, MemberDevice, WelcomeBundle,
 };
 pub use key_package_directory::{InMemoryKeyPackageDirectory, KeyPackageDirectory};
 

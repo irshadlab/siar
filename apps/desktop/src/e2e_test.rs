@@ -631,3 +631,423 @@ async fn group_invite_is_one_step_for_the_admin_and_one_tap_for_the_invitee() {
     })
     .await;
 }
+
+fn open_events(n: &Node) -> usize {
+    n.hub.read(|s| {
+        s.security_events
+            .events()
+            .iter()
+            .filter(|e| !e.resolved)
+            .count()
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
+async fn the_security_log_survives_restarts_and_a_resolved_warning_stays_resolved() {
+    use siar_ui_slint::VerificationState;
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-seclog-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let (a, b, c) = (
+        start_node(&tmp.join("a")).await,
+        start_node(&tmp.join("b")).await,
+        start_node(&tmp.join("c")).await,
+    );
+    let dev_b = device_of(&b);
+
+    // Verify B, then present a DIFFERENT key under B's ids: a critical warning.
+    save_contact(&a, &b, "B").await;
+    a.tx.send(AppCommand::SetContactVerified {
+        device_id: dev_b,
+        verified: true,
+    })
+    .await
+    .unwrap();
+    wait_until("verified", || {
+        a.hub
+            .read(|s| s.contact_safety[&dev_b].state == VerificationState::Verified)
+    })
+    .await;
+    let (account_b, ticket_c) = (
+        b.hub.read(|s| s.identity.account.unwrap()),
+        c.hub.read(|s| s.identity.ticket.clone()),
+    );
+    a.tx.send(AppCommand::SaveContact {
+        device_id: dev_b,
+        account_id: account_b,
+        display_name: "B".into(),
+        ticket_text: ticket_c,
+        key_package_b64: None,
+    })
+    .await
+    .unwrap();
+    wait_until("warning raised", || open_events(&a) == 1).await;
+
+    // ---- restart #1: the warning is still there, and not doubled ----
+    let a2 = start_node(&tmp.join("a")).await;
+    wait_until("log restored", || {
+        a2.hub.read(|s| !s.security_events.events().is_empty())
+    })
+    .await;
+    wait_until("contacts restored", || {
+        a2.hub.read(|s| s.contact_safety.contains_key(&dev_b))
+    })
+    .await;
+    assert_eq!(
+        open_events(&a2),
+        1,
+        "the open warning came back, exactly once"
+    );
+    assert_eq!(
+        a2.hub.read(|s| s.contact_safety[&dev_b].state),
+        VerificationState::KeyChanged,
+        "and the contact is still shown as key-changed"
+    );
+    assert_eq!(
+        a2.hub
+            .read(|s| s.banner.visible_issues(&s.security_events).len()),
+        1
+    );
+
+    // The user resolves it (what the UI does: update memory, then persist).
+    let event_id = a2.hub.read(|s| s.security_events.events()[0].id);
+    a2.hub.update(|s| s.security_events.resolve(event_id));
+    a2.tx
+        .send(AppCommand::ResolveSecurityEvent {
+            event_id: event_id.get(),
+        })
+        .await
+        .unwrap();
+    // give the core a moment to persist it
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // ---- restart #2: resolved stays resolved, and is NOT re-raised even
+    // though the contact's key is still different ----
+    let a3 = start_node(&tmp.join("a")).await;
+    wait_until("log restored again", || {
+        a3.hub.read(|s| !s.security_events.events().is_empty())
+    })
+    .await;
+    wait_until("contacts restored again", || {
+        a3.hub.read(|s| s.contact_safety.contains_key(&dev_b))
+    })
+    .await;
+    assert_eq!(
+        a3.hub.read(|s| s.security_events.events().len()),
+        1,
+        "no duplicate event"
+    );
+    assert_eq!(open_events(&a3), 0, "resolved stays resolved");
+    assert_eq!(
+        a3.hub
+            .read(|s| s.banner.visible_issues(&s.security_events).len()),
+        0
+    );
+    assert_eq!(
+        a3.hub.read(|s| s.contact_safety[&dev_b].state),
+        VerificationState::KeyChanged
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
+async fn a_restored_backup_is_the_same_working_account() {
+    use siar_messaging::PeerTicket;
+    use siar_ui_slint::VerificationState;
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-restore-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let (a, b) = (
+        start_node(&tmp.join("a")).await,
+        start_node(&tmp.join("b")).await,
+    );
+    let (acct_a, dev_a, kp_a) = a.hub.read(|s| {
+        (
+            s.identity.account.unwrap(),
+            s.identity.device.unwrap(),
+            s.identity.key_package.clone(),
+        )
+    });
+    let dev_b = device_of(&b);
+    let (ta, tb) = (
+        a.hub.read(|s| s.identity.ticket.clone()),
+        b.hub.read(|s| s.identity.ticket.clone()),
+    );
+
+    // Build up a real account: a saved + verified contact, history, a group.
+    save_contact(&a, &b, "Bea").await;
+    save_contact(&b, &a, "Ann").await;
+    a.tx.send(AppCommand::SetContactVerified {
+        device_id: dev_b,
+        verified: true,
+    })
+    .await
+    .unwrap();
+    wait_until("verified", || {
+        a.hub
+            .read(|s| s.contact_safety[&dev_b].state == VerificationState::Verified)
+    })
+    .await;
+    let a_chat = crate::peers::conversation_for(&PeerTicket::decode(&tb).unwrap());
+    let b_chat = crate::peers::conversation_for(&PeerTicket::decode(&ta).unwrap());
+    wait_until("both can send", || {
+        a.hub.read(|s| s.can_send(a_chat)) && b.hub.read(|s| s.can_send(b_chat))
+    })
+    .await;
+    for i in 1..=3 {
+        say(&a, a_chat, &format!("keep-{i}")).await;
+    }
+    wait_until("B got them", || {
+        b.hub.read(|s| {
+            s.timelines
+                .get(&b_chat)
+                .is_some_and(|t| t.visible().filter(|e| !e.from_me).count() == 3)
+        })
+    })
+    .await;
+    a.tx.send(AppCommand::CreateGroup { founder: acct_a })
+        .await
+        .unwrap();
+    wait_until("group", || a.hub.read(|s| s.groups.ordered().len() == 1)).await;
+    let group = a.hub.read(|s| s.groups.ordered()[0].conversation_id);
+    tokio::time::sleep(Duration::from_millis(500)).await; // let writes settle
+
+    // Disaster recovery: back up, then restore on a "new machine".
+    let archive = tmp.join("account.siarbak");
+    const PASS: &str = "an adequately long passphrase";
+    let summary = siar_backup::create_backup_with(
+        &tmp.join("a").join("siar"),
+        PASS,
+        &archive,
+        siar_backup::KdfParams {
+            mem_kib: 8,
+            iterations: 1,
+            lanes: 1,
+        },
+    )
+    .expect("backup");
+    assert!(summary.files >= 4);
+    let restored_home = tmp.join("restored");
+    siar_backup::restore_backup(&archive, PASS, &restored_home.join("siar")).expect("restore");
+
+    let r = start_node(&restored_home).await;
+    // identity: the SAME person and device, not a fresh account
+    assert_eq!(r.hub.read(|s| s.identity.account), Some(acct_a));
+    assert_eq!(r.hub.read(|s| s.identity.device), Some(dev_a));
+    assert_eq!(
+        r.hub.read(|s| s.identity.key_package.clone()),
+        kp_a,
+        "the key package already shared still works"
+    );
+    // contact + verification mark
+    wait_until("contacts back", || {
+        r.hub.read(|s| s.contact_safety.contains_key(&dev_b))
+    })
+    .await;
+    assert_eq!(
+        r.hub.read(|s| s.contact_safety[&dev_b].state),
+        VerificationState::Verified
+    );
+    // group came back with its MLS state
+    wait_until("group back", || {
+        r.hub.read(|s| s.groups.get(group).is_some())
+    })
+    .await;
+    // readable history: the messages decrypt with the restored keys
+    wait_until("history decrypts", || {
+        r.hub.read(|s| {
+            s.timelines
+                .get(&a_chat)
+                .is_some_and(|t| t.visible().filter(|e| e.from_me).count() == 3)
+        })
+    })
+    .await;
+    let bodies: Vec<String> = r
+        .hub
+        .read(|s| s.timelines[&a_chat].visible().map(text_of).collect());
+    assert_eq!(bodies, ["keep-1", "keep-2", "keep-3"]);
+    // and it can still talk to the peer (same transport identity? at least same keys): send works
+    say(&r, a_chat, "after-restore").await;
+    wait_until("B receives from the restored account", || {
+        b.hub.read(|s| {
+            s.timelines.get(&b_chat).is_some_and(|t| {
+                t.visible()
+                    .any(|e| !e.from_me && text_of(e) == "after-restore")
+            })
+        })
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
+async fn a_restarted_device_keeps_its_address_and_its_peer_keeps_accepting_it() {
+    use siar_messaging::PeerTicket;
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-address-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let (a, b) = (
+        start_node(&tmp.join("a")).await,
+        start_node(&tmp.join("b")).await,
+    );
+    let endpoint_of = |n: &Node| {
+        PeerTicket::decode(&n.hub.read(|s| s.identity.ticket.clone()))
+            .unwrap()
+            .endpoint_addr
+            .id
+    };
+    let before = endpoint_of(&a);
+
+    // A is a saved contact of B and vice versa; B already trusts A's address.
+    save_contact(&a, &b, "B").await;
+    save_contact(&b, &a, "A").await;
+    let b_chat_with_a = crate::peers::conversation_for(
+        &PeerTicket::decode(&a.hub.read(|s| s.identity.ticket.clone())).unwrap(),
+    );
+
+    // A "restarts" (a new core over the same data folder).
+    let a2 = start_node(&tmp.join("a")).await;
+    assert_eq!(
+        endpoint_of(&a2),
+        before,
+        "the device's address changed across a restart: every saved ticket for it is now stale"
+    );
+
+    // …so B, which was never told anything new, still accepts A's messages
+    // (routed by sender address) with no re-pairing.
+    let a2_chat = a2
+        .hub
+        .read(|s| s.conversations.ordered().first().map(|c| c.id))
+        .expect("B restored as a chat");
+    say(&a2, a2_chat, "i am back").await;
+    wait_until("B accepts the restarted A", || {
+        b.hub.read(|s| {
+            s.timelines
+                .get(&b_chat_with_a)
+                .is_some_and(|t| t.visible().any(|e| !e.from_me && text_of(e) == "i am back"))
+        })
+    })
+    .await;
+}
+
+async fn invite(admin: &Node, to: &Node, conv: siar_domain::ConversationId) {
+    use base64::Engine;
+    let (account, device, ticket, kp) = to.hub.read(|s| {
+        (
+            s.identity.account.unwrap(),
+            s.identity.device.unwrap(),
+            s.identity.ticket.clone(),
+            s.identity.key_package.clone(),
+        )
+    });
+    admin
+        .tx
+        .send(AppCommand::AddGroupMember {
+            conversation: conv,
+            new_member: account,
+            input: siar_ui_state::AddMemberInput {
+                peer_account: account,
+                peer_device: device,
+                peer_ticket_text: ticket,
+                key_package_bytes: base64::engine::general_purpose::STANDARD
+                    .decode(kp)
+                    .unwrap(),
+            },
+        })
+        .await
+        .unwrap();
+}
+
+fn heard(n: &Node, conv: siar_domain::ConversationId, body: &str) -> bool {
+    n.hub.read(|s| {
+        s.timelines
+            .get(&conv)
+            .is_some_and(|t| t.visible().any(|e| !e.from_me && text_of(e) == body))
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
+async fn group_members_reach_each_other_without_contacts_and_after_a_restart() {
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-discovery-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let (a, b, c) = (
+        start_node(&tmp.join("a")).await,
+        start_node(&tmp.join("b")).await,
+        start_node(&tmp.join("c")).await,
+    );
+    let founder = a.hub.read(|s| s.identity.account.unwrap());
+
+    // The admin builds a group. NO contacts are saved anywhere.
+    a.tx.send(AppCommand::CreateGroup { founder })
+        .await
+        .unwrap();
+    wait_until("group", || a.hub.read(|s| s.groups.ordered().len() == 1)).await;
+    let conv = a.hub.read(|s| s.groups.ordered()[0].conversation_id);
+
+    invite(&a, &b, conv).await;
+    wait_until("B invited", || {
+        b.hub.read(|s| !s.pending_invites.pending().is_empty())
+    })
+    .await;
+    b.tx.send(AppCommand::AcceptGroupInvite { conversation: conv })
+        .await
+        .unwrap();
+    wait_until("B joined", || b.hub.read(|s| s.groups.get(conv).is_some())).await;
+
+    invite(&a, &c, conv).await;
+    // B, an existing member, sees the roster grow without being told by hand.
+    wait_until("B's group shows 3 members", || {
+        b.hub
+            .read(|s| s.groups.get(conv).is_some_and(|g| g.member_count == 3))
+    })
+    .await;
+    wait_until("C invited", || {
+        c.hub.read(|s| !s.pending_invites.pending().is_empty())
+    })
+    .await;
+    c.tx.send(AppCommand::AcceptGroupInvite { conversation: conv })
+        .await
+        .unwrap();
+    wait_until("C joined", || c.hub.read(|s| s.groups.get(conv).is_some())).await;
+    assert!(
+        a.hub.read(|s| s.contacts.ordered().is_empty()),
+        "no contact was ever saved"
+    );
+    assert!(b.hub.read(|s| s.contacts.ordered().is_empty()));
+
+    // B ↔ C never met, yet each reaches the other (and A).
+    let say_group = |n: &Node, body: &str| {
+        let text = MessageText::parse(body.to_string()).unwrap();
+        let tx = n.tx.clone();
+        async move {
+            tx.send(AppCommand::SendGroupMessage {
+                conversation: conv,
+                text,
+            })
+            .await
+            .unwrap()
+        }
+    };
+    say_group(&b, "b says hi").await;
+    wait_until("A and C hear B", || {
+        heard(&a, conv, "b says hi") && heard(&c, conv, "b says hi")
+    })
+    .await;
+    say_group(&c, "c says hi").await;
+    wait_until("A and B hear C", || {
+        heard(&a, conv, "c says hi") && heard(&b, conv, "c says hi")
+    })
+    .await;
+
+    // B restarts. What it learned about A and C was saved, and its MLS state
+    // reopened, so it can still reach both — with no contacts to rebuild from.
+    let b2 = start_node(&tmp.join("b")).await;
+    wait_until("B2 group back", || {
+        b2.hub.read(|s| s.groups.get(conv).is_some())
+    })
+    .await;
+    say_group(&b2, "b after restart").await;
+    wait_until("A and C hear restarted B", || {
+        heard(&a, conv, "b after restart") && heard(&c, conv, "b after restart")
+    })
+    .await;
+}

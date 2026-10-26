@@ -386,6 +386,9 @@ pub(crate) fn install(window: &MainWindow, hub: &UiHub) {
         app.on_resolve_event(move |id| {
             if let Ok(raw) = id.trim().parse::<u64>() {
                 hub.update(|s| s.security_events.resolve(SecurityEventId::from_raw(raw)));
+                // Persist it, or the event comes back as unresolved at the
+                // next launch.
+                hub.dispatch(AppCommand::ResolveSecurityEvent { event_id: raw });
             }
         });
     }

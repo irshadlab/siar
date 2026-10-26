@@ -11,8 +11,8 @@ use std::time::Duration;
 use siar_crypto::DeviceIdentity;
 use siar_domain::{AccountId, ConversationId, DeviceId, MessageContent, MessageText};
 use siar_messaging::{
-    GroupService, InMemoryDeviceDirectory, InMemoryKeyPackageDirectory, KeyPackageDirectory,
-    MemberDevice, PeerTicket,
+    DeviceDirectory, GroupService, InMemoryDeviceDirectory, InMemoryKeyPackageDirectory,
+    KeyPackageDirectory, MemberDevice, PeerTicket,
 };
 use siar_protocol::{v1::EnvelopeKind, WireMessage};
 use siar_storage::{
@@ -308,5 +308,179 @@ async fn an_invite_for_the_wrong_group_or_account_is_refused() {
     svc_b
         .join_group_from_invite(conv, &welcome.payload)
         .unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+async fn key_package_of(node: &Node, svc: &GroupService) -> Vec<u8> {
+    let dir = InMemoryKeyPackageDirectory::default();
+    svc.publish_key_package(&dir).unwrap();
+    dir.take(node.device).expect("published")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn members_find_each_other_without_being_contacts_and_every_roster_stays_in_sync() {
+    let root = std::env::temp_dir().join(format!("siar-disc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (mut a, mut b, mut c) = (
+        Node::spawn(&root, "a").await,
+        Node::spawn(&root, "b").await,
+        Node::spawn(&root, "c").await,
+    );
+    // Only the ADMIN knows anyone, and only the people it is about to add.
+    // B and C know nobody: no contacts, no tickets exchanged by hand.
+    a.directory.register(
+        b.account,
+        MemberDevice {
+            device_id: b.device,
+            ticket: b.ticket.clone(),
+        },
+    );
+    a.directory.register(
+        c.account,
+        MemberDevice {
+            device_id: c.device,
+            ticket: c.ticket.clone(),
+        },
+    );
+    let (svc_a, svc_b, svc_c) = (a.service(), b.service(), c.service());
+    let (kp_b, kp_c) = (
+        key_package_of(&b, &svc_b).await,
+        key_package_of(&c, &svc_c).await,
+    );
+    assert!(
+        b.directory.devices_for(a.account).is_empty()
+            && c.directory.devices_for(a.account).is_empty()
+    );
+
+    let conv = ConversationId::new();
+    svc_a.create_group_mls(conv, a.account).unwrap();
+
+    // A adds B. B learns how to reach A from the invite itself.
+    svc_a
+        .add_member_mls(conv, b.account, b.device, &kp_b)
+        .await
+        .unwrap();
+    let welcome_b = b.next_envelope().await;
+    svc_b
+        .join_group_from_invite(conv, &welcome_b.payload)
+        .unwrap();
+    assert!(
+        !b.directory.devices_for(a.account).is_empty(),
+        "B learned A from the invite"
+    );
+
+    // A adds C. B — an EXISTING member — must learn about C from the commit:
+    // both the roster change and how to reach C.
+    svc_a
+        .add_member_mls(conv, c.account, c.device, &kp_c)
+        .await
+        .unwrap();
+    let commit = b.next_envelope().await;
+    assert!(matches!(commit.kind, EnvelopeKind::GroupMlsCommit));
+    assert!(svc_b.handle_incoming_mls(conv, &commit).unwrap().is_none());
+    let roster_b = svc_b.group_state(conv).unwrap().unwrap();
+    assert!(roster_b.is_member(c.account), "B's own roster now lists C");
+    assert_eq!(roster_b.members().len(), 3);
+    assert!(
+        !b.directory.devices_for(c.account).is_empty(),
+        "B can now reach C"
+    );
+
+    // C joins and learns A and B — though it never met B.
+    let welcome_c = c.next_envelope().await;
+    svc_c
+        .join_group_from_invite(conv, &welcome_c.payload)
+        .unwrap();
+    assert!(!c.directory.devices_for(a.account).is_empty());
+    assert!(
+        !c.directory.devices_for(b.account).is_empty(),
+        "C learned B from the invite"
+    );
+
+    // B → A and C, with no contact ever saved between B and C.
+    svc_b.send_text_mls(conv, text("from b")).await.unwrap();
+    let (env_a, env_c) = (a.next_envelope().await, c.next_envelope().await);
+    assert_eq!(
+        plain(svc_a.handle_incoming_mls(conv, &env_a).unwrap()),
+        "from b"
+    );
+    assert_eq!(
+        plain(svc_c.handle_incoming_mls(conv, &env_c).unwrap()),
+        "from b"
+    );
+
+    // C → A and B.
+    svc_c.send_text_mls(conv, text("from c")).await.unwrap();
+    let (env_a, env_b) = (a.next_envelope().await, b.next_envelope().await);
+    assert_eq!(
+        plain(svc_a.handle_incoming_mls(conv, &env_a).unwrap()),
+        "from c"
+    );
+    assert_eq!(
+        plain(svc_b.handle_incoming_mls(conv, &env_b).unwrap()),
+        "from c"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_add_from_a_device_that_is_not_a_known_admin_cannot_change_a_roster() {
+    let root = std::env::temp_dir().join(format!("siar-spoof-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (a, mut b, c) = (
+        Node::spawn(&root, "a").await,
+        Node::spawn(&root, "b").await,
+        Node::spawn(&root, "c").await,
+    );
+    a.directory.register(
+        b.account,
+        MemberDevice {
+            device_id: b.device,
+            ticket: b.ticket.clone(),
+        },
+    );
+    a.directory.register(
+        c.account,
+        MemberDevice {
+            device_id: c.device,
+            ticket: c.ticket.clone(),
+        },
+    );
+    let (svc_a, svc_b, svc_c) = (a.service(), b.service(), c.service());
+    let (kp_b, kp_c) = (
+        key_package_of(&b, &svc_b).await,
+        key_package_of(&c, &svc_c).await,
+    );
+    let conv = ConversationId::new();
+    svc_a.create_group_mls(conv, a.account).unwrap();
+    svc_a
+        .add_member_mls(conv, b.account, b.device, &kp_b)
+        .await
+        .unwrap();
+    let welcome = b.next_envelope().await;
+    svc_b
+        .join_group_from_invite(conv, &welcome.payload)
+        .unwrap();
+    assert_eq!(svc_b.group_state(conv).unwrap().unwrap().members().len(), 2);
+
+    svc_a
+        .add_member_mls(conv, c.account, c.device, &kp_c)
+        .await
+        .unwrap();
+    let mut commit = b.next_envelope().await;
+    // The very same (cryptographically valid) commit, but claiming to come
+    // from a device B has never known as an admin.
+    commit.sender = DeviceId::new();
+    svc_b.handle_incoming_mls(conv, &commit).unwrap();
+    let roster = svc_b.group_state(conv).unwrap().unwrap();
+    assert_eq!(
+        roster.members().len(),
+        2,
+        "the roster must not change on an unverified sender's say-so"
+    );
+    assert!(
+        b.directory.devices_for(c.account).is_empty(),
+        "and no address may be planted either"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

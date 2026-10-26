@@ -546,3 +546,71 @@ fn an_invite_that_carries_the_group_record_needs_nothing_pasted() {
     assert!(!legacy.has_state);
     assert!(!h.app().invoke_accept_invite(legacy.id, "".into()));
 }
+
+// ---- keyboard operation (found on real hardware: Tab skipped text inputs and
+// the segmented controls had no keyboard support at all) -------------------
+
+#[test]
+fn tab_reaches_the_conversation_search_field_and_typing_works() {
+    let h = Harness::new(1180, 760);
+    populate(&h.hub);
+    h.hub.update(|s| {
+        s.banner = siar_ui_state::SecurityStatusBanner::new();
+    });
+    h.app().invoke_review_security(); // make sure we start from a known page…
+    h.app().set_page(Page::Chats);
+    h.flush();
+    h.ui.window()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::WindowActiveChanged(true));
+
+    let mut tabs = 0;
+    loop {
+        h.tab();
+        tabs += 1;
+        h.press("z");
+        if h.hub.read(|s| s.conversation_filter.clone()) == "z" {
+            break;
+        }
+        assert!(
+            tabs < 14,
+            "Tab never reached the search field (it was skipped)"
+        );
+    }
+}
+
+#[test]
+fn arrow_keys_operate_the_theme_selector() {
+    let h = Harness::new(1180, 760);
+    h.app().set_page(Page::Settings);
+    h.ui.window()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::WindowActiveChanged(true));
+    assert_eq!(
+        h.ui.window().global::<Theme>().get_mode(),
+        ThemeMode::System
+    );
+
+    let mut tabs = 0;
+    while h.ui.window().global::<Theme>().get_mode() == ThemeMode::System {
+        h.tab();
+        h.press(slint::platform::Key::RightArrow);
+        tabs += 1;
+        assert!(tabs < 14, "no keyboard path to the theme selector");
+    }
+    assert_eq!(h.ui.window().global::<Theme>().get_mode(), ThemeMode::Light);
+    // and it was reported for persistence, exactly like a mouse click
+    assert_eq!(
+        h.saved_settings.lock().unwrap().last().unwrap().theme,
+        ThemeChoice::Light
+    );
+    h.press(slint::platform::Key::RightArrow);
+    assert_eq!(h.ui.window().global::<Theme>().get_mode(), ThemeMode::Dark);
+    h.press(slint::platform::Key::LeftArrow);
+    h.press(slint::platform::Key::LeftArrow);
+    h.press(slint::platform::Key::LeftArrow); // clamps at the first option
+    assert_eq!(
+        h.ui.window().global::<Theme>().get_mode(),
+        ThemeMode::System
+    );
+}

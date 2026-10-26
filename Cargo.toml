@@ -28,6 +28,7 @@ members = [
     "crates/siar-messaging",
     "crates/siar-ui-state",
     "crates/siar-ui-slint",
+    "crates/siar-backup",
     "crates/siar-media-core",
     # siar-media-av1 and siar-media-audio are desktop-only (real Opus/
     # dav1d C dependencies with no configured Android cross-compilation
@@ -97,6 +98,7 @@ siar-transport = { path = "crates/siar-transport" }
 siar-messaging = { path = "crates/siar-messaging" }
 siar-ui-state = { path = "crates/siar-ui-state" }
 siar-ui-slint = { path = "crates/siar-ui-slint" }
+siar-backup = { path = "crates/siar-backup" }
 siar-media-core = { path = "crates/siar-media-core" }
 siar-connectivity = { path = "crates/siar-connectivity" }
 siar-transport-ble = { path = "crates/siar-transport-ble" }
@@ -149,6 +151,10 @@ zeroize = { version = "1", features = ["derive"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "serde", "zeroize"] }
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 chacha20poly1305 = { version = "0.10", features = ["std"] }
+# Password → key for encrypted backups. Argon2id (memory-hard), pure Rust.
+argon2 = "0.5"
+# Hidden passphrase prompt for the backup commands.
+rpassword = "7"
 rand_core = { version = "0.6", features = ["std"] }
 blake3 = "1"
 

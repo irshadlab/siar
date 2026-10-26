@@ -38,6 +38,29 @@ impl DeviceIdentity {
         }
     }
 
+    /// A 32-byte secret for a DIFFERENT purpose, derived from this
+    /// identity: same identity + same `context` always gives the same
+    /// bytes; a different `context` (or identity) gives unrelated bytes.
+    ///
+    /// Why it exists: some keys must be stable across restarts but must
+    /// not be the signing or DH key themselves — this crate's own rule
+    /// against reusing one key across protocols. The transport (iroh)
+    /// endpoint key is the case in point: it used to be generated afresh
+    /// at every launch, so a device's address changed on every restart and
+    /// every saved ticket for it went stale. Deriving it from the identity
+    /// makes it stable with no extra secret file to store or back up.
+    ///
+    /// `context` must be a hard-coded, globally unique, versioned string
+    /// (it is the domain separator); never build it from user input.
+    pub fn derive_secret(&self, context: &str) -> zeroize::Zeroizing<[u8; 32]> {
+        let mut material = [0u8; 64];
+        material[..32].copy_from_slice(&self.signing_key.to_bytes());
+        material[32..].copy_from_slice(&self.x25519_secret.to_bytes());
+        let derived = blake3::derive_key(context, &material);
+        material.zeroize();
+        zeroize::Zeroizing::new(derived)
+    }
+
     pub fn verifying_key(&self) -> VerifyingKey {
         self.signing_key.verifying_key()
     }
@@ -184,6 +207,33 @@ impl Drop for DeviceIdentity {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn derived_secrets_are_stable_separated_and_not_the_identity_keys() {
+        let a = DeviceIdentity::generate();
+        let b = DeviceIdentity::generate();
+        let ctx = "siar test context v1";
+
+        // stable: same identity, same context — including after a
+        // save/load round trip and a clone (what a restart or restore does)
+        let first = *a.derive_secret(ctx);
+        assert_eq!(first, *a.derive_secret(ctx));
+        assert_eq!(first, *a.try_clone().unwrap().derive_secret(ctx));
+        let dir = std::env::temp_dir().join(format!("siar-derive-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        a.save_to_file(&dir.join("id.bin")).unwrap();
+        let reloaded = DeviceIdentity::load_from_file(&dir.join("id.bin")).unwrap();
+        assert_eq!(first, *reloaded.derive_secret(ctx));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // separated: another context or another identity is unrelated
+        assert_ne!(first, *a.derive_secret("siar test context v2"));
+        assert_ne!(first, *b.derive_secret(ctx));
+
+        // never just the signing or DH secret handed back out
+        assert_ne!(first, a.signing_key.to_bytes());
+        assert_ne!(first, a.x25519_secret.to_bytes());
+    }
+
     use super::*;
 
     #[test]

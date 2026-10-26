@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerTicket {
     pub endpoint_addr: iroh::EndpointAddr,
     pub x25519_public: [u8; 32],

@@ -743,10 +743,10 @@ export component SettingsPage inherits PageBody {
                 }
                 if show-diagnostics: VerticalLayout {
                     spacing: Theme.sp-sm;
-                    CopyField { label: "Device key id"; value: AppState.diag-key-id; }
-                    CopyField { label: "Group key epochs"; value: AppState.diag-epochs; mono-off: true; }
-                    CopyField { label: "Signatures"; value: AppState.diag-signature; mono-off: true; }
-                    CopyField { label: "Transport security"; value: AppState.diag-transport; mono-off: true; }
+                    CopyField { label: "Device key id"; value: AppState.diag-key-id; copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Device key id copied"; } }
+                    CopyField { label: "Group key epochs"; value: AppState.diag-epochs; mono-off: true; copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Group key epochs copied"; } }
+                    CopyField { label: "Signatures"; value: AppState.diag-signature; mono-off: true; copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Signature summary copied"; } }
+                    CopyField { label: "Transport security"; value: AppState.diag-transport; mono-off: true; copied => { AppState.notice-kind = NoticeKind.success; AppState.notice-text = "Transport details copied"; } }
                 }
             }
         }

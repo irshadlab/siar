@@ -4,9 +4,9 @@
 
 > **IMPORTANT NOTICE TO ENTERPRISE & COMMERCIAL USERS**:  
 > The SIAR project employs a clear two-tier licensing model:
-> 1. **Core Libraries & Crates (`crates/*`)** are dual-licensed under **MIT OR Apache-2.0**. They are 100% free and permissive for anyone (including commercial enterprises) to embed, link, and use in proprietary or open-source software without restriction.
-> 2. **Standalone Applications & Daemons (`apps/*`)** are dual-licensed under the **GNU Affero General Public License Version 3 (AGPLv3)** for open-source use, and under this **Commercial License & Enterprise Exemption Agreement (SIAR-CEEL-1.0)** for commercial, proprietary, white-label, or closed-source SaaS/cloud-hosted deployments.  
-> If you modify, rebrand, or host SIAR standalone applications or daemons within a proprietary product or network service without releasing your modifications under AGPLv3, **you are legally required to purchase and maintain an active SIAR Commercial Subscription**.
+> 1. **Core Headless Infrastructure & Protocol Libraries (`crates/*`, excluding UI crates)** are dual-licensed under **MIT OR Apache-2.0**. They are 100% free and permissive for anyone (including commercial enterprises) to embed, link, and use in proprietary or open-source software without restriction.
+> 2. **Standalone Applications, Daemons (`apps/*`), and All UI-Related Code (`crates/siar-ui-*`, `crates/siar-app-core`)** are dual-licensed under the **GNU Affero General Public License Version 3 (AGPLv3)** for open-source use, and under this **Commercial License & Enterprise Exemption Agreement (SIAR-CEEL-1.0)** for commercial, proprietary, white-label, or closed-source SaaS/cloud-hosted deployments.  
+> If you modify, rebrand, or host SIAR standalone applications, daemons, or user interface components within a proprietary product or network service without releasing your modifications under AGPLv3, **you are legally required to purchase and maintain an active SIAR Commercial Subscription**.
 
 ---
 
@@ -17,32 +17,32 @@
 
 SIAR is developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab)), a research initiative focused on local-first computing, resilient peer-to-peer networking, and systems engineering.
 
-- **Permissive Libraries (`crates/*`)**: All underlying Rust crates (`siar-crypto`, `siar-crypto-mls`, `siar-transport`, `siar-storage`, `siar-messaging`, `siar-routing-policy`, `siar-dtn-bundle`, `siar-connectivity`, etc.) are licensed under **MIT OR Apache-2.0** to maximize developer adoption, academic research, and interoperability across the ecosystem.
-- **Copyleft Standalone Applications (`apps/*`)**: Complete end-user applications (`apps/android`, `apps/desktop`, `apps/cli`) and headless relay daemons (`apps/emergency-node`) are licensed under **GNU AGPLv3** to ensure that modifications to user-facing applications and network services remain open and accessible to the public.
+- **Permissive Libraries (`crates/*`)**: All underlying headless Rust crates (`siar-crypto`, `siar-crypto-mls`, `siar-transport`, `siar-storage`, `siar-messaging`, `siar-routing-policy`, `siar-dtn-bundle`, `siar-connectivity`, etc., excluding UI crates) are licensed under **MIT OR Apache-2.0** to maximize developer adoption, academic research, and interoperability across the ecosystem.
+- **Copyleft UI & Applications (`apps/*` and `crates/siar-ui-*`)**: Complete end-user applications (`apps/android`, `apps/desktop`, `apps/cli`), headless relay daemons (`apps/emergency-node`), and all user interface state/component crates (`crates/siar-ui-state`, `crates/siar-ui-slint`, `crates/siar-ui-model`, `crates/siar-app-core`) are licensed under **GNU AGPLv3** to ensure that modifications to user-facing applications, visual state machines, and network services remain open and accessible to the public.
 
 ### 💡 Fueling Development via Commercial Reinvestment
 To prevent uncompensated enterprise exploitation of turnkey applications while guaranteeing perpetual freedom for humanity, SIAR provides a **Commercial Exemption Path (SIAR-CEEL-1.0)**:
-- Commercial enterprises that modify or deploy SIAR standalone applications and daemons as proprietary SaaS platforms or white-labeled closed-source products can purchase a commercial subscription to lift AGPLv3 copyleft restrictions.
+- Commercial enterprises that modify or deploy SIAR standalone applications, UI frameworks, and daemons as proprietary SaaS platforms or white-labeled closed-source products can purchase a commercial subscription to lift AGPLv3 copyleft restrictions.
 - **100% of commercial licensing revenues are directly reinvested to fuel the core engineering, security auditing, multi-platform maintenance, and ongoing development of SIAR for the benefit of humanity.**
 
 ---
 
-## 2. Terms of Commercial Exemption Grant for Applications
+## 2. Terms of Commercial Exemption Grant for Applications and UI
 
 Subject to your payment of applicable Commercial Subscription Fees and compliance with this Agreement, the SIAR Maintainers (Irshad Lab) grant your entity a non-exclusive, worldwide, royalty-bearing (paid via subscription) commercial license to:
 
-1. **Exemption from AGPLv3 Copyleft on Applications**:
-   - You are fully exempt from Section 13 (Remote Network Interaction) of the GNU AGPLv3 for `apps/*`. You may host, run, scale, and provide cloud/SaaS messaging infrastructure built on SIAR applications without disclosing your application source code, proprietary algorithms, database schemas, or cloud orchestration software.
-   - You may modify, rebrand, white-label, and adapt SIAR standalone applications (`apps/desktop`, `apps/android`, `apps/cli`, `apps/emergency-node`) for closed-source commercial distribution.
+1. **Exemption from AGPLv3 Copyleft on Applications and UI**:
+   - You are fully exempt from Section 13 (Remote Network Interaction) of the GNU AGPLv3 for `apps/*` and UI-related crates (`crates/siar-ui-*`, `crates/siar-app-core`). You may host, run, scale, and provide cloud/SaaS messaging infrastructure built on SIAR applications without disclosing your application source code, proprietary algorithms, database schemas, or cloud orchestration software.
+   - You may modify, rebrand, white-label, and adapt SIAR standalone applications (`apps/desktop`, `apps/android`, `apps/cli`, `apps/emergency-node`) and UI frameworks for closed-source commercial distribution.
 
 2. **Proprietary Modification & Distribution**:
-   - You may modify, enhance, extend, and adapt SIAR application source code for internal enterprise use or external commercial distribution.
+   - You may modify, enhance, extend, and adapt SIAR application source code and UI components for internal enterprise use or external commercial distribution.
    - You are under no obligation to share or publish your proprietary modifications back to the public repository.
 
 3. **Binary Redistribution**:
-   - You may distribute compiled SIAR application binaries or embedded runtime components inside commercial mobile apps (iOS / Android), desktop software (Windows / macOS / Linux), embedded hardware devices (IoT / Automotive / Defense), or cloud container images under your own proprietary commercial End User License Agreement (EULA).
+   - You may distribute compiled SIAR application binaries or embedded UI runtime components inside commercial mobile apps (iOS / Android), desktop software (Windows / macOS / Linux), embedded hardware devices (IoT / Automotive / Defense), or cloud container images under your own proprietary commercial End User License Agreement (EULA).
 
-*(Note: Core crates under `crates/*` are already permissively licensed under MIT OR Apache-2.0 and do not require a commercial subscription for library linking.)*
+*(Note: Core headless crates under `crates/*` are already permissively licensed under MIT OR Apache-2.0 and do not require a commercial subscription for library linking.)*
 
 ---
 

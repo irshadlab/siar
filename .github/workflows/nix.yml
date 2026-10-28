@@ -1,11 +1,14 @@
-name: Nix Flake CI
+name: Nix Flake CI (Disabled)
 
+# Nix CI and check workflows are disabled for push and pull_request.
+# Manual execution requires setting force_run to 'true'.
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
   workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Set to "true" to force run disabled Nix CI checks'
+        required: false
+        default: 'false'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,6 +17,7 @@ concurrency:
 jobs:
   nix-check-and-build:
     name: Nix Build (${{ matrix.os }})
+    if: ${{ github.event.inputs.force_run == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:

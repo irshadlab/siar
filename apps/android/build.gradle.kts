@@ -1,3 +1,10 @@
+/*
+ * SIAR Android Messenger Application
+ * Dual-licensed under GNU Affero General Public License v3 (AGPLv3) and
+ * Commercial License & Enterprise Exemption Agreement (SIAR-CEEL-1.0).
+ * Copyright (c) 2026 Irshad Lab <contact@irshadlab.org>
+ */
+
 // Plugin versions pinned here, applied per-module — standard Gradle
 // convention-plugin pattern, not a choice specific to this project.
 // Versions chosen as reasonably current stable releases as of this

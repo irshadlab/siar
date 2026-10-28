@@ -7404,6 +7404,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-app-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "blake3",
+ "directories",
+ "iroh",
+ "postcard",
+ "rand_core 0.9.5",
+ "siar-backup",
+ "siar-crypto",
+ "siar-domain",
+ "siar-identity-multidevice",
+ "siar-media-image",
+ "siar-messaging",
+ "siar-power",
+ "siar-protocol",
+ "siar-storage",
+ "siar-transport",
+ "siar-ui-model",
+ "siar-ui-state",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "siar-backup"
 version = "0.1.0"
 dependencies = [
@@ -7511,6 +7540,7 @@ dependencies = [
  "siar-domain",
  "siar-dtn-bundle",
  "siar-event-log",
+ "siar-power",
  "siar-routing-policy",
  "thiserror 2.0.19",
  "uuid",
@@ -7554,32 +7584,38 @@ dependencies = [
 ]
 
 [[package]]
-name = "siar-desktop"
+name = "siar-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64",
- "blake3",
- "directories",
- "iroh",
- "postcard",
- "rand_core 0.9.5",
- "rpassword",
+ "siar-app-core",
  "siar-backup",
- "siar-crypto",
  "siar-domain",
- "siar-identity-multidevice",
- "siar-media-image",
- "siar-messaging",
- "siar-protocol",
- "siar-storage",
- "siar-transport",
- "siar-ui-slint",
+ "siar-power",
+ "siar-runtime",
+ "siar-ui-model",
  "siar-ui-state",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "siar-desktop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rpassword",
+ "siar-app-core",
+ "siar-backup",
+ "siar-messaging",
+ "siar-ui-slint",
+ "siar-ui-state",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 
@@ -7646,9 +7682,11 @@ dependencies = [
  "siar-crypto",
  "siar-domain",
  "siar-messaging",
+ "siar-power",
  "siar-protocol",
  "siar-protocol-ext",
  "siar-routing-policy",
+ "siar-runtime",
  "siar-storage",
  "siar-transport",
  "tokio",
@@ -7853,6 +7891,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-power"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "siar-protocol"
 version = "0.1.0"
 dependencies = [
@@ -7896,6 +7945,7 @@ dependencies = [
  "proptest",
  "serde",
  "siar-domain",
+ "siar-power",
  "siar-protocol-ext",
  "thiserror 2.0.19",
  "workspace-hack",
@@ -7908,8 +7958,23 @@ dependencies = [
  "serde",
  "siar-domain",
  "siar-identity-multidevice",
+ "siar-power",
  "siar-protocol-ext",
  "thiserror 2.0.19",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "siar-runtime"
+version = "0.1.0"
+dependencies = [
+ "postcard",
+ "serde",
+ "siar-power",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
  "uuid",
  "workspace-hack",
 ]
@@ -8005,12 +8070,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-ui-model"
+version = "0.1.0"
+dependencies = [
+ "siar-domain",
+ "siar-power",
+ "siar-ui-state",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "siar-ui-slint"
 version = "0.1.0"
 dependencies = [
  "base64",
  "image",
  "siar-domain",
+ "siar-ui-model",
  "siar-ui-state",
  "slint",
  "slint-build",

@@ -1,0 +1,32 @@
+[package]
+name = "siar-app-core"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"   # inherits the iroh/stoolap floor via siar-messaging
+description = "The Siar application core: owns MessageService/GroupService, drains AppCommands, publishes UI state. Links no GUI toolkit, so a window, a daemon or a test can host it."
+
+[dependencies]
+siar-domain.workspace = true
+siar-ui-state.workspace = true
+siar-ui-model.workspace = true
+siar-power.workspace = true
+siar-crypto.workspace = true
+siar-storage.workspace = true
+siar-transport.workspace = true
+siar-messaging.workspace = true
+siar-protocol.workspace = true
+siar-media-image.workspace = true
+siar-identity-multidevice.workspace = true
+siar-backup.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+iroh.workspace = true
+rand_core = "0.9"
+base64.workspace = true
+postcard.workspace = true
+directories.workspace = true
+uuid.workspace = true
+blake3.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

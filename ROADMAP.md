@@ -81,9 +81,9 @@ of them being a real prerequisite for it).
 |---|---|---|---|---|---|
 | 08 Resource Limits/Backpressure | **22** | 🟡 Tier 0 | 14 Proximity Abstraction | 8 | ⚪ |
 | 10 Fuzzing/Test Suite | **19** | ⚪ — see note below | 15 QR/NFC Pairing | 7 | ⚪ |
-| 13 Battery-Aware Scheduling | **18** | ⚪ | 11 Relay Self-Hosted Infra | 6 | ⚪ |
+| 13 Battery-Aware Scheduling | **18** | 🟡 `siar-power` (101 tests) — see "Parts 13 & 16 status" below | 11 Relay Self-Hosted Infra | 6 | ⚪ |
 | 03 Transport Routing Policy | 17 | ✅ Tier 0 | 22 WASM Components | 6 | ⚪ |
-| 16 Daemon/Headless Runtime | 15 | ⚪ | 01 Protocol Extension | 5 | ✅ Tier 0 |
+| 16 Daemon/Headless Runtime | 15 | 🟡 `siar-runtime` (53 tests) — see "Parts 13 & 16 status" below | 01 Protocol Extension | 5 | ✅ Tier 0 |
 | 19 C-ABI/FFI | **15** | ⚪ — see note below | 21 3rd-Party Protocol Ext | 5 | ⚪ |
 | 04 Offline Event Log | 14 | 🟡 Tier 0 | 28 Security/E2EE | 4 | 🟡 Tier 1 |
 | 05 File/Blob Subsystem | 14 | 🟡 Tier 0 | 29 Realtime Calls | 2 | ⚪ |
@@ -497,3 +497,15 @@ run alongside it, not instead of it:
   crate split) — each needs its own dedicated, scoped effort rather
   than sharing a round with anything else, whenever Part 28 is resumed
   per the cross-spec order above.
+
+
+## Parts 13 & 16 status (Phase 1 landed; section fractions deliberately NOT claimed — run `grep -c "^# [0-9]*\."` before quoting any)
+
+**Part 13 — `siar-power`**, one canonical power model. Done: §4-8,15 state; §9-14,69-70 profiles/config/prefs; §16-19,140 budgets; §20-28,68,72-74,96-97 layered policy engine; §21,75-80,110-112 durable-deferral scheduler (aging, herd control, restart-safe); §30-32 wake batching; §34-38,91 discovery duty cycle; §39-57,138 files/DTN/media advice; §81-84 hysteresis, coalescing, epoch; §85,115 metrics/diagnostics; §86-87 privacy classes/peer hint; §139 sysfs reader + push source; §116-119 plain-language UI card (Settings).
+Refactor: `siar-routing-policy`, `siar-crash-recovery` now use `siar-power`'s `BatteryLevelClass`/`ThermalState` (`Normal`→`Nominal`, `Fair`→`Elevated`); `siar-resource-limits::ModeFlags::from_power` bridge.
+**Wired in:** `emergency-node` pauses relay *forwarding* (never storing) per `PowerAdvisor`; the desktop/daemon core (`siar-app-core::power_gate`) gates attachment previews (user-initiated: only hard safety holds them; `RunThrottled` ⇒ one at a time; parked previews resume by themselves) and the start-up history preload (deferred freely; opening a chat loads on demand). **Messages, ACKs and retries are never gated** — the Settings card promises it, and nothing in `power_gate` is on that path.
+**Open:** Android BatteryManager/Doze/FGS producers and iOS (§58-64); vendor quirks (§100-102); empirical tuning (§99); real-device/benchmark suites (§130-136). No bulk-file-transfer feature exists in the desktop core yet, so §39-§49 file/DTN limits have no desktop consumer beyond previews.
+
+**Part 16 — `siar-runtime`**. Done: §32-36,111-112 lifecycle + network barrier; §29-31,97-98,121,142 supervisor/breaker; §89-90,140-141 health; §56-58 command idempotency; §23-25,144-148,169-171 bounded events; §14-22,102-105 protocol/roles/versions; §51-54 `Runtime`; §13-18,144-146,179 Unix-socket IPC; §37-39,99,174 sd_notify/unit generation. Wired into `apps/emergency-node` (signals, `--admin-socket`, power poller, readiness).
+**Core extraction (done):** `apps/desktop`'s non-UI code now lives in `siar-app-core` (lib, **no GUI toolkit** — `cargo tree` shows 0 Slint/winit crates), over a new `siar-ui-model` (`Slices`, Slint-free `StateHub`); `UiHub` in `siar-ui-slint` is a thin redraw wrapper (`UiHub::state()` hands the core its `Arc<StateHub>`). `apps/daemon` (`siar-daemon run | ctl | unit`) hosts that same core under `siar-runtime`: lifecycle barrier, supervised control socket, signals, `sd_notify`, the data-folder lock shared with the window. Verified with two real daemons pairing and exchanging messages through `ctl`.
+**Open:** the GUI as a *daemon client* — blocked by design, not laziness: `siar-ui-state` types and `AppCommand` have no serde, and shipping whole `Slices` snapshots would couple the wire format to UI structs. The right protocol is domain-level snapshot+delta (conversations, messages, delivery state, security events) that the window projects into its own `Slices`; until then window and daemon are mutually exclusive per data folder. Also: iroh endpoint is not closed gracefully on shutdown (log line "dropped without calling Endpoint::close"); `ctl` has no `--json`; Windows named pipes; Android service/iOS windows (§42-46); remote admin (§66-70); multi-account namespaces (§80-84); plugin isolation (§120); upgrade handoff (§100-101); FD passing (§63); **desktop GUI is not a daemon client** — `apps/desktop::Core` is coupled to the Slint hub, extracting it is the next big refactor; no cargo-fuzz target for `decode_frame` yet (a deterministic garbage test exists).

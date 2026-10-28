@@ -63,12 +63,18 @@
 - [Testing & Fuzzing](#testing--fuzzing)
 - [Empirical Evaluation & Distributed Telemetry Report](#empirical-evaluation--distributed-telemetry-report)
 - [License & Dual-Tier Model](#license--dual-tier-model)
+- [Contributing](#contributing)
 
 ---
 
 ## What SIAR Is
 
-**SIAR** ( **Survivable Identity & Autonomous Routing** ) is a **reusable, zero-infrastructure, multi-transport, offline-first P2P communication platform**.
+**SIAR** ( **Survivable Identity & Autonomous Routing** ) is a **reusable, zero-infrastructure, multi-transport, offline-first P2P communication platform** engineered to invert traditional client-server assumptions.
+
+> **The application expresses intent and constraints. The platform selects paths, manages retries, falls back to DTN, and re-establishes sessions — without the application understanding transport mechanics.**
+
+<details>
+<summary><strong>Expand Core Principles & Architectural Motivation</strong></summary>
 
 Traditional messengers (WhatsApp, Signal, Telegram) assume always-on infrastructure: centralized server clusters, public DNS, PKI, and continuous Internet access. When natural disasters strike, telecommunications infrastructure collapses, or state-level censorship severs external backhauls, these apps completely fail.
 
@@ -84,9 +90,16 @@ The governing rule from [`sys-arch/`](sys-arch/):
 
 > **The application expresses intent and constraints. The platform selects paths, manages retries, falls back to DTN, and re-establishes sessions — without the application understanding transport mechanics.**
 
+</details>
+
 ---
 
 ## Core Design Rules
+
+SIAR enforces immutable foundational invariants derived directly from the [`sys-arch/`](sys-arch/) specification corpus across every crate in the workspace:
+
+<details>
+<summary><strong>Expand Core Design Rules Table</strong></summary>
 
 These rules appear directly in the sys-arch specifications and govern every crate in the workspace:
 
@@ -101,11 +114,19 @@ These rules appear directly in the sys-arch specifications and govern every crat
 | SIAR must treat anonymity as an explicit routing/security property, not a side effect of encryption | `sys-arch/34` §1 |
 | The call is a logical secure session; network paths, codecs, devices, and surfaces are replaceable implementation resources inside that session | `sys-arch/29` §1 |
 
+</details>
+
 ---
 
 ## Specification Governance: sys-arch for Core, ui-ux for UI
 
 All engineering and implementation in SIAR strictly follows a dual-specification authority model:
+- 📐 **Core Engine, Protocols & Daemons**: Governed by **[`sys-arch/`](sys-arch/)** (176 specifications).
+- 🎨 **Frontends, UI/UX & State Machines**: Governed by **[`ui-ux/`](ui-ux/)** (27 specifications).
+- 🔒 **Core Invariant**: The daemon owns all durable state; UI is strictly a decoupled client of runtime and never owns transport or crypto state.
+
+<details>
+<summary><strong>Expand Governance Architecture & Specification Chapters</strong></summary>
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -152,11 +173,21 @@ In accordance with [`sys-arch/16`](sys-arch/16-daemon-headless-runtime-architect
 2. **The UI is a Stateless Client**: Frontend applications (`apps/desktop`, `apps/android`) observe reactive state streams exposed by [`siar-ui-state`](crates/siar-ui-state) and emit user intent commands.
 3. **No Direct Socket or Crypto Manipulation in UI**: UI code must never open raw network sockets, attempt ad-hoc cryptographic operations, or implement private transport failover logic.
 
+</details>
+
 ---
 
 ## Architecture: Five Layers
 
-SIAR is structured into five distinct, decoupled architectural layers:
+SIAR is structured into five distinct, decoupled architectural layers ensuring complete isolation from raw physical radio drivers up to frontend application shells:
+1. **Layer 5: Applications & UI/UX** (`apps/desktop`, `apps/android`, `apps/emergency-node`, `apps/cli`)
+2. **Layer 4: High-Level Services** (`siar-messaging`, `siar-calls`, `siar-files`, `siar-dtn-bundle-service`)
+3. **Layer 3: Routing, Policy & DTN Engine** (`siar-routing-policy`, `siar-connectivity`, `siar-dtn-bundle`, `siar-emergency`)
+4. **Layer 2: Storage, Crypto & Reliability** (`siar-crypto`, `siar-crypto-mls`, `siar-storage`, `siar-blob-manifest`, `siar-crash-recovery`)
+5. **Layer 1: Transport & Wire Protocols** (`siar-protocol`, `siar-protocol-ext`, `siar-capability`, `siar-transport-*`)
+
+<details>
+<summary><strong>Expand Five Layers Architectural Diagram</strong></summary>
 
 ```
 +---------------------------------------------------------------------------------------+
@@ -187,11 +218,24 @@ SIAR is structured into five distinct, decoupled architectural layers:
 +---------------------------------------------------------------------------------------+
 ```
 
+</details>
+
 ---
 
 ## Transport & Routing Policy Engine
 
 *Specification: [`sys-arch/03`](sys-arch/03-transport-routing-policy-engine-architecture.md) · Crate: [`siar-routing-policy`](crates/siar-routing-policy)*
+
+Rather than hardcoding transport selection, applications publish **`DeliveryRequirements`** (priority, latency ceiling, battery limit). The policy engine dynamically evaluates candidate links and shifts between operational modes:
+
+| Mode | Available Networks | Delivery Mechanism |
+| :--- | :--- | :--- |
+| **Connected Online** | Internet / LAN / Wi-Fi | Iroh QUIC, direct end-to-end streams |
+| **Local Tactical Mesh** | Wi-Fi Direct, Wi-Fi Aware, LAN | Hop-by-hop mesh forwarding (sub-10 ms) |
+| **Air-Gapped / Off-Grid** | BLE GATT, Bluetooth Classic | Physical mule DTN with Spray-and-Wait |
+
+<details>
+<summary><strong>Expand Routing Policy Engine Pipeline & Profiles</strong></summary>
 
 The platform supports all of the following physical paths simultaneously:
 
@@ -212,13 +256,7 @@ Rather than letting application code pick a transport, each operation publishes 
 
 Policy profiles include: `RealTime`, `Interactive`, `Bulk`, `Background`, `Emergency`, `LowPower`, `OffGrid`. The engine also enforces stickiness hysteresis to prevent oscillation under measurement jitter.
 
-SIAR automatically shifts between three operational modes:
-
-| Mode | Available Networks | Delivery Mechanism |
-| :--- | :--- | :--- |
-| **Connected Online** | Internet / LAN / Wi-Fi | Iroh QUIC, direct end-to-end streams |
-| **Local Tactical Mesh** | Wi-Fi Direct, Wi-Fi Aware, LAN | Hop-by-hop mesh forwarding (sub-10 ms) |
-| **Air-Gapped / Off-Grid** | BLE GATT, Bluetooth Classic | Physical mule DTN with Spray-and-Wait |
+</details>
 
 ---
 
@@ -226,7 +264,12 @@ SIAR automatically shifts between three operational modes:
 
 *Specification: [`sys-arch/02`](sys-arch/02-multi-device-identity-architecture.md) · Crate: [`siar-identity-multidevice`](crates/siar-identity-multidevice)*
 
-A person is not a device. SIAR distinguishes five identity layers:
+A person is an **Account**, not a device. All devices belonging to a user share the exact same canonical **Account ID**, while each physical hardware device generates an independent **Device ID**, cryptographic key pairs (Ed25519/X25519), and unique peer tickets.
+
+<details>
+<summary><strong>Expand Multi-Device Trust Hierarchy & Security Guarantees</strong></summary>
+
+SIAR distinguishes five identity layers:
 
 ```
 Account Identity  →  Device Identity  →  Transport Identity  →  Session Identity  →  Application Profile
@@ -245,11 +288,18 @@ Each device generates an independent Ed25519 key pair and obtains a **`DeviceCer
 
 The identity layer is designed to remain **reusable outside the messenger** — the same model backs messaging, files, emergency SOS, ERP, and any future application built on this platform.
 
+</details>
+
 ---
 
 ## End-to-End Security Model
 
 *Specification: [`sys-arch/28`](sys-arch/28-production-security-e2ee-key-management-privacy-architecture.md) · Crates: [`siar-crypto`](crates/siar-crypto), [`siar-crypto-mls`](crates/siar-crypto-mls)*
+
+SIAR enforces a strict zero-trust model: all conversation payloads are end-to-end encrypted using MLS (RFC 9420) and authenticated device sessions (Ed25519 + X25519 + ChaCha20-Poly1305). Intermediate relay nodes, DTN carriers, and physical mules never hold decryption keys.
+
+<details>
+<summary><strong>Expand Layered Threat Model & Cryptographic Guarantees</strong></summary>
 
 ```
 Application E2EE (MLS RFC 9420)
@@ -272,13 +322,18 @@ Required security properties:
 - **Offline / DTN-safe encryption** — messages encrypted for delivery remain sealed while carried by DTN mules
 - **Metadata minimization** — routing decisions carry no content; `RouteMetricEvent` has no peer-identity or IP fields by construction
 
+</details>
+
 ---
 
 ## DTN: Store-Carry-Forward
 
 *Specification: [`sys-arch/06`](sys-arch/06-dtn-store-carry-forward-architecture.md) · Crate: [`siar-dtn-bundle`](crates/siar-dtn-bundle)*
 
-DTN (Delay-Tolerant Networking) enables communication without a continuous end-to-end path:
+Delay-Tolerant Networking (DTN) enables reliable communication across air-gapped zones and complete network blackouts by persisting encrypted bundles locally and forwarding them through physical peer encounters via Spray-and-Wait replication.
+
+<details>
+<summary><strong>Expand DTN Topology, Custody Receipts & Routing Details</strong></summary>
 
 ```
 Alice (no Internet, no Wi-Fi, no direct Bluetooth to destination)
@@ -300,13 +355,18 @@ The DTN subsystem persists payloads locally, carries them across time, and forwa
 
 **Spray-and-Wait** replication (configurable `dtn_replication_budget`) limits network flooding while maximising delivery probability. Bundle custody receipts confirm when a mule has accepted responsibility for forwarding. The routing policy engine integrates DTN as a first-class `RouteStrategy::Dtn` outcome — fallback to DTN is a policy decision, not a last-resort hack.
 
+</details>
+
 ---
 
 ## Realtime Calls & Media
 
 *Specification: [`sys-arch/29`](sys-arch/29-realtime-calls-media-session-protocol-architecture.md) · Crates: [`siar-calls`](crates/siar-calls), [`siar-media-android`](crates/siar-media-android), [`siar-media-audio`](crates/siar-media-audio), [`siar-media-av1`](crates/siar-media-av1)*
 
-A call is a **logical secure session**; network paths, codecs, devices, and display surfaces are replaceable resources inside that session:
+Calls in SIAR are **logical secure sessions** decoupled from physical network paths. Under the hood, audio/video sessions seamlessly hand off across transports (e.g., Wi-Fi Direct to Internet QUIC) without dropping the call.
+
+<details>
+<summary><strong>Expand Call Controller Architecture & Codec Pipelines</strong></summary>
 
 ```
 Call Controller
@@ -325,13 +385,18 @@ The call architecture supports:
 - **Pure-Rust DSP on desktop** — Opus encode/decode, acoustic echo cancellation (AEC), noise suppression (NS), automatic gain control (AGC)
 - **Crash-safe call history** — call records are written to durable storage before the session is confirmed torn down
 
+</details>
+
 ---
 
 ## Headless Daemon & Embedded Nodes
 
 *Specification: [`sys-arch/16`](sys-arch/16-daemon-headless-runtime-architecture.md) · App: [`apps/emergency-node`](apps/emergency-node)*
 
-The platform does not require the user interface to remain alive for core networking to function:
+The core networking and DTN engine functions fully without a GUI. Standalone daemons deploy on low-power single-board computers (Raspberry Pi, OpenWrt routers) and solar-powered field units as autonomous off-grid repeaters.
+
+<details>
+<summary><strong>Expand Headless Architecture & Solar Repeater Specifications</strong></summary>
 
 ```
 Slint Desktop UI   ──Secure Local IPC / Direct Core Wiring──▶  comm-daemon / runtime
@@ -354,13 +419,18 @@ In headless mode, the daemon autonomously stores, carries, and re-transmits encr
 
 Self-hosted relay infrastructure ([`sys-arch/11`](sys-arch/11-relay-self-hosted-infrastructure-architecture.md)) allows organizations to deploy private relay fleets, regional relay clusters, and DTN gateway bridges without lock-in to any centralized service.
 
+</details>
+
 ---
 
 ## Protocol Extensions & WASM
 
 *Specifications: [`sys-arch/01`](sys-arch/01-protocol-extension-system-architecture.md), [`sys-arch/22`](sys-arch/22-wasm-compatible-components-architecture.md) · Crates: [`siar-protocol-ext`](crates/siar-protocol-ext), [`siar-capability`](crates/siar-capability)*
 
-Instead of a single monolithic protocol enum, SIAR uses a **versioned capability architecture**:
+SIAR uses a **versioned capability architecture** with two-phase negotiation and weighted fair queuing, ensuring high-priority emergency packets are never blocked by heavy background file transfers.
+
+<details>
+<summary><strong>Expand Capability Negotiation & WASM Component Sandboxing</strong></summary>
 
 ```
 Communication Session
@@ -380,11 +450,18 @@ Two-phase capability confirmation (`NegotiationHash` + `HandshakeNonce`) ensures
 
 WASM-compatible components ([`sys-arch/22`](sys-arch/22-wasm-compatible-components-architecture.md)) enable portable execution of selected logic (custom protocol handlers, routing filters, ERP integrations) across desktop, server, embedded Linux, and browser-compatible environments — while the native Rust core retains ownership of networking, hardware codecs, secure key stores, and daemon lifecycle.
 
+</details>
+
 ---
 
 ## Anonymity Transport Plane
 
 *Specification: [`sys-arch/34`](sys-arch/34-mixnet-loopix-sphinx-nym-high-anonymity-transport-architecture.md)*
+
+An independent, additive **High-Anonymity Transport Plane** based on mixnet principles (Loopix/Sphinx) provides cryptographic resistance against network timing and metadata traffic analysis.
+
+<details>
+<summary><strong>Expand Sphinx Packet Encapsulation & Mixnet Rules</strong></summary>
 
 SIAR's existing transports optimize for reachability, latency, bandwidth, reliability, and offline operation. They do not, by themselves, provide strong resistance against network metadata analysis — a network observer can still infer communication relationships from timing and volume, even when message contents are E2EE-protected.
 
@@ -397,11 +474,16 @@ Part 34 introduces an independent **High-Anonymity Transport Plane** based on mi
 
 The anonymity plane is an additive routing class integrated with SIAR's existing policy engine — it does not replace or weaken direct, mesh, DTN, or realtime transport.
 
+</details>
+
 ---
 
 ## Workspace Crate Map (41 Domain Crates)
 
-SIAR is a modular Rust cargo workspace comprising **41 domain crates**, **4 application environments**, 2 Android JNI runtime bridges, and fuzz testing targets:
+SIAR is structured as a modular Rust cargo workspace comprising **41 domain crates**, **4 application environments**, 2 Android JNI runtime bridges, and fuzz testing harnesses.
+
+<details>
+<summary><strong>Expand Complete Workspace Crate Tree & Domain Directory Map</strong></summary>
 
 ```text
 siar/
@@ -470,11 +552,20 @@ siar/
 └── fuzz/                                 # Cargo Fuzz targets (frame & blob decoders)
 ```
 
+</details>
+
 ---
 
 ## Deployment Modes
 
-SIAR deploys in three distinct forms:
+SIAR deploys across three primary operational topologies:
+
+- 📱 **Standalone User Applications**: Desktop (`apps/desktop` Slint 1.16), Android (`apps/android` Jetpack Compose), and CLI (`apps/cli`).
+- 📡 **Headless Off-Grid Repeater**: Solar-powered Linux/OpenWrt store-carry-forward DTN nodes (`apps/emergency-node`).
+- 🏢 **Embedded Relay Infrastructure**: Self-hosted private organization clusters and Internet-to-mesh gateway bridges.
+
+<details>
+<summary><strong>Expand Deployment Specifications & Platform Targets</strong></summary>
 
 ### 1. Standalone User Applications
 
@@ -498,9 +589,16 @@ The headless runtime (`sys-arch/16`) and relay architecture (`sys-arch/11`) supp
 - DTN gateway bridges between Internet and off-grid mesh segments
 - Multi-cloud / bare-metal deployment with no product-level relay lock-in
 
+</details>
+
 ---
 
 ## SIAR vs Traditional Messengers
+
+Unlike traditional centralized messengers that require active server infrastructure, public DNS, and telephone numbers, SIAR operates entirely offline-first, peer-to-peer, and delay-tolerant:
+
+<details>
+<summary><strong>Expand Architectural Comparison Matrix</strong></summary>
 
 | Feature | SIAR | Signal / WhatsApp / Telegram |
 | :--- | :--- | :--- |
@@ -514,12 +612,17 @@ The headless runtime (`sys-arch/16`) and relay architecture (`sys-arch/11`) supp
 | **Self-Hosted Relay** | Full support — no lock-in | Not supported |
 | **Extensibility** | Versioned protocol extensions + WASM sandbox | Closed monolithic protocol |
 
+</details>
+
 ---
 
 ## Implementation Status & Roadmap
 
-SIAR maintains an honest, compile-and-test-verified implementation tracking matrix per [`ROADMAP.md`](ROADMAP.md).
-All coverage figures are from the `sys-arch/` specification corpus (33 numbered core-architecture docs + 27 `ui-ux-NN` UI specs).
+SIAR maintains an honest, compile-and-test-verified tracking matrix per [`ROADMAP.md`](ROADMAP.md).
+**Current Status**: **6 of 9 Tier-0 foundational core specs are spec-complete or substantially complete** (01, 02, 03, 04, 08, 09) with 1,700+ passing tests and zero warnings (`rustc 1.91`).
+
+<details>
+<summary><strong>Expand Specification Maturity Matrix & Verification Notes</strong></summary>
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -583,9 +686,16 @@ All coverage figures are from the `sys-arch/` specification corpus (33 numbered 
 - **Routing reconciliation**: Retired `siar-routing` into `siar-routing-policy` (link health, relay composition, congestion tracker) and `siar-connectivity` (`CandidateTable`, `DeviceRoutes`).
 - **DTN reconciliation**: Retired `siar-dtn` into `siar-dtn-bundle` (seen-bundle dedup, async `BundleStore`, opaque `RouteToken`) and local quota-bounded storage in `apps/emergency-node`.
 
+</details>
+
 ---
 
 ## Prerequisites & Environment Setup
+
+SIAR requires **Rust 1.91.0+** and provides an automated, zero-dependency hermetic development environment via **Nix** across macOS and all Linux distributions.
+
+<details>
+<summary><strong>Expand Setup Instructions (Nix & Manual Toolchains)</strong></summary>
 
 ### 1. Nix Development Environment (Recommended)
 
@@ -643,9 +753,21 @@ direnv allow
      libjavascriptcoregtk-4.1-dev cmake libopus-dev libdav1d-dev
    ```
 
+</details>
+
 ---
 
 ## Build & Compilation Tutorial
+
+The workspace builds with standard Cargo commands:
+
+```bash
+cargo check --workspace
+cargo build --workspace --release
+```
+
+<details>
+<summary><strong>Expand Detailed Build Targets & Android Cross-Compilation</strong></summary>
 
 ### 1. Building the Rust Workspace
 
@@ -683,9 +805,20 @@ cd apps/android
 ./gradlew installDebug       # Install on connected device/emulator
 ```
 
+</details>
+
 ---
 
 ## Node Configuration & User Guide
+
+SIAR provides four operational nodes tailored for interactive terminals, desktop environments, headless field relays, and mobile devices:
+- **`siar-cli`**: Terminal messenger, PeerTicket sharing, and diagnostics.
+- **`siar-desktop`**: Slint 1.16 native GUI with dark/light themes, persistent message history, and SAS verification.
+- **`siar-emergency-node`**: Headless DTN store-carry-forward repeater.
+- **`apps/android`**: Android messenger with Jetpack Compose.
+
+<details>
+<summary><strong>Expand Interactive Guides & Node Operational Instructions</strong></summary>
 
 ### 1. Command-Line Interface (`siar-cli`)
 
@@ -748,9 +881,16 @@ Features:
 - **Chats Tab** — 1:1 conversations, contact import via Peer Tickets, text + media attachments
 - **Groups Tab** — MLS group creation, group invites, multi-device encrypted threads
 
+</details>
+
 ---
 
 ## Testing & Fuzzing
+
+SIAR is verified through workspace unit tests, multi-node end-to-end integration tests, mesh network simulations (`siar-testkit`), Nix automated flake checks, Cargo fuzzing, and Podman/Kubernetes distributed test harnesses.
+
+<details>
+<summary><strong>Expand Test Suites, Fuzzing & Kubernetes Commands</strong></summary>
 
 ### Unit & Integration Tests
 
@@ -790,11 +930,21 @@ cargo fuzz run decode_blob_frame
 bash scripts/run-multi-device-test.sh
 ```
 
+</details>
+
 ---
 
 ## Empirical Evaluation & Distributed Telemetry Report
 
-This report presents empirical findings, system metrics, protocol captures, and process profiling collected across multi-account, multi-device Kubernetes/Podman deployments, the headless daemon (`siar-daemon`), the desktop application (`siar-desktop`), and the emergency node (`siar-emergency-node`).
+Empirical evaluation, system benchmarks, and network telemetry collected across multi-account, multi-device Kubernetes/Podman deployments, the headless daemon (`siar-daemon`), desktop UI (`siar-desktop`), and emergency node (`siar-emergency-node`):
+
+- 🆔 **Multi-Device Cryptographic Invariant**: All physical devices belonging to the same user share the exact same root **`Account ID`**, while maintaining unique **`Device ID`**s and independent cryptographic seeds.
+- 📉 **Resource Efficiency**: The headless daemon consumes **82.9 MB VmRSS** (a **55.4% physical RAM reduction** vs desktop GUI at 186.0 MB), cutting thread usage by 62.5%.
+- ⚡ **P2P Wire Performance**: Sequential encrypted messages routed over Iroh QUIC across pods achieved **99.3 ms/msg** end-to-end latency with 100% delivery verification.
+- 🔒 **Deterministic Packaging**: A 35-byte plaintext message produces exactly **136 bytes** on the wire, including AEAD MAC tag, nonces, and Postcard envelope framing.
+
+<details>
+<summary><strong>Expand Full Empirical Telemetry Report & Forensic Tables</strong></summary>
 
 ### 1. Multi-Device & Multi-Account Cryptographic Topology
 
@@ -824,7 +974,7 @@ graph TD
 #### Forensic Identity & Storage Table
 
 | Pod / Container | User | Device | Canonical Account ID | Physical Device ID | Stoolap Volumes | WAL Log Size |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | `siar-alice-phone-siar-cli` | Alice | Phone | `2814c4c7-782f-4379-80f7-8305847e3413` | `49e1c2c7-6ec8-4cfe-b453-1ba36bfadb05` | 7,824 B | 4,367 B |
 | `siar-alice-laptop-siar-cli` | Alice | Laptop | `2814c4c7-782f-4379-80f7-8305847e3413` | `b86389f7-6de6-4a44-832f-79f6739e4db8` | 3,428 B | 4,367 B |
 | `siar-bob-desktop-siar-cli` | Bob | Desktop | `a1b3248c-bc4d-4980-9bf8-dc91c47c710a` | `ac4a066b-2e0e-470f-9731-607fb98a8ae2` | 1,926 B | 4,367 B |
@@ -956,13 +1106,19 @@ flowchart TD
 - **Relay Forwarding Throttle**: In `apps/emergency-node`, when `PowerAdvisor` detects thermal or critical battery constraints, forwarding pauses automatically while storage remains active (durable work is deferred, never lost).
 - **Single-Instance Protection**: Verified that `InstanceLock` prevents data folder collisions between `siar-desktop` and `siar-daemon`, eliminating risk of database lock corruption.
 
----
+</details>
 
 ---
 
 ## License & Dual-Tier Model
 
-SIAR employs a two-tier open-source licensing model designed for maximum library adoption while protecting user-facing standalone applications:
+SIAR employs a two-tier open-source licensing model:
+- 📜 **Core Libraries (`crates/*`)**: **[MIT](LICENSE-MIT)** OR **[Apache-2.0](LICENSE-APACHE)** (Permissive Open Source).
+- ⚖️ **Standalone Applications & Daemons (`apps/*`)**: **[GNU AGPLv3](LICENSE-AGPLv3)** (Copyleft with Commercial Exemption).
+- 💼 **Commercial Exemption (`SIAR-CEEL-1.0`)**: For proprietary redistribution without AGPLv3 obligations ([`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)).
+
+<details>
+<summary><strong>Expand Licensing Structure & Commercial Exemption Details</strong></summary>
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -996,9 +1152,16 @@ For commercial enterprises that wish to rebrand, white-label, or host modified c
 - Full legal terms and commercial subscription tiers: [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)
 - Contact: `licensing@irshadlab.org` / `licensing@siar.network`
 
+</details>
+
 ---
 
-### Contributing
+## Contributing
+
+All contributions to SIAR are governed by **[CONTRIBUTING.md](CONTRIBUTING.md)** and **[CLA.md](CLA.md)**. All code contributions must cite their governing [`sys-arch/`](sys-arch/) or [`ui-ux/`](ui-ux/) specification chapters and pass all tests and clippy checks with zero warnings.
+
+<details>
+<summary><strong>Expand Contribution Guidelines & Architectural Quality Rules</strong></summary>
 
 1. Read **[CONTRIBUTING.md](CONTRIBUTING.md)** and **[CLA.md](CLA.md)** before opening a Pull Request.
 2. All contributions are governed by the CLA, granting Irshad Lab dual-licensing rights.
@@ -1006,6 +1169,8 @@ For commercial enterprises that wish to rebrand, white-label, or host modified c
 4. Preserve strict boundary isolation — core crates under `crates/` must remain pure-Rust without mandatory C-library linkages.
 5. Platform-specific hardware integration must be strictly isolated in dedicated crates (`siar-media-android`, `siar-transport-ble-android`).
 6. **Follow Specification Governance**: Core domain, protocol, transport, routing, and daemon development must strictly follow [`sys-arch/`](sys-arch/); all UI, desktop/mobile interaction, visual state machines, and styling must strictly follow [`ui-ux/`](ui-ux/). Pull requests must cite their governing specification chapters.
+
+</details>
 
 ---
 

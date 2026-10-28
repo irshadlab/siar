@@ -176,6 +176,8 @@ fn traffic_priority_for(priority: MessagePriority) -> TrafficPriority {
 }
 
 struct Config {
+    /// Part 16 §14: local admin/status socket. `None` = disabled.
+    admin_socket: Option<PathBuf>,
     identity_path: PathBuf,
     quota_bytes: u64,
     seen_capacity: usize,
@@ -184,6 +186,7 @@ struct Config {
 impl Config {
     fn from_args() -> Self {
         let mut config = Self {
+            admin_socket: Some(siar_runtime::ipc::default_socket_path("emergency-node")),
             identity_path: default_identity_path(),
             quota_bytes: DEFAULT_QUOTA_BYTES,
             seen_capacity: DEFAULT_SEEN_CAPACITY,
@@ -197,6 +200,12 @@ impl Config {
                         config.identity_path = PathBuf::from(value);
                     }
                 }
+                "--admin-socket" => {
+                    if let Some(value) = args.next() {
+                        config.admin_socket = Some(PathBuf::from(value));
+                    }
+                }
+                "--no-admin" => config.admin_socket = None,
                 "--quota-bytes" => {
                     if let Some(value) = args.next().and_then(|v| v.parse().ok()) {
                         config.quota_bytes = value;
@@ -479,7 +488,79 @@ async fn main() -> Result<()> {
         "DTN store/dedup ready — destination-aware push via TransportManager for devices that have checked in, priority-ordered flood fallback otherwise"
     );
 
-    while let Some(frame) = rx.recv().await {
+    // ── Part 16 runtime: lifecycle, admin socket, signals, power ────────
+    let runtime = siar_runtime::Runtime::builder()
+        .power_policy(siar_power::PowerPolicyConfig {
+            deployment: siar_power::Deployment::AlwaysOn,
+            ..Default::default()
+        })
+        .build();
+    // §33-§34: nothing to recover for an in-memory node yet, and the
+    // endpoint is already bound above; the barrier still goes through the
+    // real state machine so `Ready` means the same thing everywhere.
+    runtime
+        .start(async { Ok::<(), String>(()) }, async {
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("runtime start: {e}"))?;
+    if let Some(path) = config.admin_socket.clone() {
+        let rt = runtime.clone();
+        runtime.supervisor.spawn(
+            "admin-socket",
+            false,
+            siar_runtime::RestartPolicy::default(),
+            move || {
+                let (rt, path) = (rt.clone(), path.clone());
+                async move {
+                    siar_runtime::ipc::serve_unix(rt, &path, Default::default())
+                        .await
+                        .map_err(|e| e.to_string())
+                }
+            },
+        );
+    }
+    {
+        // §65-§66/§103: sample the OS power state; the tracker turns it into
+        // coarse classes and wakes subscribers only on a real change.
+        let rt = runtime.clone();
+        runtime.supervisor.spawn(
+            "power-poller",
+            false,
+            siar_runtime::RestartPolicy::default(),
+            move || {
+                let rt = rt.clone();
+                async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+                    loop {
+                        tick.tick().await;
+                        let raw = siar_power::platform::read_linux_sysfs(
+                            std::path::Path::new("/sys"),
+                            Default::default(),
+                        );
+                        let now = siar_domain::now_millis();
+                        rt.observe_power(&raw, now);
+                        rt.with_power(|p| p.tick(now));
+                    }
+                }
+            },
+        );
+    }
+    {
+        let lc = runtime.lifecycle.clone();
+        tokio::spawn(async move {
+            siar_runtime::service::terminate_signal().await;
+            tracing::info!("termination signal: shutting down gracefully");
+            lc.begin_shutdown();
+        });
+    }
+    siar_runtime::service::sd_notify("READY=1");
+
+    loop {
+        let frame = tokio::select! {
+            () = runtime.lifecycle.shutdown_requested() => break,
+            f = rx.recv() => match f { Some(f) => f, None => break },
+        };
         // Set inside the `Mesh` arm below when this iteration stored a
         // bundle AND already pushed it directly to a known destination
         // endpoint (see `DeviceRoutes` below) — skipped from the
@@ -931,6 +1012,21 @@ async fn main() -> Result<()> {
             .map(|bundle| bundle.id)
             .collect();
 
+        // Part 13 §46/§88: a node that is thermally critical, or on a
+        // battery-backed supply that is critically low, stops *forwarding*
+        // (it keeps storing — durable work is deferred, never lost).
+        let relay_off = runtime.with_power(|p| {
+            let t = p.tracker();
+            siar_power::PowerAdvisor::new(t.state(), t.budget(), t.profile())
+                .dtn()
+                .relay_intensity
+                == siar_power::domains::RelayIntensity::Off
+        });
+        if relay_off {
+            tracing::debug!("power policy: relay forwarding paused");
+            continue;
+        }
+
         for id in ordered_ids {
             let Some(bundle) = bundle_store
                 .lock()
@@ -951,5 +1047,10 @@ async fn main() -> Result<()> {
         }
     }
 
+    siar_runtime::service::sd_notify("STOPPING=1");
+    let aborted = runtime.shutdown(std::time::Duration::from_secs(10)).await;
+    if aborted > 0 {
+        tracing::warn!(aborted, "forced shutdown aborted stragglers (§36)");
+    }
     Ok(())
 }

@@ -1,0 +1,20 @@
+[package]
+name = "siar-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Daemon & headless runtime (sys-arch Part 16): lifecycle, supervisor, health, idempotent commands, bounded events, local IPC"
+
+[dependencies]
+siar-power = { path = "../siar-power" }
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-util", "signal"] }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal"] }

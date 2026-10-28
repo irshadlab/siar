@@ -29,26 +29,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A small ordered scale, deliberately coarse — same "no need for fake
-/// precision" reasoning as [`crate::metrics::EnergyCost`]'s own doc
-/// comment (§84, which names that exact phrase). A platform adapter
-/// reports a percentage; this crate has no principled use for the
-/// exact number, only for which coarse band it falls in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum BatteryLevelClass {
-    Critical,
-    Low,
-    Medium,
-    High,
-    Full,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThermalState {
-    Normal,
-    Elevated,
-    Critical,
-}
+/// The coarse battery/thermal scales are defined once, in `siar-power`
+/// (Part 13), and re-exported here so routing and scheduling can never
+/// disagree about what "Low" means. (`ThermalState::Normal` is now
+/// `Nominal`; both enums gained an `Unknown` variant.)
+pub use siar_power::{BatteryLevelClass, ThermalState};
 
 /// §85's own list, one field each, every field optional — a platform
 /// adapter that only reports some of these (or none yet, at startup)
@@ -63,4 +48,20 @@ pub struct DeviceState {
     /// §144 "Memory Pressure", added this round — see
     /// [`crate::resource_pressure`] for the behavior wired to it.
     pub memory_pressure: Option<crate::resource_pressure::MemoryPressure>,
+}
+
+impl From<&siar_power::PowerState> for DeviceState {
+    /// Bridge from the canonical Part 13 snapshot. `Unknown` inputs stay
+    /// `None`, so a platform that reported nothing is not fabricated into data.
+    fn from(p: &siar_power::PowerState) -> Self {
+        use siar_power::{BatteryLevelClass as B, ChargingState as C, ThermalState as T};
+        Self {
+            battery_level_class: (p.battery != B::Unknown).then_some(p.battery),
+            charging: (p.charging != C::Unknown).then(|| p.charging.on_external_power()),
+            battery_saver: Some(p.saver_enabled),
+            thermal_state: (p.thermal != T::Unknown).then_some(p.thermal),
+            foreground: Some(p.activity.is_foreground()),
+            memory_pressure: None,
+        }
+    }
 }

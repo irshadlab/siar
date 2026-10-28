@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license = "AGPL-3.0-or-later"
 rust-version = "1.91"
-description = "Siar desktop UI: Slint views + the siar-ui-state bridge. Depends on no networking or storage crate by design."
+description = "Siar desktop UI: Slint views + the siar-ui-state bridge. Dual-licensed under GNU AGPLv3 and Commercial License."
 build = "build.rs"
 
 [dependencies]

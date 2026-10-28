@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license = "AGPL-3.0-or-later"
 rust-version = "1.91"
-description = "Renderer-independent UI state (`Slices`) and `StateHub`. Lets the application core run with no GUI toolkit linked — in a daemon, a headless node or a test."
+description = "Renderer-independent UI state (`Slices`) and `StateHub`. Dual-licensed under GNU AGPLv3 and Commercial License."
 
 [dependencies]
 siar-domain.workspace = true

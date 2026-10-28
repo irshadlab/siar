@@ -2,8 +2,9 @@
 name = "siar-ui-state"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "AGPL-3.0-or-later"
 rust-version.workspace = true
+description = "Siar UI state machines and Security Center views. Dual-licensed under GNU AGPLv3 and Commercial License."
 
 [dependencies]
 siar-domain.workspace = true

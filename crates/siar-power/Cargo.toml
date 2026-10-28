@@ -1,0 +1,19 @@
+[package]
+name = "siar-power"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Battery-aware scheduling (sys-arch Part 13): one canonical power model, policy engine, budgets and a durable-deferral scheduler"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+# `sync` only (watch channel for the platform adapter) — no runtime is
+# started or required by this crate.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { version = "1", default-features = false, features = ["sync", "rt", "macros", "time"] }

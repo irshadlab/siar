@@ -1,3 +1,10 @@
+/*
+ * SIAR Android Messenger Application (Jetpack Compose UI)
+ * Dual-licensed under GNU Affero General Public License v3 (AGPLv3) and
+ * Commercial License & Enterprise Exemption Agreement (SIAR-CEEL-1.0).
+ * Copyright (c) 2026 Irshad Lab <contact@irshadlab.org>
+ */
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")

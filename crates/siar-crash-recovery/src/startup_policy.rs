@@ -30,13 +30,8 @@ pub const fn may_run_after_network(tier: RecoveryTier, isolated: bool) -> bool {
 // §171
 // ---------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ThermalLevel {
-    Nominal,
-    Fair,
-    Serious,
-    Critical,
-}
+/// Canonical thermal scale from `siar-power` (`Fair` is now `Elevated`).
+pub use siar_power::ThermalState as ThermalLevel;
 
 /// Re-read from the platform after every restart — never restored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,9 +53,10 @@ pub enum ThrottleLevel {
 pub const fn throttle_level(c: DeviceConditions) -> ThrottleLevel {
     let thermal = match c.thermal {
         ThermalLevel::Nominal => ThrottleLevel::Full,
-        ThermalLevel::Fair => ThrottleLevel::Reduced,
+        ThermalLevel::Elevated => ThrottleLevel::Reduced,
         ThermalLevel::Serious => ThrottleLevel::Minimal,
         ThermalLevel::Critical => ThrottleLevel::Paused,
+        ThermalLevel::Unknown => ThrottleLevel::Full,
     };
     let battery = if c.charging {
         ThrottleLevel::Full
@@ -262,7 +258,7 @@ mod tests {
             ThrottleLevel::Minimal
         );
         assert_eq!(
-            throttle_level(cond(90, false, Fair)),
+            throttle_level(cond(90, false, Elevated)),
             ThrottleLevel::Reduced
         );
         assert_eq!(
@@ -273,7 +269,10 @@ mod tests {
             throttle_level(cond(90, false, Critical)),
             ThrottleLevel::Paused
         );
-        assert_eq!(throttle_level(cond(5, false, Fair)), ThrottleLevel::Minimal);
+        assert_eq!(
+            throttle_level(cond(5, false, Elevated)),
+            ThrottleLevel::Minimal
+        );
     }
 
     #[test]

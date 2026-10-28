@@ -16,11 +16,14 @@
 // internally (vtables), so only that module is exempt.
 #![deny(unsafe_code)]
 
+// The state types live in `siar-ui-model` so the core can run with no GUI
+// toolkit linked; re-exported here so existing paths keep working.
+use siar_ui_model::slices;
+
 mod bridge;
 mod hub;
 mod projection;
 mod settings;
-mod slices;
 mod text;
 
 #[allow(unsafe_code, clippy::all, dead_code)]
@@ -30,10 +33,11 @@ mod ui {
 
 pub use hub::{SettingsSink, TicketValidator, UiHub};
 pub use settings::{DensityChoice, ThemeChoice, UiSettings};
-pub use slices::{
+pub use siar_ui_model::slices::{
     ContactSafety, EventView, HistoryPaging, LocalIdentity, Notice, NoticeLevel, Slices,
     VerificationState,
 };
+pub use siar_ui_model::{describe_power, PowerStatus, StateHub};
 pub use ui::{
     AppState, Density, MainWindow, NoticeKind, Page, SecurityTab, Theme, ThemeMode, WindowClass,
 };

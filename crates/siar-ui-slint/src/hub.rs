@@ -1,16 +1,15 @@
 //! `UiHub`: the one handle the rest of the app uses to talk to the UI.
 //!
-//! Replaces Dioxus `Signal`s. Any thread may call [`UiHub::update`] to
-//! mutate the shared [`Slices`]; the hub then schedules at most ONE
-//! projection onto the Slint event loop, no matter how many updates
+//! The state and command channel live in [`siar_ui_model::StateHub`] (no GUI
+//! toolkit). This wrapper adds the Slint half: any update schedules at most
+//! ONE projection onto the Slint event loop, no matter how many updates
 //! arrive before it runs (a burst of incoming messages costs one redraw).
-//!
-//! Commands go the other way over a bounded channel with `try_send`, so
-//! the UI thread can never block on the core.
+//! The core is handed [`UiHub::state`] — it never sees Slint.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, MutexGuard};
 
+use siar_ui_model::StateHub;
 use siar_ui_state::AppCommand;
 use slint::Weak;
 use tokio::sync::mpsc;
@@ -28,10 +27,9 @@ pub type TicketValidator = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>
 pub type SettingsSink = Arc<dyn Fn(UiSettings) + Send + Sync>;
 
 pub(crate) struct HubInner {
-    slices: Mutex<Slices>,
+    state: Arc<StateHub>,
     dirty: AtomicBool,
     pub(crate) window: Weak<MainWindow>,
-    commands: mpsc::Sender<AppCommand>,
     pub(crate) validate_ticket: TicketValidator,
     pub(crate) on_settings_changed: SettingsSink,
     /// No window behind this hub (tests, headless tools): state and the
@@ -43,89 +41,95 @@ pub(crate) struct HubInner {
 pub struct UiHub(pub(crate) Arc<HubInner>);
 
 impl UiHub {
+    fn build(
+        window: Weak<MainWindow>,
+        commands: mpsc::Sender<AppCommand>,
+        validate_ticket: TicketValidator,
+        on_settings_changed: SettingsSink,
+        detached: bool,
+    ) -> Self {
+        let inner = Arc::new(HubInner {
+            state: Arc::new(StateHub::new(commands)),
+            dirty: AtomicBool::new(false),
+            window,
+            validate_ticket,
+            on_settings_changed,
+            detached,
+        });
+        if !detached {
+            // Weak: the state must not keep the window's hub alive.
+            let weak = Arc::downgrade(&inner);
+            inner.state.set_wake(Arc::new(move || {
+                if let Some(inner) = weak.upgrade() {
+                    UiHub(inner).request_flush();
+                }
+            }));
+        }
+        Self(inner)
+    }
+
     pub(crate) fn new(
         window: Weak<MainWindow>,
         commands: mpsc::Sender<AppCommand>,
         validate_ticket: TicketValidator,
         on_settings_changed: SettingsSink,
     ) -> Self {
-        Self(Arc::new(HubInner {
-            slices: Mutex::new(Slices::new()),
-            dirty: AtomicBool::new(false),
+        Self::build(
             window,
             commands,
             validate_ticket,
             on_settings_changed,
-            detached: false,
-        }))
+            false,
+        )
     }
 
     /// A hub with no window, for driving the core headlessly (end-to-end
     /// tests). Everything except drawing works.
     #[doc(hidden)]
     pub fn detached(commands: mpsc::Sender<AppCommand>) -> Self {
-        Self(Arc::new(HubInner {
-            slices: Mutex::new(Slices::new()),
-            dirty: AtomicBool::new(false),
-            window: Weak::default(),
+        Self::build(
+            Weak::default(),
             commands,
-            validate_ticket: Arc::new(|_| Ok(())),
-            on_settings_changed: Arc::new(|_| {}),
-            detached: true,
-        }))
+            Arc::new(|_| Ok(())),
+            Arc::new(|_| {}),
+            true,
+        )
+    }
+
+    /// The toolkit-free state handle: what the application core is given.
+    #[must_use]
+    pub fn state(&self) -> Arc<StateHub> {
+        self.0.state.clone()
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Slices> {
-        // A panic while holding the lock must not brick the UI: the data
-        // is plain display state, safe to keep using.
-        self.0.slices.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.state.lock()
     }
 
     /// Mutate state from any thread and schedule a redraw.
     pub fn update<R>(&self, f: impl FnOnce(&mut Slices) -> R) -> R {
-        let out = f(&mut self.lock());
-        self.request_flush();
-        out
+        self.0.state.update(f)
     }
 
     /// Mutate state WITHOUT redrawing (e.g. every keystroke in the
     /// composer — nothing visible depends on it).
     pub fn update_quiet<R>(&self, f: impl FnOnce(&mut Slices) -> R) -> R {
-        f(&mut self.lock())
+        self.0.state.update_quiet(f)
     }
 
     pub fn read<R>(&self, f: impl FnOnce(&Slices) -> R) -> R {
-        f(&self.lock())
+        self.0.state.read(f)
     }
 
     /// Show a transient notice (validation problems, failures).
     pub fn notify(&self, level: NoticeLevel, text: impl Into<String>) {
-        let text = text.into();
-        self.update(|s| s.notify(level, text));
+        self.0.state.notify(level, text);
     }
 
     /// Queue a command for the core. Never blocks; a full queue is
     /// reported to the user instead of silently dropping the action.
     pub fn dispatch(&self, command: AppCommand) -> bool {
-        match self.0.commands.try_send(command) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("command queue full");
-                self.notify(
-                    NoticeLevel::Warning,
-                    "Siar is busy — try that again in a moment.",
-                );
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                tracing::error!("command queue closed — the core task has stopped");
-                self.notify(
-                    NoticeLevel::Error,
-                    "Siar’s background service stopped. Restart the app.",
-                );
-                false
-            }
-        }
+        self.0.state.dispatch(command)
     }
 
     pub(crate) fn request_flush(&self) {

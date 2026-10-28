@@ -25,8 +25,8 @@ You hereby grant to the Project Maintainers and to recipients of software distri
 
 1. Reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute Your Contributions and derivative works thereof.
 2. Distribute and license the Contributions under the Project's open-source licenses:
-   - **MIT License** OR **Apache License 2.0** for core libraries and crates (`crates/*`).
-   - **GNU Affero General Public License Version 3 (AGPLv3)** for standalone user applications, daemons, and services (`apps/*`).
+   - **MIT License** OR **Apache License 2.0** for core headless infrastructure and protocol libraries (`crates/*`, excluding UI crates).
+   - **GNU Affero General Public License Version 3 (AGPLv3)** for standalone user applications, daemons, services (`apps/*`), and all UI-related code (`crates/siar-ui-*`, `crates/siar-app-core`).
 3. Sublicense and distribute the Contributions under the **SIAR Commercial License & Enterprise Exemption Agreement (SIAR-CEEL-1.0)** to enterprise and commercial entities.
 
 > **💡 Our Commitment to Open Source & Humanity**:  

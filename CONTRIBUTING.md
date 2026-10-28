@@ -30,8 +30,8 @@ We are committed to providing a friendly, safe, and welcoming environment for ev
 
 All contributions to SIAR are governed by the **[SIAR Contributor License Agreement](file:///home/irshad/Projects/siar/CLA.md)**.
 
-- Core libraries under `crates/*` are licensed under **MIT OR Apache-2.0**.
-- Standalone applications and daemons under `apps/*` are licensed under **GNU AGPLv3**.
+- Core headless infrastructure and protocol libraries under `crates/*` (excluding UI crates) are licensed under **MIT OR Apache-2.0**.
+- Standalone applications, daemons under `apps/*`, and all UI-related code (`crates/siar-ui-state`, `crates/siar-ui-slint`, `crates/siar-ui-model`, `crates/siar-app-core`) are licensed under **GNU AGPLv3** with commercial exemption under `SIAR-CEEL-1.0`.
 - Maintainers (Irshad Lab) hold the right to grant commercial exemptions under `SIAR-CEEL-1.0` to commercial entities, with 100% of licensing fees reinvested into core development.
 
 By opening a Pull Request or submitting a patch, you agree to the terms in **[`CLA.md`](file:///home/irshad/Projects/siar/CLA.md)**. We recommend signing your commits with `git commit -s` (`Signed-off-by`).
@@ -44,13 +44,15 @@ Before writing code, please understand SIAR's architectural boundaries:
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│               APPS LAYER (GNU AGPLv3)                  │
+│         UI & APPS LAYER (GNU AGPLv3 / Commercial)      │
 │  apps/cli, apps/desktop, apps/android,                 │
-│  apps/emergency-node                                   │
+│  apps/emergency-node, crates/siar-ui-state,            │
+│  crates/siar-ui-slint, crates/siar-ui-model,           │
+│  crates/siar-app-core                                  │
 └───────────────────────────┬────────────────────────────┘
                             │
 ┌───────────────────────────▼────────────────────────────┐
-│         CORE LIBRARIES LAYER (MIT OR Apache-2.0)       │
+│   CORE HEADLESS LIBRARIES LAYER (MIT OR Apache-2.0)    │
 │  crates/siar-messaging, crates/siar-storage,           │
 │  crates/siar-crypto-mls, crates/siar-transport,        │
 │  crates/siar-routing-policy, crates/siar-dtn-bundle,   │

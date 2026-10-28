@@ -1,0 +1,26 @@
+[package]
+name = "siar-daemon"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"
+description = "Siar headless daemon: the application core hosted by siar-runtime, with a local control socket. Links no GUI toolkit."
+
+[[bin]]
+name = "siar-daemon"
+path = "src/main.rs"
+
+[dependencies]
+siar-app-core.workspace = true
+siar-runtime.workspace = true
+siar-ui-model.workspace = true
+siar-ui-state.workspace = true
+siar-domain.workspace = true
+siar-power.workspace = true
+siar-backup.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

@@ -724,6 +724,31 @@ export component SettingsPage inherits PageBody {
             }
         }
         Card {
+            heading: "Power and background";
+            VerticalLayout {
+                spacing: Theme.sp-sm;
+                Text {
+                    text: AppState.power-available ? AppState.power-headline : "Power status isn’t available yet.";
+                    color: Theme.text-primary;
+                    font-size: Theme.ty-body-md;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                if AppState.power-available && AppState.power-details != "": Text {
+                    text: AppState.power-details;
+                    color: Theme.text-secondary;
+                    font-size: Theme.ty-body-sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Messages are never delayed to save power. Only large transfers and background sync wait.";
+                    color: Theme.text-secondary;
+                    font-size: Theme.ty-body-sm;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Card {
             heading: "Diagnostics";
             VerticalLayout {
                 spacing: Theme.sp-sm;

@@ -614,3 +614,24 @@ fn arrow_keys_operate_the_theme_selector() {
         ThemeMode::System
     );
 }
+
+#[test]
+fn power_card_projects_headline_and_details_and_hides_when_unknown() {
+    let h = Harness::new(1180, 760);
+    h.flush();
+    assert!(!h.app().get_power_available());
+    h.hub.update(|s| {
+        s.power = Some(siar_ui_slint::PowerStatus {
+            headline: "Saving power".into(),
+            details: vec!["Battery is low".into(), "Large transfers are paused".into()],
+            waiting: 2,
+        });
+    });
+    h.flush();
+    assert!(h.app().get_power_available());
+    assert_eq!(h.app().get_power_headline(), "Saving power");
+    assert_eq!(
+        h.app().get_power_details(),
+        "Battery is low\nLarge transfers are paused"
+    );
+}

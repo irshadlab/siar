@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+siar-power = { path = "../siar-power" }
 serde.workspace = true
 thiserror.workspace = true
 siar-domain = { path = "../siar-domain" }

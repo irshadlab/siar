@@ -507,6 +507,19 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
         .into(),
     );
 
+    match &s.power {
+        Some(p) => {
+            app.set_power_available(true);
+            app.set_power_headline(p.headline.clone().into());
+            app.set_power_details(p.details_text().into());
+        }
+        None => {
+            app.set_power_available(false);
+            app.set_power_headline("".into());
+            app.set_power_details("".into());
+        }
+    }
+
     // ---- one-shot signals ----------------------------------------------------------
     if let Some(n) = s.notice.take() {
         app.set_notice_kind(match n.level {

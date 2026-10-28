@@ -116,7 +116,7 @@ pub fn execute(command: Command) -> Result<()> {
             println!("The contents can only be read with the passphrase.");
         }
         Command::Backup { out } => {
-            let data_dir = crate::bootstrap::data_dir_path()?;
+            let data_dir = siar_app_core::bootstrap::data_dir_path()?;
             if !data_dir.exists() {
                 bail!(
                     "there is no Siar data folder at {} — nothing to back up",
@@ -137,7 +137,7 @@ pub fn execute(command: Command) -> Result<()> {
         Command::Restore { archive, target } => {
             let target = match target {
                 Some(t) => t,
-                None => crate::bootstrap::data_dir_path()?,
+                None => siar_app_core::bootstrap::data_dir_path()?,
             };
             let pass = passphrase(false)?;
             println!("Restoring into {} …", target.display());

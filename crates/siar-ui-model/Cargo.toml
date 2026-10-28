@@ -1,0 +1,15 @@
+[package]
+name = "siar-ui-model"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"
+description = "Renderer-independent UI state (`Slices`) and `StateHub`. Lets the application core run with no GUI toolkit linked — in a daemon, a headless node or a test."
+
+[dependencies]
+siar-domain.workspace = true
+siar-ui-state.workspace = true
+siar-power.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

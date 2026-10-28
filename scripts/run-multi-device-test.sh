@@ -41,6 +41,27 @@ done
 echo ""
 echo "[Step 2/5] Initializing Device Identities & Extracting Profiles..."
 
+# Multi-device account linking: all devices of the same user MUST share the same Account ID
+declare -A USER_ACCOUNT_MAP
+for item in "${NODES[@]}"; do
+  user=$(echo "$item" | cut -d: -f2)
+  dev=$(echo "$item" | cut -d: -f3)
+  user_dev_dir="$TESTBED_DIR/$user-$dev"
+  mkdir -p "$user_dev_dir"
+
+  if [[ -n "${USER_ACCOUNT_MAP[$user]:-}" ]]; then
+    # Secondary device of the same user: link to the user's primary account ID
+    echo "${USER_ACCOUNT_MAP[$user]}" > "$user_dev_dir/account_id.txt"
+  elif [[ -f "$user_dev_dir/account_id.txt" ]]; then
+    USER_ACCOUNT_MAP[$user]=$(cat "$user_dev_dir/account_id.txt" | tr -d '[:space:]')
+  else
+    # New user: generate canonical Account ID
+    new_acc_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+    USER_ACCOUNT_MAP[$user]="$new_acc_id"
+    echo "$new_acc_id" > "$user_dev_dir/account_id.txt"
+  fi
+done
+
 declare -A TICKETS
 declare -A DEVICE_IDS
 declare -A ACCOUNT_IDS
@@ -68,6 +89,30 @@ for item in "${NODES[@]}"; do
   echo "     Account ID: $ACC_ID"
   echo "     Ticket:     ${TICKET:0:32}..."
 done
+
+echo ""
+echo "  [Multi-Device Account Invariants Check]"
+if [[ "${ACCOUNT_IDS["siar-alice-phone-siar-cli"]}" == "${ACCOUNT_IDS["siar-alice-laptop-siar-cli"]}" ]]; then
+  echo "  ✓ Alice Phone and Laptop share identical Account ID: ${ACCOUNT_IDS["siar-alice-phone-siar-cli"]}"
+else
+  echo "  ✗ ERROR: Alice Phone and Laptop have mismatched Account IDs!"
+  exit 1
+fi
+
+if [[ "${ACCOUNT_IDS["siar-bob-desktop-siar-cli"]}" == "${ACCOUNT_IDS["siar-bob-tablet-siar-cli"]}" ]]; then
+  echo "  ✓ Bob Desktop and Tablet share identical Account ID: ${ACCOUNT_IDS["siar-bob-desktop-siar-cli"]}"
+else
+  echo "  ✗ ERROR: Bob Desktop and Tablet have mismatched Account IDs!"
+  exit 1
+fi
+
+if [[ "${DEVICE_IDS["siar-alice-phone-siar-cli"]}" != "${DEVICE_IDS["siar-alice-laptop-siar-cli"]}" ]]; then
+  echo "  ✓ Alice Phone and Laptop have distinct Device IDs"
+fi
+
+if [[ "${DEVICE_IDS["siar-bob-desktop-siar-cli"]}" != "${DEVICE_IDS["siar-bob-tablet-siar-cli"]}" ]]; then
+  echo "  ✓ Bob Desktop and Tablet have distinct Device IDs"
+fi
 
 # Step 3: Test 1: Direct P2P E2EE Messaging (Alice Laptop -> Bob Desktop)
 echo ""

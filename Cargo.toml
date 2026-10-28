@@ -14,6 +14,10 @@ members = [
     "crates/siar-files",
     "crates/siar-dtn-bundle",
     "crates/siar-dtn-bundle-service",
+    "crates/siar-power",
+    "crates/siar-ui-model",
+    "crates/siar-app-core",
+    "crates/siar-runtime",
     "crates/siar-resource-limits",
     "crates/siar-crash-recovery",
     "crates/siar-capability",
@@ -54,6 +58,7 @@ members = [
     "apps/cli",
     "apps/desktop",
     "apps/emergency-node",
+    "apps/daemon",
     "apps/android/rust-jni-glue",
     "apps/android/messaging-jni",
     "workspace-hack",
@@ -84,6 +89,10 @@ siar-file-transfer-service = { path = "crates/siar-file-transfer-service" }
 siar-files = { path = "crates/siar-files" }
 siar-dtn-bundle = { path = "crates/siar-dtn-bundle" }
 siar-dtn-bundle-service = { path = "crates/siar-dtn-bundle-service" }
+siar-power = { path = "crates/siar-power" }
+siar-ui-model = { path = "crates/siar-ui-model" }
+siar-app-core = { path = "crates/siar-app-core" }
+siar-runtime = { path = "crates/siar-runtime" }
 siar-resource-limits = { path = "crates/siar-resource-limits" }
 siar-crash-recovery = { path = "crates/siar-crash-recovery" }
 siar-capability = { path = "crates/siar-capability" }

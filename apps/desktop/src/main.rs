@@ -7,17 +7,7 @@
 //! multi-thread Tokio runtime. The two meet only at `UiHub` (state into
 //! the UI) and one bounded `AppCommand` channel (actions out of it).
 
-mod bootstrap;
 mod cli;
-mod core;
-mod history;
-mod peers;
-mod read_marks;
-mod security_log;
-mod verification;
-
-#[cfg(test)]
-mod e2e_test;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,7 +50,9 @@ fn run_app() -> Result<()> {
     // One copy of the app per data folder. Two would write the same
     // database and key files; a backup also needs the folder quiet. The OS
     // releases the lock if we crash, so it can never get stuck.
-    let data_dir = bootstrap::resolve_data_paths().ok().map(|p| p.data_dir);
+    let data_dir = siar_app_core::bootstrap::resolve_data_paths()
+        .ok()
+        .map(|p| p.data_dir);
     let lock = data_dir.as_deref().map(siar_backup::InstanceLock::acquire);
     let already_running = matches!(lock, Some(Err(siar_backup::LockError::Held)));
     if let Some(Err(siar_backup::LockError::Io(e))) = &lock {
@@ -72,7 +64,7 @@ fn run_app() -> Result<()> {
 
     // Appearance settings are optional: no data dir or a damaged file just
     // means defaults, never a failed start.
-    let settings_path = bootstrap::resolve_data_paths()
+    let settings_path = siar_app_core::bootstrap::resolve_data_paths()
         .ok()
         .map(|p| p.data_dir.join(SETTINGS_FILE));
     let settings = settings_path
@@ -115,7 +107,7 @@ fn run_app() -> Result<()> {
             );
         });
     } else {
-        spawn_core(&runtime, hub, command_rx);
+        spawn_core(&runtime, hub.state(), command_rx);
     }
 
     let result = ui.run().map_err(|e| anyhow!("UI event loop failed: {e}"));
@@ -125,12 +117,12 @@ fn run_app() -> Result<()> {
 
 fn spawn_core(
     runtime: &tokio::runtime::Runtime,
-    hub: siar_ui_slint::UiHub,
+    hub: std::sync::Arc<siar_ui_slint::StateHub>,
     command_rx: mpsc::Receiver<AppCommand>,
 ) {
     runtime.spawn(async move {
-        match bootstrap::bootstrap_messaging().await {
-            Ok(boot) => core::run(boot, hub, command_rx).await,
+        match siar_app_core::bootstrap::bootstrap_messaging().await {
+            Ok(boot) => siar_app_core::core::run(boot, hub, command_rx).await,
             Err(e) => {
                 tracing::error!(error = %format!("{e:#}"), "failed to bootstrap messaging");
                 hub.update(|s| {

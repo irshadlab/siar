@@ -10,27 +10,14 @@ name = "siar-desktop"
 path = "src/main.rs"
 
 [dependencies]
-siar-domain.workspace = true
+siar-app-core.workspace = true
+siar-ui-slint.workspace = true
 siar-ui-state.workspace = true
-siar-crypto.workspace = true
-siar-storage.workspace = true
-siar-transport.workspace = true
 siar-messaging.workspace = true
-siar-protocol.workspace = true
-siar-media-image.workspace = true
+siar-backup.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
-iroh.workspace = true
-rand_core = "0.9"
-base64.workspace = true
-postcard.workspace = true
-directories.workspace = true
-uuid.workspace = true
-siar-ui-slint.workspace = true
-siar-identity-multidevice.workspace = true
-siar-backup.workspace = true
 rpassword.workspace = true
-blake3.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

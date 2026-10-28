@@ -11,6 +11,7 @@ thiserror.workspace = true
 blake3.workspace = true
 postcard = { workspace = true, optional = true }
 siar-domain = { path = "../siar-domain" }
+siar-power = { path = "../siar-power" }
 siar-protocol-ext = { path = "../siar-protocol-ext" }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 

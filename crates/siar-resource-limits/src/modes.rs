@@ -48,6 +48,28 @@ pub struct ModeFlags {
     pub headless_relay: bool,
 }
 
+impl ModeFlags {
+    /// Part 13 → Part 08: derive the mode flags from the canonical power
+    /// picture, so battery policy and resource limits cannot disagree.
+    /// `call_active`/`server_overload` are not power facts and stay `false`.
+    #[must_use]
+    pub fn from_power(
+        state: &siar_power::PowerState,
+        profile: siar_power::PowerPolicyProfile,
+    ) -> Self {
+        use siar_power::PowerPolicyProfile as P;
+        Self {
+            foreground: state.activity.is_foreground(),
+            background: state.activity.is_background(),
+            battery_saver: profile == P::Saver,
+            emergency: profile == P::Emergency,
+            call_active: false,
+            server_overload: false,
+            headless_relay: profile == P::AlwaysOnNode,
+        }
+    }
+}
+
 fn pct(v: u64, p: u64) -> u64 {
     (u128::from(v) * u128::from(p) / 100) as u64
 }
@@ -415,5 +437,23 @@ mod tests {
             b.cpu_permits,
             "restored when flags clear"
         );
+    }
+}
+
+#[cfg(test)]
+mod power_bridge_tests {
+    use super::*;
+    use siar_power::{AppActivityState, PowerPolicyProfile, PowerState};
+
+    #[test]
+    fn saver_profile_sets_battery_saver_and_activity_sets_fg_bg() {
+        let s = PowerState {
+            activity: AppActivityState::BackgroundAllowed,
+            ..Default::default()
+        };
+        let f = ModeFlags::from_power(&s, PowerPolicyProfile::Saver);
+        assert!(f.battery_saver && f.background && !f.foreground && !f.emergency);
+        let f = ModeFlags::from_power(&PowerState::default(), PowerPolicyProfile::AlwaysOnNode);
+        assert!(f.headless_relay && f.foreground);
     }
 }

@@ -1113,9 +1113,9 @@ flowchart TD
 ## License & Dual-Tier Model
 
 SIAR employs a two-tier open-source licensing model:
-- 📜 **Core Libraries (`crates/*`)**: **[MIT](LICENSE-MIT)** OR **[Apache-2.0](LICENSE-APACHE)** (Permissive Open Source).
-- ⚖️ **Standalone Applications & Daemons (`apps/*`)**: **[GNU AGPLv3](LICENSE-AGPLv3)** (Copyleft with Commercial Exemption).
-- 💼 **Commercial Exemption (`SIAR-CEEL-1.0`)**: For proprietary redistribution without AGPLv3 obligations ([`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)).
+- 📜 **Core Headless Libraries (`crates/*`)**: **[MIT](LICENSE-MIT)** OR **[Apache-2.0](LICENSE-APACHE)** (Permissive Open Source — free for proprietary or open-source embedding).
+- ⚖️ **User Interfaces, UI State & Applications (`apps/*` & `crates/siar-ui-*`)**: **[GNU AGPLv3](LICENSE-AGPLv3)** (Copyleft with Commercial Exemption).
+- 💼 **Commercial Exemption (`SIAR-CEEL-1.0`)**: For proprietary redistribution, commercial embedding, or closed-source white-labeling without AGPLv3 obligations ([`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)).
 
 <details>
 <summary><strong>Expand Licensing Structure & Commercial Exemption Details</strong></summary>
@@ -1124,31 +1124,33 @@ SIAR employs a two-tier open-source licensing model:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                            SIAR LICENSING MODEL                             │
 ├──────────────────────────────────────┬──────────────────────────────────────┤
-│    Core Libraries (crates/*)         │    Standalone Apps (apps/*)          │
-│    - siar-crypto / siar-crypto-mls   │    - apps/android (Jetpack Compose)  │
-│    - siar-transport / siar-routing-policy│ - apps/desktop (Slint GUI)        │
-│    - siar-storage / siar-messaging   │    - apps/cli (Terminal Node)        │
-│    - siar-dtn-bundle / siar-protocol │    - apps/emergency-node (Daemon)    │
+│ Core Headless Libraries (crates/*)   │ User Interfaces & Apps (apps/* & UI) │
+│ - siar-crypto / siar-crypto-mls      │ - apps/desktop (Slint 1.16 GUI)      │
+│ - siar-transport / siar-routing-policy│ - apps/android (Jetpack Compose UI)  │
+│ - siar-storage / siar-messaging      │ - crates/siar-ui-state (UI State)    │
+│ - siar-dtn-bundle / siar-protocol    │ - crates/siar-ui-slint (Slint Views) │
+│ - siar-calls / siar-resource-limits  │ - crates/siar-ui-model / app-core    │
+│                                      │ - apps/cli / apps/emergency-node     │
 │                                      │                                      │
-│    📜 MIT License OR Apache-2.0      │    📜 GNU AGPLv3 / Commercial        │
-│    (Permissive Open Source)          │    (Copyleft & Enterprise Exemption) │
+│ 📜 MIT License OR Apache-2.0         │ 📜 GNU AGPLv3 / Commercial           │
+│ (Permissive Open Source)             │ (Copyleft & Enterprise Exemption)    │
 └──────────────────────────────────────┴──────────────────────────────────────┘
 ```
 
 ### 1. Permissive Core Libraries (`crates/*`): MIT OR Apache-2.0
 
-All underlying Rust crates and protocol engines are dual-licensed under **[MIT](LICENSE-MIT)** OR **[Apache-2.0](LICENSE-APACHE)**.
-You may freely embed, link (statically or dynamically), and build proprietary or open-source applications using these crates without any commercial subscription or copyleft obligations.
+All underlying headless Rust crates and protocol engines (excluding UI crates) are dual-licensed under **[MIT](LICENSE-MIT)** OR **[Apache-2.0](LICENSE-APACHE)**.
+You may freely embed, link (statically or dynamically), and build proprietary or open-source applications using these core protocol, transport, routing, storage, and cryptographic crates without any commercial subscription or copyleft obligations.
 
-### 2. Standalone Applications & Daemons (`apps/*`): GNU AGPLv3
+### 2. User Interfaces, Standalone Applications & UI Crates: GNU AGPLv3
 
-All end-user client applications (`apps/android`, `apps/desktop`, `apps/cli`) and headless daemons (`apps/emergency-node`) are licensed under **[GNU AGPLv3](LICENSE-AGPLv3)**.
-- **100% Free for Everyone** — anyone can use, inspect, modify, and self-host.
-- **Copyleft on Modifications** — if you modify and distribute or run these applications over a network, you must release your modifications under AGPLv3.
+All complete end-user client applications (`apps/android`, `apps/desktop`, `apps/cli`), headless daemons (`apps/emergency-node`, `apps/daemon`), and **all UI-related crates (`crates/siar-ui-state`, `crates/siar-ui-slint`, `crates/siar-ui-model`, `crates/siar-app-core`)** are licensed under **[GNU AGPLv3](LICENSE-AGPLv3)**.
+- **100% Free for Everyone** — anyone can inspect, build, modify, and self-host.
+- **Copyleft on Modifications** — if you modify and distribute or run these applications or UI components over a network, you must release your modifications under AGPLv3.
 
 ### 3. Commercial Exemption (`SIAR-CEEL-1.0`)
 
-For commercial enterprises that wish to rebrand, white-label, or host modified closed-source versions without AGPLv3 obligations:
+For commercial enterprises that wish to rebrand, white-label, embed UI components, or host modified closed-source versions without AGPLv3 obligations:
 - Full legal terms and commercial subscription tiers: [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)
 - Contact: `licensing@irshadlab.org` / `licensing@siar.network`
 

@@ -53,7 +53,7 @@
 - [Headless Daemon & Embedded Nodes](#headless-daemon--embedded-nodes)
 - [Protocol Extensions & WASM](#protocol-extensions--wasm)
 - [Anonymity Transport Plane](#anonymity-transport-plane)
-- [Workspace Crate Map (41 Domain Crates)](#workspace-crate-map-41-domain-crates)
+- [Workspace Crate Map (46 Domain Crates & 5 Applications)](#workspace-crate-map-46-domain-crates--5-applications)
 - [Deployment Modes](#deployment-modes)
 - [SIAR vs Traditional Messengers](#siar-vs-traditional-messengers)
 - [Implementation Status & Roadmap](#implementation-status--roadmap)
@@ -180,11 +180,11 @@ In accordance with [`sys-arch/16`](sys-arch/16-daemon-headless-runtime-architect
 ## Architecture: Five Layers
 
 SIAR is structured into five distinct, decoupled architectural layers ensuring complete isolation from raw physical radio drivers up to frontend application shells:
-1. **Layer 5: Applications & UI/UX** (`apps/desktop`, `apps/android`, `apps/emergency-node`, `apps/cli`)
-2. **Layer 4: High-Level Services** (`siar-messaging`, `siar-calls`, `siar-files`, `siar-dtn-bundle-service`)
-3. **Layer 3: Routing, Policy & DTN Engine** (`siar-routing-policy`, `siar-connectivity`, `siar-dtn-bundle`, `siar-emergency`)
-4. **Layer 2: Storage, Crypto & Reliability** (`siar-crypto`, `siar-crypto-mls`, `siar-storage`, `siar-blob-manifest`, `siar-crash-recovery`)
-5. **Layer 1: Transport & Wire Protocols** (`siar-protocol`, `siar-protocol-ext`, `siar-capability`, `siar-transport-*`)
+1. **Layer 5: Applications & UI/UX** (`apps/desktop`, `apps/android`, `apps/daemon`, `apps/emergency-node`, `apps/cli`)
+2. **Layer 4: High-Level Services & Decoupled App Core** (`siar-app-core`, `siar-ui-model`, `siar-ui-state`, `siar-ui-slint`, `siar-messaging`, `siar-calls`, `siar-files`, `siar-dtn-bundle-service`)
+3. **Layer 3: Routing, Policy, Power & DTN Engine** (`siar-routing-policy`, `siar-power`, `siar-connectivity`, `siar-dtn-bundle`, `siar-emergency`, `siar-emergency-service`)
+4. **Layer 2: Storage, Crypto, Runtime & Reliability** (`siar-crypto`, `siar-crypto-mls`, `siar-storage`, `siar-runtime`, `siar-backup`, `siar-blob-manifest`, `siar-resource-limits`, `siar-crash-recovery`, `siar-event-log`)
+5. **Layer 1: Transport & Wire Protocols** (`siar-protocol`, `siar-protocol-ext`, `siar-capability`, `siar-transport`, `siar-transport-*`)
 
 <details>
 <summary><strong>Expand Five Layers Architectural Diagram</strong></summary>
@@ -193,22 +193,27 @@ SIAR is structured into five distinct, decoupled architectural layers ensuring c
 +---------------------------------------------------------------------------------------+
 |                                5. Applications & UI/UX                                |
 |  - apps/android (Jetpack Compose + JNI)   - apps/desktop (Slint 1.16 Native GUI)      |
-|  - apps/emergency-node (Solar Repeater)   - apps/cli (Dev Diagnostics & CLI Node)     |
+|  - apps/daemon (Headless Core Daemon)     - apps/emergency-node (Solar Repeater Node) |
+|  - apps/cli (Dev Diagnostics & CLI Node)                                              |
 +---------------------------------------------------------------------------------------+
-|                                4. High-Level Services                                 |
+|                       4. High-Level Services & Decoupled App Core                     |
+|  - siar-app-core (Decoupled Core Facade)  - siar-ui-model (Renderer-Free StateHub)    |
+|  - siar-ui-state (FSM State Machines)     - siar-ui-slint (Slint 1.16 View Library)   |
 |  - siar-messaging (Message & Group Engine)- siar-calls (Realtime AV1 / Opus Sessions) |
-|  - siar-identity-multidevice (Certs, SAS) - siar-ui-state / siar-ui-slint (UI Views)  |
-|  - siar-files (Blob Transfer Service)     - siar-dtn-bundle-service (DTN Sync)        |
+|  - siar-identity-multidevice (Certs, SAS) - siar-files (Blob Transfer Service)        |
+|  - siar-dtn-bundle-service (DTN Sync)     - siar-file-transfer-service (Swarm Blobs)  |
 +---------------------------------------------------------------------------------------+
-|                            3. Routing, Policy & DTN Engine                            |
-|  - siar-routing-policy (Multi-Metric)     - siar-dtn-bundle (Spray-and-Wait Forward)  |
-|  - siar-connectivity (Link State Probes)  - siar-emergency (Priority Classes P0–P3)   |
+|                       3. Routing, Policy, Power & DTN Engine                          |
+|  - siar-routing-policy (Multi-Metric)     - siar-power (Battery & Thermal Throttle)   |
+|  - siar-connectivity (Link State Probes)  - siar-dtn-bundle (Spray-and-Wait Forward)  |
+|  - siar-emergency (Priority Classes P0–P4)- siar-emergency-service (SOS Beacons)      |
 +---------------------------------------------------------------------------------------+
-|                             2. Storage, Crypto & Reliability                          |
+|                      2. Storage, Crypto, Runtime & Reliability                        |
 |  - siar-crypto (Ed25519/X25519 AEAD)      - siar-crypto-mls (RFC 9420 MLS E2EE)       |
-|  - siar-storage (Stoolap Embedded SQL)    - siar-blob-manifest (BLAKE3 Merkle DAG)    |
+|  - siar-storage (Stoolap Relational SQL)  - siar-runtime (Supervisor & Unix IPC)      |
+|  - siar-backup (Argon2id Encrypted Backup)- siar-blob-manifest (BLAKE3 Merkle DAG)    |
 |  - siar-resource-limits (Backpressure)    - siar-crash-recovery (WAL & Checkpoints)   |
-|  - siar-event-log (Monotonic Sequence Log)                                            |
+|  - siar-event-log (Monotonic Sequence Log)- siar-startup-recovery (Consistency Fix)   |
 +---------------------------------------------------------------------------------------+
 |                              1. Transport & Wire Protocols                            |
 |  - siar-protocol (Postcard Wire Codec)    - siar-protocol-ext (CapNeg & Scheduler)    |
@@ -478,9 +483,9 @@ The anonymity plane is an additive routing class integrated with SIAR's existing
 
 ---
 
-## Workspace Crate Map (41 Domain Crates)
+## Workspace Crate Map (46 Domain Crates & 5 Applications)
 
-SIAR is structured as a modular Rust cargo workspace comprising **41 domain crates**, **4 application environments**, 2 Android JNI runtime bridges, and fuzz testing harnesses.
+SIAR is structured as a modular Rust cargo workspace comprising **46 domain/infrastructure crates**, **5 standalone application targets**, 2 Android JNI runtime bridges, and fuzz testing harnesses:
 
 <details>
 <summary><strong>Expand Complete Workspace Crate Tree & Domain Directory Map</strong></summary>
@@ -494,6 +499,7 @@ siar/
 │   │   ├── rust-jni-glue/                # Shared JNI glue, memory safety, and JVM callbacks
 │   │   └── build-native.sh               # Multi-ABI cargo-ndk build automation script
 │   ├── cli/                              # Interactive Terminal Messenger & Diagnostics Node
+│   ├── daemon/                           # Headless Core Daemon & Unix Socket IPC Service (`siar-daemon`)
 │   ├── desktop/                          # Native Desktop GUI (Slint 1.16 Shell & Core Wiring)
 │   └── emergency-node/                   # Headless Emergency DTN Relay & Booster Daemon
 ├── crates/
@@ -507,8 +513,9 @@ siar/
 │   │   ├── siar-protocol/                # Wire envelopes, Postcard binary codec, frame types
 │   │   ├── siar-protocol-ext/            # Extensible protocol engine: FairScheduler, BoundedQueue, health
 │   │   └── siar-capability/              # Two-phase capability negotiation & codec matrices
-│   ├── [Mesh Routing, Policy & Dynamic Connectivity]
+│   ├── [Mesh Routing, Policy, Power & Dynamic Connectivity]
 │   │   ├── siar-routing-policy/          # Multi-metric candidate scoring, hysteresis, decide_route
+│   │   ├── siar-power/                   # Part 13: Battery-aware scheduling, sysfs tracker & thermal policy
 │   │   └── siar-connectivity/            # Cross-transport state engine, connection pooling & link probes
 │   ├── [Multi-Transport Physical Sockets]
 │   │   ├── siar-transport/               # Transport manager, pooled socket multiplexer & lifecycle
@@ -524,6 +531,8 @@ siar/
 │   │   └── siar-emergency-service/       # Autonomous SOS beacon broadcaster & triage packet engine
 │   ├── [Storage, Blobs, Event Logging & Reliability]
 │   │   ├── siar-storage/                 # Pure-Rust Stoolap embedded relational SQL (Messages, Outbox)
+│   │   ├── siar-runtime/                 # Part 16: Daemon headless runtime, supervisor, Unix socket IPC
+│   │   ├── siar-backup/                  # Part 33: Argon2id + XChaCha20-Poly1305 backup & InstanceLock
 │   │   ├── siar-event-log/               # Monotonic append-only event log & causal gap detection
 │   │   ├── siar-event-notify/            # Internal reactive pub-sub event notification dispatcher
 │   │   ├── siar-event-registry/          # Global schema registry of system events and audit subscribers
@@ -534,8 +543,10 @@ siar/
 │   │   ├── siar-crash-recovery/          # WAL recovery, transactional checkpoints & corrupt state isolation
 │   │   ├── siar-startup-recovery/        # Cold-boot consistency verification & orphaned ticket repair
 │   │   └── siar-remote-ingestion/        # Ingestion gateway for external telemetry and bridge adapters
-│   ├── [Messaging Orchestration & UI State Machines]
+│   ├── [Messaging Orchestration, App Core & UI State Machines]
 │   │   ├── siar-messaging/               # MessageService, GroupService, Ticket manager, multi-node tests
+│   │   ├── siar-app-core/                # Headless application core: drains AppCommands, owns services (0 GUI)
+│   │   ├── siar-ui-model/                # Renderer-independent UI state slices (`Slices`) and StateHub
 │   │   ├── siar-ui-state/                # Framework-agnostic UI state machines & Security Center
 │   │   └── siar-ui-slint/                # Slint 1.16 UI component library, semantic Theme tokens & shell
 │   ├── [Realtime Media, Voice/Video & Hardware Codecs]
@@ -558,9 +569,10 @@ siar/
 
 ## Deployment Modes
 
-SIAR deploys across three primary operational topologies:
+SIAR deploys across four primary operational topologies:
 
 - 📱 **Standalone User Applications**: Desktop (`apps/desktop` Slint 1.16), Android (`apps/android` Jetpack Compose), and CLI (`apps/cli`).
+- ⚙️ **Headless Core Daemon**: Background service daemon (`apps/daemon` `siar-daemon run|ctl|unit`) running the decoupled core under `siar-runtime` via Unix domain socket IPC with 55.4% reduced memory footprint.
 - 📡 **Headless Off-Grid Repeater**: Solar-powered Linux/OpenWrt store-carry-forward DTN nodes (`apps/emergency-node`).
 - 🏢 **Embedded Relay Infrastructure**: Self-hosted private organization clusters and Internet-to-mesh gateway bridges.
 
@@ -575,19 +587,28 @@ SIAR deploys across three primary operational topologies:
 | `apps/desktop` | Linux, Windows | Slint 1.16 Native Desktop GUI (`crates/siar-ui-slint`) |
 | `apps/cli` | Any POSIX | Interactive terminal — identity, tickets, DTN |
 
-### 2. Headless Off-Grid Repeater Daemon
+### 2. Headless Core Daemon (`siar-daemon`)
 
-`apps/emergency-node` runs headless on any Linux device:
-- Raspberry Pi, OpenWrt routers, solar-powered field nodes
-- Autonomous store-carry-forward DTN mesh repeater
-- No GUI required; daemon owns all networking and storage state
+`apps/daemon` hosts the application core (`crates/siar-app-core`) under `siar-runtime` with zero GUI toolkit dependencies:
+- Supervision, crash recovery, and health state reporting.
+- Unix domain socket IPC for local control and diagnostics (`siar-daemon ctl`).
+- Persistent background messaging, outbox retries, and network connectivity while windows are closed.
+- Hardened `systemd --user` unit generator (`siar-daemon unit`).
 
-### 3. Embedded / Self-Hosted Relay Infrastructure
+### 3. Headless Off-Grid Repeater Daemon (`siar-emergency-node`)
+
+`apps/emergency-node` runs headless on any field Linux hardware:
+- Raspberry Pi, OpenWrt routers, solar-powered field nodes.
+- Autonomous store-carry-forward DTN mesh repeater.
+- Battery and thermal throttling awareness via `siar-power`.
+- Configurable DTN cache storage quota and seen-ticket capacities.
+
+### 4. Embedded / Self-Hosted Relay Infrastructure
 
 The headless runtime (`sys-arch/16`) and relay architecture (`sys-arch/11`) support:
-- Organization-private relay fleets and regional clusters
-- DTN gateway bridges between Internet and off-grid mesh segments
-- Multi-cloud / bare-metal deployment with no product-level relay lock-in
+- Organization-private relay fleets and regional clusters.
+- DTN gateway bridges between Internet and off-grid mesh segments.
+- Multi-cloud / bare-metal deployment with no product-level relay lock-in.
 
 </details>
 
@@ -619,7 +640,7 @@ Unlike traditional centralized messengers that require active server infrastruct
 ## Implementation Status & Roadmap
 
 SIAR maintains an honest, compile-and-test-verified tracking matrix per [`ROADMAP.md`](ROADMAP.md).
-**Current Status**: **6 of 9 Tier-0 foundational core specs are spec-complete or substantially complete** (01, 02, 03, 04, 08, 09) with 1,700+ passing tests and zero warnings (`rustc 1.91`).
+**Current Status**: **6 of 9 Tier-0 foundational core specs are spec-complete or substantially complete** (01, 02, 03, 04, 08, 09), with Phase 1 landed for **Part 13 (Battery/Thermal Policy)** and **Part 16 (Daemon Runtime & IPC)**, full encrypted backup verification (**Part 33**), and decoupled application core (`siar-app-core`) running with over **1,900+ passing tests and zero warnings** (`rustc 1.91`).
 
 <details>
 <summary><strong>Expand Specification Maturity Matrix & Verification Notes</strong></summary>
@@ -627,7 +648,7 @@ SIAR maintains an honest, compile-and-test-verified tracking matrix per [`ROADMA
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                              SIAR IMPLEMENTATION MATURITY OVERVIEW                               │
-│                              (as of 2026-10-24 · rustc 1.91 verified)                           │
+│                              (as of 2026-10-29 · rustc 1.91 verified)                           │
 ├───────────────────────────────┬──────────────────────────────┬──────────────────────────────────┤
 │ Architectural Layer           │ Spec Coverage                │ Verified State                   │
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
@@ -655,16 +676,23 @@ SIAR maintains an honest, compile-and-test-verified tracking matrix per [`ROADMA
 │  09 · siar-crash-recovery     │ ✅ 186/186 — SPEC COMPLETE   │ WAL recovery, isolation, DoD     │
 │                               │   498 tests, 0 warnings      │ passed, executable audit clean   │
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
-│ Tier 1 — Security Backbone    │                              │                                  │
-│  28 · siar-crypto / mls       │ 🟡 ~46/127 (~36%)            │ Ed25519/X25519, MLS E2EE,        │
-│                               │                              │ replay protection, revocation    │
+│ Tier 1 — Systems, Policy & Sec│                              │                                  │
+│  13 · siar-power              │ ✅ Phase 1 Landed            │ Battery & thermal policy engine, │
+│                               │   101 tests, 0 warnings      │ sysfs reader, power gates        │
+│  16 · siar-runtime            │ ✅ Phase 1 Landed            │ Headless runtime, supervisor,    │
+│       & apps/daemon           │   54 tests, 0 warnings       │ Unix IPC, command ledger dedup   │
+│  28 · siar-crypto / mls       │ 🟡 ~46/127 (~36%)            │ Ed25519/X25519, MLS E2EE SQLite, │
+│                               │   WelcomeBundle v2, KDF keys │ replay protection, roster sync   │
+│  33 · siar-backup             │ ✅ Verified Complete         │ Argon2id + XChaCha20 backup/rest │
+│                               │   18 tests, 0 warnings       │ AAD header check, InstanceLock   │
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
-│ Tier 2 — UI/UX (27 specs)     │                              │                                  │
+│ Tier 2 — UI/UX & App Core     │                              │                                  │
+│  App Core Decoupling          │ ✅ Complete (0 GUI toolkit)  │ siar-app-core + siar-ui-model    │
+│                               │   15 tests, 0 warnings       │ Slices, StateHub, headless daemon│
 │  ui-ux-15 · Security Center   │ 🟡 ~183/221 (~83%)           │ RecoveryScope, RevocationCaps,   │
-│                               │                              │ CompromiseResponse, contact SAS  │
-│  ui-ux-01..14, 16..27         │ 🟡 Slint Desktop Transition  │ Desktop migrated Dioxus → Slint  │
-│                               │   (2026-10-22)               │ (crates/siar-ui-slint): Theme    │
-│                               │                              │ tokens, persistent history & MLS │
+│                               │   129 tests, 0 warnings      │ CompromiseResponse, contact SAS  │
+│  ui-ux-01..14, 16..27         │ 🟡 Slint Desktop Shell       │ Native Slint 1.16, Theme tokens, │
+│                               │   (crates/siar-ui-slint)     │ persistent history & read marks  │
 ├───────────────────────────────┼──────────────────────────────┼──────────────────────────────────┤
 │ Multi-Transport Layer         │ ✅ Production Hardened        │ Pooled stream multiplexer,       │
 │                               │                              │ files/1 over QUIC, multi-node e2e│
@@ -677,14 +705,17 @@ SIAR maintains an honest, compile-and-test-verified tracking matrix per [`ROADMA
 
 **Quality discipline applied to every spec round:**
 - Compile + test + `cargo clippy -D warnings` + `cargo fmt` + doc-warning-free — verified clean before a round is marked done
-- Over 1,700+ passing tests across workspace crates
+- Over 1,900+ passing tests across workspace crates
 - Zero regressions in any dependent crate at any point across all rounds of spec work
 - Real bugs caught by tests (not review): pooled-connection reuse silently dropping messages after the first; expired operation never enforced at routing-decision level; DTN `file_chunk()` constructor contradicting its own spec example; stickiness test using a stale pre-mutation health snapshot; Stoolap top-N memory overflow in GC paging; self-deadlock on transfer cancellation
 
-**Resolved reconciliation questions** (see [`MIGRATION.md`](MIGRATION.md) for full disposition):
-- **Device certificate reconciliation**: Retired plan.md-era `siar_crypto::device_cert` and `siar_domain::device::{DeviceRegistry, DeviceEvent}` in favor of root-key-signed `siar-identity-multidevice` with additive `TransportKeyBinding`.
-- **Routing reconciliation**: Retired `siar-routing` into `siar-routing-policy` (link health, relay composition, congestion tracker) and `siar-connectivity` (`CandidateTable`, `DeviceRoutes`).
-- **DTN reconciliation**: Retired `siar-dtn` into `siar-dtn-bundle` (seen-bundle dedup, async `BundleStore`, opaque `RouteToken`) and local quota-bounded storage in `apps/emergency-node`.
+**Resolved reconciliation questions & architecture milestones** (see [`MIGRATION.md`](MIGRATION.md) and [`ROADMAP.md`](ROADMAP.md)):
+- **App Core Decoupling**: Extracted all non-UI logic from `apps/desktop` into `crates/siar-app-core` (pure library with zero GUI dependencies), allowing the exact same engine to run in a GUI window or headless background daemon (`apps/daemon`).
+- **Battery-Aware Scheduling (Part 13)**: Landed `crates/siar-power` providing a canonical power and thermal model with sysfs push updates, discovery duty cycling, and thermal throttling gates.
+- **Headless Runtime & IPC (Part 16)**: Landed `crates/siar-runtime` providing supervisor restart policies, circuit breakers, Unix domain socket IPC, and command deduplication via `CommandLedger`.
+- **Encrypted Account Backup (Part 33)**: Landed `crates/siar-backup` with Argon2id + XChaCha20-Poly1305 encryption, AAD header authentication, single-instance database protection (`InstanceLock`), and zero-leakage inspection.
+- **Transport Identity Permanence**: Derived Iroh QUIC secret keys deterministically from persistent device identity via domain-separated KDF (`DeviceIdentity::derive_secret`), ensuring connection tickets survive device restarts.
+- **MLS Group Discovery & Roster Sync**: Upgraded `WelcomeBundle` to v2 carrying member directory addresses, added `CommitBundle` for atomic member roster synchronization, and added local SQLite group session persistence.
 
 </details>
 
@@ -785,6 +816,7 @@ cargo build --workspace --release
 Compiled binaries land in `target/release/`:
 - `target/release/siar-cli`
 - `target/release/siar-desktop`
+- `target/release/siar-daemon`
 - `target/release/siar-emergency-node`
 
 ### 2. Cross-Compiling Android Native (.so) Libraries
@@ -811,10 +843,11 @@ cd apps/android
 
 ## Node Configuration & User Guide
 
-SIAR provides four operational nodes tailored for interactive terminals, desktop environments, headless field relays, and mobile devices:
+SIAR provides five operational nodes tailored for interactive terminals, desktop environments, background daemons, field relays, and mobile devices:
 - **`siar-cli`**: Terminal messenger, PeerTicket sharing, and diagnostics.
-- **`siar-desktop`**: Slint 1.16 native GUI with dark/light themes, persistent message history, and SAS verification.
-- **`siar-emergency-node`**: Headless DTN store-carry-forward repeater.
+- **`siar-desktop`**: Slint 1.16 native GUI with dark/light themes, persistent message history, SAS verification, and encrypted backups.
+- **`siar-daemon`**: Headless core service daemon controllable via Unix domain socket IPC (`ctl`).
+- **`siar-emergency-node`**: Headless DTN store-carry-forward repeater with thermal/power monitoring.
 - **`apps/android`**: Android messenger with Jetpack Compose.
 
 <details>
@@ -847,31 +880,73 @@ SIAR Interactive Messenger
 ### 2. Desktop Application (`siar-desktop`)
 
 ```bash
+# Launch GUI application
 cargo run --bin siar-desktop
+
+# Create an encrypted backup of your account, keys, and database
+cargo run --bin siar-desktop -- backup ~/siar-backup.bin
+
+# Inspect backup metadata without entering a passphrase
+cargo run --bin siar-desktop -- backup-info ~/siar-backup.bin
+
+# Restore from encrypted backup into an empty folder
+cargo run --bin siar-desktop -- restore ~/siar-backup.bin
 ```
 
 > 🖼️ **Visual Design Reference**: See [`docs/screenshots/README.md`](docs/screenshots/README.md) for full UI references across dark/light themes, contact verification, groups, and settings.
 
 Features (Migrated to native Slint 1.16 in [`crates/siar-ui-slint`](crates/siar-ui-slint)):
 - **Adaptive 3-Pane Shell** (`ui-ux-02`, `ui-ux-22`) — Navigation rail (64px), conversation list (320px), responsive message timeline with light/dark/high-contrast theme tokens.
+- **Encrypted Account Backups** (`crates/siar-backup`) — Argon2id + XChaCha20-Poly1305 with AAD header validation and single-instance lock protection (`siar.lock`).
 - **Persistent Conversation History** — 1:1 encrypted messages survive app restarts with smooth scroll-anchored pagination ("Load earlier messages").
 - **Unread Tracking & Read Marks** — Per-chat highest incoming sequence persisted to disk (`read-marks.txt`); zero phantom badge drift.
 - **Contact Security & SAS Verification** (`ui-ux-08`, `ui-ux-15`) — 60-digit Short Authentication String numeric safety numbers computed from `siar-identity-multidevice`; persistent `device=<key>` pinning; global warning banner with "Review" / "Dismiss" actions when keys change.
-- **MLS Group Chat & Seamless Invites** (`ui-ux-09`) — Multi-member MLS (RFC 9420) group states persist locally in SQLite; one-step invites via `WelcomeBundle` and one-tap join.
+- **MLS Group Chat, Roster Sync & Seamless Invites** (`ui-ux-09`) — Multi-member MLS (RFC 9420) group states persist locally in SQLite; one-step invites via `WelcomeBundle` v2 (including peer directory address distribution) and atomic `CommitBundle` roster synchronization.
 - **Own Identity & Hardware Diagnostics** (`ui-ux-18`) — Short/full fingerprint disclosure on demand, device public identifiers, and transport link status summary.
 
-### 3. Headless Emergency Relay Node (`siar-emergency-node`)
+### 3. Headless Core Daemon (`siar-daemon`)
+
+`siar-daemon` hosts the application core (`crates/siar-app-core`) under `siar-runtime` without launching a window:
 
 ```bash
+# Start background daemon listening on Unix domain socket
+cargo run --bin siar-daemon -- run
+
+# Query daemon status, health, and power metrics over IPC
+cargo run --bin siar-daemon -- ctl status
+cargo run --bin siar-daemon -- ctl health
+cargo run --bin siar-daemon -- ctl power
+
+# Display this daemon's connection Peer Ticket
+cargo run --bin siar-daemon -- ctl ticket
+
+# Pair with a peer node
+cargo run --bin siar-daemon -- ctl pair <base64-ticket>
+
+# Send an encrypted message to an active conversation
+cargo run --bin siar-daemon -- ctl send <conversation-id> "Hello from headless daemon!"
+
+# Print hardened systemd --user service unit
+cargo run --bin siar-daemon -- unit
+```
+
+### 4. Headless Emergency Relay Node (`siar-emergency-node`)
+
+```bash
+# Run relay node with default 1 GiB DTN cache
 cargo run --bin siar-emergency-node
+
+# Run with custom admin socket and storage quota
+cargo run --bin siar-emergency-node -- --quota-bytes 5368709120 --admin-socket /tmp/siar-emergency.sock
 ```
 
 Behavior:
-- Listens on all local network interfaces and available Bluetooth/BLE adapters
-- Maintains in-memory & on-disk DTN store-carry-forward queue for offline messages
-- Periodically probes nearby nodes, updates link quality metrics (`rtt_millis`, `reliability`), and flushes pending queues when a route becomes available
+- Listens on all local network interfaces and available Bluetooth/BLE adapters.
+- Maintains in-memory & on-disk DTN store-carry-forward queue for offline messages.
+- Monitored by `siar-power`: automatically throttles DTN forwarding under thermal stress or critical battery while keeping storage active.
+- Periodically probes nearby nodes and flushes pending queues when connectivity appears.
 
-### 4. Android Messenger App (`apps/android`)
+### 5. Android Messenger App (`apps/android`)
 
 Grant permissions on launch:
 - **Bluetooth & Nearby Devices** — `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, `NEARBY_WIFI_DEVICES`

@@ -17,6 +17,7 @@ siar-identity-multidevice = { path = "../siar-identity-multidevice" }
 # already-built FairScheduler/BoundedQueue — see that module's own
 # doc comment.
 siar-protocol-ext = { path = "../siar-protocol-ext" }
+siar-power = { path = "../siar-power" }
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

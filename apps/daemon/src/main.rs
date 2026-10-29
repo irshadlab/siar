@@ -23,20 +23,31 @@ use siar_runtime::{CommandId, RestartPolicy, Runtime};
 
 const USAGE: &str = "\
 usage:
-  siar-daemon run [--socket PATH] [--no-socket]
+  siar-daemon run [--socket PATH] [--no-socket] [--config PATH] [--replace]
   siar-daemon ctl [--socket PATH] <command>
-      status | health | power | summary | ticket | conversations
+      status | health | power | metrics | summary | ticket | conversations
+      audit                   recent admin actions (kinds only), Admin
       messages <conversation-id>
       pair <ticket>
       send <conversation-id> <text...>
       shutdown
   siar-daemon unit            print a systemd --user unit
+
+--replace asks a running daemon to stop gracefully first (upgrade handoff).
+SIGHUP re-reads the config file; changes that need a restart are reported.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Cli {
-    Run { socket: Option<PathBuf> },
-    Ctl { socket: PathBuf, args: Vec<String> },
+    Run {
+        socket: Option<PathBuf>,
+        config: Option<PathBuf>,
+        replace: bool,
+    },
+    Ctl {
+        socket: PathBuf,
+        args: Vec<String>,
+    },
     Unit,
 }
 
@@ -44,16 +55,24 @@ fn parse(args: &[String]) -> Result<Cli, String> {
     let mut it = args.iter().cloned();
     let sub = it.next().ok_or("missing subcommand")?;
     let mut socket = Some(default_socket_path("daemon"));
+    let mut config = None;
+    let mut replace = false;
     let mut rest = Vec::new();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--socket" => socket = Some(PathBuf::from(it.next().ok_or("--socket needs a path")?)),
             "--no-socket" => socket = None,
+            "--config" => config = Some(PathBuf::from(it.next().ok_or("--config needs a path")?)),
+            "--replace" => replace = true,
             _ => rest.push(a),
         }
     }
     match sub.as_str() {
-        "run" => Ok(Cli::Run { socket }),
+        "run" => Ok(Cli::Run {
+            socket,
+            config,
+            replace,
+        }),
         "ctl" => {
             if rest.is_empty() {
                 return Err("ctl needs a command".into());
@@ -87,25 +106,63 @@ fn main() -> Result<()> {
             .enable_all()
             .build()?
             .block_on(ctl(&socket, &args)),
-        Cli::Run { socket } => {
+        Cli::Run {
+            socket,
+            config,
+            replace,
+        } => {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .thread_name("siar-daemon")
                 .build()?;
-            rt.block_on(run(socket))
+            rt.block_on(run(socket, config, replace))
         }
     }
 }
 
-async fn run(socket: Option<PathBuf>) -> Result<()> {
+async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: bool) -> Result<()> {
+    // §85-§88: config first — a bad file stops us before anything is touched,
+    // and says everything that is wrong at once.
+    let config_path = config_path.or_else(default_config_path);
+    let config = load_config(config_path.as_deref())?;
+
+    // §100-§101, §107: take over from a running daemon gracefully. The upgrade
+    // lock stops two upgraders deciding to replace the same daemon at once.
+    let socket_dir = socket
+        .as_deref()
+        .and_then(|p| p.parent())
+        .map(PathBuf::from);
+    let _upgrade = if replace {
+        let (Some(sock), Some(dir)) = (socket.as_deref(), socket_dir.as_deref()) else {
+            bail!("--replace needs a control socket (don’t combine it with --no-socket)");
+        };
+        let lock = siar_runtime::instance::UpgradeLock::acquire(dir)
+            .map_err(|e| anyhow!("another upgrade is in progress ({e:?})"))?;
+        match siar_runtime::instance::request_handoff(sock, Duration::from_secs(30)).await {
+            Ok(old) => {
+                tracing::info!(old_build = %old.old_build, "previous daemon stopped; taking over")
+            }
+            Err(siar_runtime::instance::HandoffError::NoDaemon) => {
+                tracing::info!("no daemon running; starting fresh")
+            }
+            Err(e) => bail!("couldn’t take over from the running daemon: {e}"),
+        }
+        Some(lock)
+    } else {
+        None
+    };
+
     // One process per data folder (shared with the desktop app).
     let data_dir = siar_app_core::bootstrap::resolve_data_paths()
         .context("resolving the data folder")?
         .data_dir;
-    let _lock = match siar_backup::InstanceLock::acquire(&data_dir) {
+    // After a handoff, give the old process a moment to release the lock
+    // (it has already stopped serving; this covers platforms where we can't
+    // check its pid).
+    let _lock = match acquire_lock(&data_dir, replace).await {
         Ok(l) => Some(l),
         Err(siar_backup::LockError::Held) => {
-            bail!("Siar is already running with this data folder (the window or another daemon).")
+            bail!("Siar is already running with this data folder (the window or another daemon). Use --replace to take over from a daemon.")
         }
         Err(e) => {
             tracing::warn!(error = %e, "couldn’t take the data folder lock; continuing");
@@ -116,6 +173,8 @@ async fn run(socket: Option<PathBuf>) -> Result<()> {
     let app = app::DaemonApp::default();
     let runtime = Runtime::builder()
         .app(app.clone())
+        .build_id(concat!("siar-daemon ", env!("CARGO_PKG_VERSION")))
+        .config(config.clone())
         .power_policy(siar_power::PowerPolicyConfig {
             deployment: siar_power::Deployment::AlwaysOn,
             ..Default::default()
@@ -154,16 +213,17 @@ async fn run(socket: Option<PathBuf>) -> Result<()> {
         .await
         .map_err(|e| anyhow!("daemon failed to start: {e}"))?;
 
-    if let Some(path) = socket {
+    let server_cfg = config.server_config();
+    if let Some(path) = socket.clone() {
         let rt2 = runtime.clone();
         runtime.supervisor.spawn(
             "control-socket",
             false,
             RestartPolicy::default(),
             move || {
-                let (rt2, path) = (rt2.clone(), path.clone());
+                let (rt2, path, cfg) = (rt2.clone(), path.clone(), server_cfg.clone());
                 async move {
-                    siar_runtime::ipc::serve_unix(rt2, &path, Default::default())
+                    siar_runtime::ipc::serve_unix(rt2, &path, cfg)
                         .await
                         .map_err(|e| e.to_string())
                 }
@@ -178,17 +238,103 @@ async fn run(socket: Option<PathBuf>) -> Result<()> {
             lc.begin_shutdown();
         });
     }
+    // §167-§168: tell upgraders and `ctl` who we are.
+    if let Some(dir) = socket_dir.as_deref() {
+        let meta = siar_runtime::instance::InstanceMeta::current(
+            runtime.bus.instance_id(),
+            concat!("siar-daemon ", env!("CARGO_PKG_VERSION")),
+        );
+        if let Err(e) = siar_runtime::instance::write_meta(dir, &meta) {
+            tracing::warn!(error = %e, "couldn’t write the instance file");
+        }
+    }
+    // §97: only pings while genuinely healthy (no-op when no watchdog is configured).
+    tokio::spawn(siar_runtime::service::watchdog_loop(
+        runtime.lifecycle.clone(),
+        runtime.health.clone(),
+    ));
+    // §87: SIGHUP re-reads the config; cold changes are reported, not faked.
+    {
+        let (rt, path) = (runtime.clone(), config_path.clone());
+        tokio::spawn(siar_runtime::service::on_hangup(
+            runtime.lifecycle.clone(),
+            move || match load_config(path.as_deref())
+                .and_then(|c| rt.reload(c).map_err(Into::into))
+            {
+                Ok(plan) => {
+                    tracing::info!(applied = ?plan.applied, restart_required = ?plan.restart_required, "configuration reloaded")
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "configuration reload rejected; keeping the current one")
+                }
+            },
+        ));
+    }
     siar_runtime::service::sd_notify("READY=1");
     tracing::info!("siar-daemon ready");
 
     runtime.lifecycle.shutdown_requested().await;
     siar_runtime::service::sd_notify("STOPPING=1");
     drop(cmd_tx); // lets the core's command loop finish
-    let aborted = runtime.shutdown(Duration::from_secs(10)).await;
+    let aborted = runtime.shutdown(runtime.shutdown_grace()).await;
+    if let Some(dir) = socket_dir.as_deref() {
+        siar_runtime::instance::remove_meta(dir);
+    }
     if aborted > 0 {
         tracing::warn!(aborted, "forced shutdown aborted stragglers");
     }
     Ok(())
+}
+
+async fn acquire_lock(
+    dir: &std::path::Path,
+    patient: bool,
+) -> Result<siar_backup::InstanceLock, siar_backup::LockError> {
+    let deadline = std::time::Instant::now()
+        + if patient {
+            Duration::from_secs(10)
+        } else {
+            Duration::ZERO
+        };
+    loop {
+        match siar_backup::InstanceLock::acquire(dir) {
+            Err(siar_backup::LockError::Held) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// `$XDG_CONFIG_HOME/siar/daemon.toml`, else `~/.config/siar/daemon.toml`.
+fn default_config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("siar").join("daemon.toml"))
+}
+
+/// A missing file is fine (defaults); an unreadable or invalid one is not.
+fn load_config(path: Option<&std::path::Path>) -> Result<siar_runtime::config::RuntimeConfig> {
+    let Some(path) = path else {
+        return Ok(Default::default());
+    };
+    match std::fs::read_to_string(path) {
+        Ok(text) => siar_runtime::config::RuntimeConfig::parse(&text)
+            .with_context(|| format!("in {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+/// `println!` panics on a closed pipe (`siar-daemon ctl … | head`); a CLI
+/// should just stop quietly.
+macro_rules! outln {
+    ($($a:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($a)*);
+    }};
 }
 
 async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
@@ -211,6 +357,8 @@ async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
         "status" => Request::Query(Query::Status),
         "health" => Request::Query(Query::Health),
         "power" => Request::Query(Query::Power),
+        "metrics" => Request::Query(Query::Metrics),
+        "audit" => Request::Query(Query::Audit),
         "summary" | "ticket" | "conversations" => app_query(&args[0], ""),
         "messages" => app_query("messages", &rest),
         "pair" => Request::Command {
@@ -234,21 +382,21 @@ async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
         other => bail!("unknown command {other:?}\n\n{USAGE}"),
     };
     match c.request(req).await? {
-        Reply::Ok => println!("ok"),
-        Reply::Bytes(b) => println!("{}", String::from_utf8_lossy(&b)),
-        Reply::Status(s) => println!(
+        Reply::Ok => outln!("ok"),
+        Reply::Bytes(b) => outln!("{}", String::from_utf8_lossy(&b)),
+        Reply::Status(s) => outln!(
             "state: {:?}\nuptime: {} s\nsubscribers: {}",
             s.state,
             s.uptime_ms / 1000,
             s.subscribers
         ),
         Reply::Health(h) => {
-            println!("overall: {:?}", h.overall);
+            outln!("overall: {:?}", h.overall);
             for s in h.subsystems {
-                println!("  {}: {:?} {}", s.name, s.state, s.detail);
+                outln!("  {}: {:?} {}", s.name, s.state, s.detail);
             }
         }
-        Reply::Power(p) => println!("profile: {:?}\nwaiting: {}", p.profile, p.deferred.total()),
+        Reply::Power(p) => outln!("profile: {:?}\nwaiting: {}", p.profile, p.deferred.total()),
         Reply::Subscribed { .. } => {}
     }
     Ok(())
@@ -266,11 +414,19 @@ mod tests {
     fn parses_subcommands_and_socket_flags() {
         assert!(matches!(
             parse(&v(&["run"])),
-            Ok(Cli::Run { socket: Some(_) })
+            Ok(Cli::Run {
+                socket: Some(_),
+                config: None,
+                replace: false
+            })
         ));
         assert_eq!(
             parse(&v(&["run", "--no-socket"])),
-            Ok(Cli::Run { socket: None })
+            Ok(Cli::Run {
+                socket: None,
+                config: None,
+                replace: false
+            })
         );
         match parse(&v(&[
             "ctl", "--socket", "/x/s", "send", "abc", "hi", "there",

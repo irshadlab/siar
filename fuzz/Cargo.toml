@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 siar-protocol = { path = "../crates/siar-protocol" }
+siar-runtime = { path = "../crates/siar-runtime" }
 
 [[bin]]
 name = "decode_frame"
@@ -21,6 +22,13 @@ bench = false
 [[bin]]
 name = "decode_blob_frame"
 path = "fuzz_targets/decode_blob_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_frame"
+path = "fuzz_targets/ipc_frame.rs"
 test = false
 doc = false
 bench = false

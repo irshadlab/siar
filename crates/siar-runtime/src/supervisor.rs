@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 
 use crate::health::{HealthRegistry, HealthState};
 use crate::lifecycle::{Lifecycle, RuntimeState};
+use crate::metrics::Metrics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestartPolicy {
@@ -68,6 +69,7 @@ pub struct Supervisor {
     lifecycle: Lifecycle,
     health: HealthRegistry,
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl Supervisor {
@@ -77,7 +79,14 @@ impl Supervisor {
             lifecycle,
             health,
             tasks: Arc::default(),
+            metrics: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_metrics(mut self, m: Arc<Metrics>) -> Self {
+        self.metrics = Some(m);
+        self
     }
 
     /// Supervise `factory`: each call must produce a fresh run of the worker.
@@ -95,6 +104,7 @@ impl Supervisor {
         let lifecycle = self.lifecycle.clone();
         let health = self.health.clone();
         let factory = Arc::new(factory);
+        let metrics = self.metrics.clone();
         let handle = tokio::spawn(async move {
             let mut failures: VecDeque<Instant> = VecDeque::new();
             health.set(name, HealthState::Healthy, "", critical);
@@ -133,6 +143,9 @@ impl Supervisor {
                 let n = u32::try_from(failures.len()).unwrap_or(u32::MAX);
                 tracing::warn!(worker = name, failures = n, %reason, "worker failed");
                 if n > policy.max_restarts {
+                    if let Some(m) = &metrics {
+                        Metrics::inc(&m.worker_gave_up);
+                    }
                     health.set(
                         name,
                         HealthState::Unavailable,

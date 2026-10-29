@@ -44,10 +44,12 @@ pub enum WorkDomain {
     Indexing = 10,
     Backup = 11,
     Diagnostics = 12,
+    /// §106-§108: third-party plugin work. Never durable/critical by default.
+    Extension = 13,
 }
 
 impl WorkDomain {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Message,
         Self::Receipt,
         Self::Identity,
@@ -61,6 +63,7 @@ impl WorkDomain {
         Self::Indexing,
         Self::Backup,
         Self::Diagnostics,
+        Self::Extension,
     ];
 
     /// Domains whose work is large and long-running — the ones the bulk
@@ -187,6 +190,33 @@ impl PowerAwareWork {
     pub const fn user_initiated(mut self) -> Self {
         self.user_initiated = true;
         self
+    }
+
+    /// §113: the order work is considered after a restart (lower = first):
+    /// identity/security, SOS, messages, DTN critical, active user transfer,
+    /// bulk, background.
+    #[must_use]
+    pub const fn recovery_rank(&self) -> u8 {
+        if matches!(self.domain, WorkDomain::Identity) {
+            0
+        } else if matches!(self.priority, WorkPriority::Critical) {
+            1
+        } else if matches!(self.domain, WorkDomain::Message | WorkDomain::Receipt) {
+            2
+        } else if matches!(self.domain, WorkDomain::Dtn | WorkDomain::Relay)
+            && matches!(
+                self.priority,
+                WorkPriority::Interactive | WorkPriority::Normal
+            )
+        {
+            3
+        } else if self.user_initiated {
+            4
+        } else if matches!(self.priority, WorkPriority::Background) {
+            6
+        } else {
+            5
+        }
     }
 
     /// Bulk-like for the metered-network rule: large by domain or by priority.

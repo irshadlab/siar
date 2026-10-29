@@ -32,13 +32,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audit;
+pub mod config;
 pub mod dedup;
+#[cfg(unix)]
+pub mod ensure;
 pub mod error;
 pub mod events;
 pub mod health;
+pub mod instance;
 #[cfg(unix)]
 pub mod ipc;
 pub mod lifecycle;
+pub mod metrics;
+pub mod paths;
 pub mod protocol;
 pub mod runtime;
 pub mod service;

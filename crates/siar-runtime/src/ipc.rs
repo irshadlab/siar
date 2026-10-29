@@ -26,9 +26,11 @@ use std::time::{Duration, Instant};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Semaphore};
 
+use crate::audit::{action_label, AuditEntry, Outcome};
 use crate::dedup::CommandId;
 use crate::error::RuntimeError;
 use crate::events::{Delivery, Subscription, Topic};
+use crate::metrics::Metrics;
 use crate::protocol::{
     negotiate_version, read_frame, write_frame, ClientMsg, FrameError, Reply, Request, Role,
     ServerMsg, MAX_FRAME, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
@@ -158,6 +160,7 @@ async fn handle_connection(
     uid: u32,
     cfg: &ServerConfig,
 ) -> Result<(), FrameError> {
+    Metrics::inc(&rt.metrics.ipc_connections);
     let (mut rd, mut wr) = stream.into_split();
 
     // §16 handshake.
@@ -226,9 +229,11 @@ async fn handle_connection(
                 Some(ClientMsg::Ping) => ServerMsg::Pong,
                 Some(ClientMsg::Hello { .. }) => break Err(FrameError::Malformed),
                 Some(ClientMsg::Request { req_id, body }) => {
+                    Metrics::inc(&rt.metrics.ipc_requests);
                     let result = if limit.allow() {
                         dispatch(&rt, uid, granted, body, &mut sub).await
                     } else {
+                        Metrics::inc(&rt.metrics.ipc_rate_limited);
                         Err(RuntimeError::Busy) // §144 IPC flood
                     };
                     ServerMsg::Response { req_id, result }
@@ -254,7 +259,13 @@ async fn dispatch(
     sub: &mut Option<Subscription>,
 ) -> Result<Reply, RuntimeError> {
     match body {
-        Request::Query(q) => rt.query(q).await,
+        Request::Query(q) => {
+            if role < q.required_role() {
+                Metrics::inc(&rt.metrics.ipc_unauthorized);
+                return Err(RuntimeError::Unauthorized);
+            }
+            rt.query(q).await
+        }
         Request::Subscribe { topics, capacity } => {
             // Subscribe *first*, then read next_seq: nothing published in
             // between can be lost (at worst it is delivered and also covered
@@ -272,17 +283,41 @@ async fn dispatch(
             Ok(Reply::Ok)
         }
         Request::Command { id, cmd } => {
+            let label = action_label(&cmd);
+            let entry = |outcome| AuditEntry {
+                at_ms: unix_ms(),
+                principal: u64::from(uid),
+                role,
+                action: label.clone(),
+                outcome,
+            };
             if role < cmd.required_role() {
+                Metrics::inc(&rt.metrics.ipc_unauthorized);
+                rt.audit.record(entry(Outcome::Denied));
                 return Err(RuntimeError::Unauthorized);
             }
-            let bytes = rt.command(u64::from(uid), id, cmd).await?;
-            Ok(if bytes.is_empty() {
-                Reply::Ok
-            } else {
-                Reply::Bytes(bytes)
-            })
+            match rt.command(u64::from(uid), id, cmd).await {
+                Ok(bytes) => {
+                    rt.audit.record(entry(Outcome::Ok));
+                    Ok(if bytes.is_empty() {
+                        Reply::Ok
+                    } else {
+                        Reply::Bytes(bytes)
+                    })
+                }
+                Err(e) => {
+                    rt.audit.record(entry(Outcome::Failed));
+                    Err(e)
+                }
+            }
         }
     }
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 // ───────────────────────────── client ─────────────────────────────
@@ -715,6 +750,63 @@ mod tests {
             "third connection must not be served"
         );
         drop((a, b));
+        rt.shutdown(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test]
+    async fn audit_records_actions_never_payloads_and_is_admin_only() {
+        let (rt, path, _n, _h) = start("audit", ServerConfig::default()).await;
+        let mut op = IpcClient::connect_unix(&path, Role::Operator, "op")
+            .await
+            .unwrap();
+        // `max_role` defaults to Admin, so request Operator explicitly above.
+        op.command(
+            CommandId(1),
+            Command::App {
+                name: "e".into(),
+                data: b"TOP-SECRET-TEXT".to_vec(),
+            },
+        )
+        .await
+        .unwrap();
+        let denied = op
+            .command(CommandId(2), Command::Shutdown)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            denied,
+            ClientError::Runtime(RuntimeError::Unauthorized)
+        ));
+        assert!(
+            matches!(
+                op.query(Query::Audit).await.unwrap_err(),
+                ClientError::Runtime(RuntimeError::Unauthorized)
+            ),
+            "Operator cannot read the audit log"
+        );
+
+        let mut admin = IpcClient::connect_unix(&path, Role::Admin, "admin")
+            .await
+            .unwrap();
+        let Reply::Bytes(b) = admin.query(Query::Audit).await.unwrap() else {
+            panic!()
+        };
+        let text = String::from_utf8(b).unwrap();
+        assert!(text.contains("app:e") && text.contains("Ok"), "{text}");
+        assert!(
+            text.contains("shutdown") && text.contains("Denied"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("TOP-SECRET"),
+            "§162: no content in the audit log"
+        );
+
+        let Reply::Bytes(m) = admin.query(Query::Metrics).await.unwrap() else {
+            panic!()
+        };
+        let m = String::from_utf8(m).unwrap();
+        assert!(m.contains("siar_ipc_unauthorized_total 2"), "{m}");
         rt.shutdown(Duration::from_secs(1)).await;
     }
 }

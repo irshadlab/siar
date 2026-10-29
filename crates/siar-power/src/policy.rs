@@ -279,7 +279,14 @@ fn power_budget_verdict(
                 }
             }
             B::Limited => {
-                if bulkish && energy >= EnergyClass::High && !state.external_power() {
+                // A heavy transfer on battery waits only once the battery is no longer
+                // comfortably high; at High/Full it runs (throttled) and slows further
+                // as the battery falls (§122).
+                if bulkish
+                    && energy >= EnergyClass::High
+                    && !state.external_power()
+                    && state.battery.effective() < crate::state::BatteryLevelClass::High
+                {
                     return postpone(work, R::BatteryThrottle, WaitFor::Charging);
                 }
                 if bulkish {
@@ -390,6 +397,25 @@ mod tests {
         assert_eq!(engine().evaluate(&sos(), &s, &res()), PowerDecision::Run);
         assert_eq!(
             engine().evaluate(&file(EnergyClass::Medium), &s, &res()),
+            PowerDecision::Defer
+        );
+    }
+
+    #[test]
+    fn heavy_bulk_runs_throttled_on_a_high_battery_but_waits_at_medium() {
+        let big = file(EnergyClass::High);
+        let on = |b| PowerState {
+            battery: b,
+            charging: ChargingState::NotCharging,
+            activity: AppActivityState::ForegroundIdle,
+            ..Default::default()
+        };
+        assert_eq!(
+            engine().evaluate(&big, &on(BatteryLevelClass::High), &res()),
+            PowerDecision::RunThrottled
+        );
+        assert_eq!(
+            engine().evaluate(&big, &on(BatteryLevelClass::Medium), &res()),
             PowerDecision::Defer
         );
     }

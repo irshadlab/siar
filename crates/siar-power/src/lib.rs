@@ -60,6 +60,7 @@ pub mod diagnostics;
 pub mod discovery;
 pub mod domains;
 pub mod error;
+pub mod extension;
 pub mod hysteresis;
 pub mod platform;
 pub mod policy;
@@ -67,6 +68,7 @@ pub mod profile;
 pub mod scheduler;
 pub mod state;
 pub mod tracker;
+pub mod ux;
 pub mod wake;
 pub mod work;
 
@@ -81,7 +83,8 @@ pub use profile::{
     select_profile, Deployment, PowerPolicyConfig, PowerPolicyProfile, UserPowerPrefs,
 };
 pub use scheduler::{
-    energy_for_bytes, OpId, PersistedDeferral, PowerScheduler, Release, SchedulerConfig, Submission,
+    energy_for_bytes, OpId, PersistedDeferral, PowerEvent, PowerScheduler, Release,
+    SchedulerConfig, Submission,
 };
 pub use state::{
     AppActivityState, BatteryLevelClass, ChargingState, PeerPowerHint, PowerState, ThermalState,

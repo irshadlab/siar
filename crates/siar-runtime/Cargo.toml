@@ -10,6 +10,7 @@ description = "Daemon & headless runtime (sys-arch Part 16): lifecycle, supervis
 siar-power = { path = "../siar-power" }
 serde.workspace = true
 postcard.workspace = true
+toml = "1"
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true

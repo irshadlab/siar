@@ -8,11 +8,14 @@ use std::time::{Duration, Instant};
 
 use siar_power::{PowerPolicyConfig, PowerScheduler, RawPowerReading, SchedulerConfig};
 
+use crate::audit::AuditLog;
+use crate::config::{plan_reload, ConfigError, ReloadPlan, RuntimeConfig};
 use crate::dedup::{Begin, CommandId, CommandLedger, CommandOutcome, Principal};
 use crate::error::RuntimeError;
 use crate::events::{EventBus, EventPriority, Topic};
 use crate::health::HealthRegistry;
 use crate::lifecycle::{Lifecycle, RuntimeState};
+use crate::metrics::Metrics;
 use crate::protocol::{Command, Query, Reply, StatusSnapshot, PROTOCOL_VERSION};
 use crate::supervisor::Supervisor;
 
@@ -63,6 +66,8 @@ pub struct RuntimeBuilder {
     power: PowerPolicyConfig,
     sched: SchedulerConfig,
     ledger_cap: usize,
+    build_id: String,
+    config: RuntimeConfig,
 }
 
 impl Default for RuntimeBuilder {
@@ -72,6 +77,8 @@ impl Default for RuntimeBuilder {
             power: PowerPolicyConfig::default(),
             sched: SchedulerConfig::default(),
             ledger_cap: 4096,
+            build_id: concat!("siar-runtime ", env!("CARGO_PKG_VERSION")).to_owned(),
+            config: RuntimeConfig::default(),
         }
     }
 }
@@ -98,18 +105,38 @@ impl RuntimeBuilder {
         self
     }
 
+    /// The embedding application's build/version string (shown to upgraders).
+    #[must_use]
+    pub fn build_id(mut self, id: &str) -> Self {
+        self.build_id = id.to_owned();
+        self
+    }
+    #[must_use]
+    pub fn config(mut self, c: RuntimeConfig) -> Self {
+        self.config = c;
+        self
+    }
+
     #[must_use]
     pub fn build(self) -> Runtime {
         let lifecycle = Lifecycle::new();
         let health = HealthRegistry::new();
         let instance_id = uuid::Uuid::new_v4().as_u128();
+        let metrics = Arc::new(Metrics::default());
+        let power = self.config.power_policy(self.power);
         Runtime {
-            supervisor: Supervisor::new(lifecycle.clone(), health.clone()),
+            supervisor: Supervisor::new(lifecycle.clone(), health.clone())
+                .with_metrics(metrics.clone()),
+            metrics,
+            audit: AuditLog::new(512),
+            config: Arc::new(Mutex::new(self.config)),
+            base_power: self.power,
+            build: self.build_id,
             lifecycle,
             health,
             bus: EventBus::new(instance_id),
             ledger: Arc::new(Mutex::new(CommandLedger::new(self.ledger_cap))),
-            power: Arc::new(Mutex::new(PowerScheduler::new(self.power, self.sched))),
+            power: Arc::new(Mutex::new(PowerScheduler::new(power, self.sched))),
             app: self.app,
             started: Instant::now(),
         }
@@ -123,6 +150,11 @@ pub struct Runtime {
     pub health: HealthRegistry,
     pub supervisor: Supervisor,
     pub bus: EventBus,
+    pub metrics: Arc<Metrics>,
+    pub audit: AuditLog,
+    config: Arc<Mutex<RuntimeConfig>>,
+    base_power: PowerPolicyConfig,
+    build: String,
     ledger: Arc<Mutex<CommandLedger>>,
     power: Arc<Mutex<PowerScheduler>>,
     app: Arc<dyn AppService>,
@@ -223,6 +255,7 @@ impl Runtime {
             uptime_ms: u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
             subscribers: u32::try_from(self.bus.subscriber_count()).unwrap_or(u32::MAX),
             protocol_version: PROTOCOL_VERSION,
+            build: self.build.clone(),
         }
     }
 
@@ -234,6 +267,8 @@ impl Runtime {
             Query::Status => Ok(Reply::Status(self.status())),
             Query::Health => Ok(Reply::Health(self.health.report())),
             Query::Power => Ok(Reply::Power(Box::new(self.with_power(|p| p.diagnostics())))),
+            Query::Metrics => Ok(Reply::Bytes(self.metrics.render_text().into_bytes())),
+            Query::Audit => Ok(Reply::Bytes(self.audit.render_text().into_bytes())),
             Query::App { name, data } => self.app.query(&name, data).await.map(Reply::Bytes),
         }
     }
@@ -247,10 +282,14 @@ impl Runtime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .begin(who, id)?
         {
-            Begin::Done(r) => return r,
+            Begin::Done(r) => {
+                Metrics::inc(&self.metrics.commands_deduplicated);
+                return r;
+            }
             Begin::InFlight => return Err(RuntimeError::Busy),
             Begin::New => {}
         }
+        Metrics::inc(&self.metrics.commands);
         let outcome = self.execute(&cmd).await;
         let mut ledger = self
             .ledger
@@ -306,6 +345,39 @@ impl Runtime {
         }
         self.announce_state();
         Ok(Vec::new())
+    }
+
+    #[must_use]
+    pub fn config(&self) -> RuntimeConfig {
+        self.config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// §87: validate `new`, apply what is safe to apply live, and report what
+    /// still needs a restart. On a validation error nothing changes.
+    pub fn reload(&self, new: RuntimeConfig) -> Result<ReloadPlan, ConfigError> {
+        new.validate()?;
+        let mut cur = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let plan = plan_reload(&cur, &new);
+        // Only the hot sections take effect; the file's cold values stay pending.
+        cur.power = new.power.clone();
+        cur.logging = new.logging.clone();
+        cur.shutdown = new.shutdown.clone();
+        let policy = cur.power_policy(self.base_power);
+        drop(cur);
+        self.with_power(|p| p.set_policy(policy));
+        Ok(plan)
+    }
+
+    /// How long a graceful shutdown may take (hot-reloadable).
+    #[must_use]
+    pub fn shutdown_grace(&self) -> Duration {
+        self.config().shutdown_grace()
     }
 
     /// Topic list for subscribers that want only runtime-level events.
@@ -486,5 +558,50 @@ mod tests {
             .command(1, CommandId(9), Command::SetEmergency(true))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn reload_applies_power_live_and_reports_cold_changes() {
+        let rt = Runtime::builder().build();
+        ready(&rt).await;
+        let mut new = rt.config();
+        new.power.allow_metered_bulk = true;
+        new.ipc.max_connections = 99;
+        let plan = rt.reload(new).unwrap();
+        assert_eq!(plan.applied, vec!["power"]);
+        assert_eq!(plan.restart_required, vec!["ipc"]);
+        assert!(rt.config().power.allow_metered_bulk);
+        assert_eq!(
+            rt.config().ipc.max_connections,
+            32,
+            "the cold value is pending, not pretended"
+        );
+        let mut bad = rt.config();
+        bad.shutdown.grace_secs = 0;
+        assert!(rt.reload(bad).is_err());
+        assert!(
+            rt.config().power.allow_metered_bulk,
+            "a rejected reload changes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn metrics_count_commands_and_dedup_hits() {
+        let rt = Runtime::builder().build();
+        ready(&rt).await;
+        rt.command(1, CommandId(1), Command::SetEmergency(true))
+            .await
+            .unwrap();
+        rt.command(1, CommandId(1), Command::SetEmergency(true))
+            .await
+            .unwrap();
+        let Reply::Bytes(b) = rt.query(Query::Metrics).await.unwrap() else {
+            panic!()
+        };
+        let t = String::from_utf8(b).unwrap();
+        assert!(
+            t.contains("siar_commands_total 1") && t.contains("siar_commands_deduplicated_total 1"),
+            "{t}"
+        );
     }
 }

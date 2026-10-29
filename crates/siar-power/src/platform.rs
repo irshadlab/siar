@@ -321,3 +321,239 @@ mod tests {
         assert!(src.current().saver_enabled);
     }
 }
+
+// ───────────────────── §105: stable host-report API ─────────────────────
+
+/// What an external platform adapter (Android service, iOS app, a host
+/// application embedding the core over FFI) reports. **Reports facts only;
+/// the Rust core decides** (§105). Stable and deliberately small.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostReport {
+    pub foreground: bool,
+    /// Foreground *and* the user is actively interacting.
+    pub interactive: bool,
+    /// The OS says background execution is restricted for this app.
+    pub background_restricted: bool,
+    pub power_saver: bool,
+    pub metered: bool,
+    pub roaming: bool,
+    pub battery_percent: Option<u8>,
+    pub charging: ChargingState,
+    pub thermal: ThermalState,
+}
+
+impl HostReport {
+    /// Map onto the neutral reading the tracker consumes.
+    #[must_use]
+    pub fn to_raw(&self) -> RawPowerReading {
+        use crate::state::AppActivityState as A;
+        let activity = match (
+            self.foreground,
+            self.interactive,
+            self.background_restricted,
+        ) {
+            (true, true, _) => A::ForegroundInteractive,
+            (true, false, _) => A::ForegroundIdle,
+            (false, _, true) => A::BackgroundRestricted,
+            (false, _, false) => A::BackgroundAllowed,
+        };
+        RawPowerReading {
+            battery_percent: self.battery_percent,
+            charging: self.charging,
+            thermal: self.thermal,
+            activity,
+            saver_enabled: self.power_saver,
+            metered_network: self.metered,
+            roaming: self.roaming,
+            os_background_network_blocked: self.background_restricted && !self.foreground,
+        }
+    }
+}
+
+impl PushPowerSource {
+    /// Convenience for host adapters.
+    pub fn report(&self, r: &HostReport) {
+        self.push(r.to_raw());
+    }
+}
+
+// ─────────────── §100-§102: vendor quirks live in the adapter ───────────────
+
+/// How hard a vendor's OS tends to kill background apps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundAggression {
+    Standard,
+    /// Known to freeze or kill ordinary background apps quickly.
+    Aggressive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VendorQuirk {
+    pub aggression: BackgroundAggression,
+    /// Optional, plain-language help. Never a requirement (§102).
+    pub guidance: &'static str,
+}
+
+const GUIDANCE_AGGRESSIVE: &str =
+    "Your phone may pause Siar in the background to save power. Siar still works without changing anything; \
+     if you want more reliable background delivery, you can allow Siar in your phone’s battery settings.";
+
+/// Data-driven (§101: no code-level hacks). Matched case-insensitively on the
+/// manufacturer string. Sources are public vendor-behaviour reports; extend
+/// the table, never the policy.
+const AGGRESSIVE_VENDORS: &[&str] = &[
+    "xiaomi", "redmi", "poco", "huawei", "honor", "oppo", "realme", "oneplus", "vivo", "iqoo",
+    "meizu", "asus", "tecno", "infinix", "itel",
+];
+
+#[must_use]
+pub fn quirk_for(manufacturer: &str) -> VendorQuirk {
+    let m = manufacturer.trim().to_ascii_lowercase();
+    if AGGRESSIVE_VENDORS
+        .iter()
+        .any(|v| m == *v || m.starts_with(&format!("{v} ")))
+    {
+        VendorQuirk {
+            aggression: BackgroundAggression::Aggressive,
+            guidance: GUIDANCE_AGGRESSIVE,
+        }
+    } else {
+        VendorQuirk {
+            aggression: BackgroundAggression::Standard,
+            guidance: "",
+        }
+    }
+}
+
+/// The only way a quirk touches policy: on an aggressive vendor, *assume* the
+/// app will be restricted sooner. That makes the core schedule less in the
+/// background — safer — without hard-coding anything vendor-specific into it.
+#[must_use]
+pub fn adjust_activity(
+    a: crate::state::AppActivityState,
+    q: VendorQuirk,
+) -> crate::state::AppActivityState {
+    use crate::state::AppActivityState as A;
+    match (q.aggression, a) {
+        (BackgroundAggression::Aggressive, A::BackgroundAllowed) => A::BackgroundRestricted,
+        _ => a,
+    }
+}
+
+#[cfg(test)]
+mod host_and_quirk_tests {
+    use super::*;
+    use crate::state::AppActivityState as A;
+
+    fn rep() -> HostReport {
+        HostReport {
+            foreground: false,
+            interactive: false,
+            background_restricted: false,
+            power_saver: false,
+            metered: false,
+            roaming: false,
+            battery_percent: Some(50),
+            charging: ChargingState::NotCharging,
+            thermal: ThermalState::Nominal,
+        }
+    }
+
+    #[test]
+    fn activity_mapping_covers_every_combination() {
+        let f = |fg, i, br| {
+            HostReport {
+                foreground: fg,
+                interactive: i,
+                background_restricted: br,
+                ..rep()
+            }
+            .to_raw()
+            .activity
+        };
+        assert_eq!(f(true, true, false), A::ForegroundInteractive);
+        assert_eq!(f(true, false, false), A::ForegroundIdle);
+        assert_eq!(f(false, false, false), A::BackgroundAllowed);
+        assert_eq!(f(false, false, true), A::BackgroundRestricted);
+        assert_eq!(
+            f(true, true, true),
+            A::ForegroundInteractive,
+            "foreground beats a stale restriction flag"
+        );
+    }
+
+    #[test]
+    fn os_network_block_only_when_restricted_in_background() {
+        assert!(
+            HostReport {
+                background_restricted: true,
+                ..rep()
+            }
+            .to_raw()
+            .os_background_network_blocked
+        );
+        assert!(
+            !HostReport {
+                background_restricted: true,
+                foreground: true,
+                ..rep()
+            }
+            .to_raw()
+            .os_background_network_blocked
+        );
+    }
+
+    #[tokio::test]
+    async fn host_report_flows_through_the_push_source() {
+        let src = PushPowerSource::new(RawPowerReading::default());
+        let mut rx = src.subscribe();
+        rx.borrow_and_update();
+        src.report(&HostReport {
+            power_saver: true,
+            ..rep()
+        });
+        assert!(rx.has_changed().unwrap());
+        assert!(src.current().saver_enabled);
+    }
+
+    #[test]
+    fn aggressive_vendors_make_the_core_more_conservative_never_less() {
+        for v in ["Xiaomi", " HUAWEI ", "OnePlus", "realme"] {
+            assert_eq!(
+                quirk_for(v).aggression,
+                BackgroundAggression::Aggressive,
+                "{v}"
+            );
+        }
+        for v in ["Google", "samsung", "Motorola", ""] {
+            assert_eq!(
+                quirk_for(v).aggression,
+                BackgroundAggression::Standard,
+                "{v}"
+            );
+        }
+        let q = quirk_for("xiaomi");
+        assert_eq!(
+            adjust_activity(A::BackgroundAllowed, q),
+            A::BackgroundRestricted
+        );
+        assert_eq!(
+            adjust_activity(A::ForegroundInteractive, q),
+            A::ForegroundInteractive
+        );
+        assert_eq!(
+            adjust_activity(A::BackgroundAllowed, quirk_for("google")),
+            A::BackgroundAllowed
+        );
+    }
+
+    #[test]
+    fn guidance_is_optional_never_a_demand() {
+        let g = quirk_for("xiaomi").guidance.to_ascii_lowercase();
+        assert!(g.contains("still works") && g.contains("if you want"));
+        for banned in ["must", "required", "disable battery optimization"] {
+            assert!(!g.contains(banned), "§102 violated by {banned:?}: {g}");
+        }
+        assert!(quirk_for("google").guidance.is_empty());
+    }
+}

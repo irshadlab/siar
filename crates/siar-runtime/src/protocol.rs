@@ -66,7 +66,24 @@ pub enum Query {
     Status,
     Health,
     Power,
-    App { name: String, data: Vec<u8> },
+    /// §91-§92: counters in text exposition format. Observer.
+    Metrics,
+    /// §161: recent admin actions (kinds only, never content). Admin.
+    Audit,
+    App {
+        name: String,
+        data: Vec<u8>,
+    },
+}
+
+impl Query {
+    #[must_use]
+    pub const fn required_role(&self) -> Role {
+        match self {
+            Self::Audit => Role::Admin,
+            _ => Role::Observer,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +116,8 @@ pub struct StatusSnapshot {
     pub uptime_ms: u64,
     pub subscribers: u32,
     pub protocol_version: u16,
+    /// The daemon's build/version string (§100-§102: lets an upgrader decide).
+    pub build: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,5 +321,98 @@ mod tests {
             read_frame::<_, ServerMsg>(&mut b).await,
             Err(FrameError::Closed)
         ));
+    }
+
+    /// A stable-toolchain stand-in for the cargo-fuzz target: mutate valid
+    /// frames (bit flips, truncation, splices) and demand no panic, and that
+    /// anything that still decodes round-trips.
+    #[test]
+    fn mutated_valid_frames_never_panic_and_round_trip_when_they_decode() {
+        let seeds: Vec<Vec<u8>> = vec![
+            encode_frame(&ClientMsg::Hello {
+                min_version: 1,
+                max_version: 1,
+                role: Role::Admin,
+                client_name: "x".into(),
+            })
+            .unwrap(),
+            encode_frame(&ClientMsg::Request {
+                req_id: 7,
+                body: Request::Subscribe {
+                    topics: vec![Topic(1), Topic(300)],
+                    capacity: 64,
+                },
+            })
+            .unwrap(),
+            encode_frame(&ClientMsg::Request {
+                req_id: 8,
+                body: Request::Command {
+                    id: CommandId(9),
+                    cmd: Command::App {
+                        name: "n".into(),
+                        data: vec![0; 40],
+                    },
+                },
+            })
+            .unwrap(),
+            encode_frame(&ServerMsg::Welcome {
+                version: 1,
+                instance_id: 5,
+                role: Role::Operator,
+                next_seq: 3,
+            })
+            .unwrap(),
+            encode_frame(&ServerMsg::Response {
+                req_id: 1,
+                result: Err(RuntimeError::Busy),
+            })
+            .unwrap(),
+        ];
+        let mut x = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut decoded = 0u32;
+        for round in 0..20_000u32 {
+            let mut f = seeds[(next() % seeds.len() as u64) as usize].clone();
+            for _ in 0..=(next() % 4) {
+                match next() % 4 {
+                    0 if !f.is_empty() => {
+                        let i = (next() % f.len() as u64) as usize;
+                        f[i] ^= 1 << (next() % 8);
+                    }
+                    1 if f.len() > 1 => f.truncate((next() % f.len() as u64) as usize),
+                    2 => f.push(next() as u8),
+                    _ if !f.is_empty() => {
+                        let i = (next() % f.len() as u64) as usize;
+                        f[i] = next() as u8;
+                    }
+                    _ => {}
+                }
+            }
+            if let Ok(m) = decode_frame::<ClientMsg>(&f) {
+                decoded += 1;
+                assert_eq!(
+                    decode_frame::<ClientMsg>(&encode_frame(&m).unwrap()).unwrap(),
+                    m,
+                    "round {round}"
+                );
+            }
+            if let Ok(m) = decode_frame::<ServerMsg>(&f) {
+                decoded += 1;
+                assert_eq!(
+                    decode_frame::<ServerMsg>(&encode_frame(&m).unwrap()).unwrap(),
+                    m,
+                    "round {round}"
+                );
+            }
+        }
+        assert!(
+            decoded > 100,
+            "the mutator should still produce some valid frames ({decoded})"
+        );
     }
 }

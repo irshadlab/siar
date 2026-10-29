@@ -20,7 +20,7 @@
 //!   re-inserts persisted records as *deferred*; the normal poll path
 //!   evaluates them against the **current** state first.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -111,6 +111,31 @@ pub struct Submission {
     pub epoch: PowerStateEpoch,
 }
 
+/// §114: the few semantic power states worth recording — **not** every
+/// battery change. A subsystem may journal these (Part 04) if the product
+/// wants a "paused to save battery" history; the scheduler keeps only a
+/// small bounded outbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PowerEvent {
+    TransferDeferredByPower { id: OpId, reason: DecisionReason },
+    TransferResumedAfterPower { id: OpId },
+}
+
+const EVENT_OUTBOX_CAP: usize = 256;
+
+/// Reasons that mean "deferred because of battery / heat / background
+/// budget" — as opposed to user policy, an OS restriction or app policy.
+const fn is_power_reason(r: DecisionReason) -> bool {
+    matches!(
+        r,
+        DecisionReason::BackgroundBudget
+            | DecisionReason::BatteryThrottle
+            | DecisionReason::CriticalBatteryReserve
+            | DecisionReason::ThermalSafety
+            | DecisionReason::ThermalThrottle
+    )
+}
+
 /// One operation handed back for execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Release {
@@ -128,6 +153,7 @@ pub struct PowerScheduler {
     pressure_gen: u64,
     deferred: BTreeMap<OpId, Entry>,
     metrics: PowerMetrics,
+    events: VecDeque<PowerEvent>,
 }
 
 impl PowerScheduler {
@@ -140,6 +166,7 @@ impl PowerScheduler {
             pressure_gen: 0,
             deferred: BTreeMap::new(),
             metrics: PowerMetrics::default(),
+            events: VecDeque::new(),
         }
     }
 
@@ -154,6 +181,18 @@ impl PowerScheduler {
     #[must_use]
     pub fn is_deferred(&self, id: OpId) -> bool {
         self.deferred.contains_key(&id)
+    }
+
+    fn push_event(&mut self, e: PowerEvent) {
+        if self.events.len() >= EVENT_OUTBOX_CAP {
+            self.events.pop_front();
+        }
+        self.events.push_back(e);
+    }
+
+    /// §114: take the semantic events recorded since the last call.
+    pub fn drain_events(&mut self) -> Vec<PowerEvent> {
+        self.events.drain(..).collect()
     }
 
     /// Inputs generation: any change to the power epoch or to resource
@@ -254,6 +293,12 @@ impl PowerScheduler {
                 return Err(PowerError::DeferredFull(self.cfg.max_deferred));
             }
             let wait = evaluation.wait.unwrap_or(WaitFor::Foreground);
+            if is_power_reason(evaluation.reason) {
+                self.push_event(PowerEvent::TransferDeferredByPower {
+                    id,
+                    reason: evaluation.reason,
+                });
+            }
             let gate = self.time_gate(&work, now);
             self.deferred.insert(
                 id,
@@ -318,17 +363,18 @@ impl PowerScheduler {
         let generation = self.generation();
         let charging_now = self.tracker.state().external_power();
 
-        // Dispatch order: priority, then age, then id (stable, deterministic).
-        let mut order: Vec<(WorkPriority, u64, OpId)> = self
+        // §113 recovery rank first, then priority, then age, then id —
+        // stable and deterministic.
+        let mut order: Vec<(u8, WorkPriority, u64, OpId)> = self
             .deferred
             .iter()
-            .map(|(id, e)| (e.work.priority, e.deferred_at, *id))
+            .map(|(id, e)| (e.work.recovery_rank(), e.work.priority, e.deferred_at, *id))
             .collect();
         order.sort_unstable();
 
         let mut out = Vec::new();
         let mut non_urgent = 0usize;
-        for (_, _, id) in order {
+        for (_, _, _, id) in order {
             if out.len() >= limit {
                 break;
             }
@@ -387,6 +433,9 @@ impl PowerScheduler {
             self.deferred.remove(&id);
             if wait == WaitFor::Charging && charging_now {
                 PowerMetrics::bump(&mut self.metrics.bulk_resumed_on_charge);
+            }
+            if is_power_reason_wait(wait) {
+                self.push_event(PowerEvent::TransferResumedAfterPower { id });
             }
             if eval.reason == DecisionReason::Aged {
                 PowerMetrics::bump(&mut self.metrics.aged_promotions);
@@ -467,6 +516,14 @@ impl PowerScheduler {
     pub fn metrics_mut(&mut self) -> &mut PowerMetrics {
         &mut self.metrics
     }
+}
+
+/// A deferral that was waiting on charging / cooling / battery recovery.
+const fn is_power_reason_wait(w: WaitFor) -> bool {
+    matches!(
+        w,
+        WaitFor::Charging | WaitFor::ThermalRecovery | WaitFor::BatteryRecovery
+    )
 }
 
 /// Convenience: classify an operation by size, per §25's examples.
@@ -791,6 +848,53 @@ mod tests {
         assert_eq!(d.deferred.charging, 1);
         assert_eq!(d.metrics.deferred_by_power, 1);
         assert!(d.metrics.mode_transitions >= 1);
+    }
+
+    #[test]
+    fn only_semantic_power_states_are_recorded_not_battery_noise() {
+        let mut s = sched();
+        for p in [60, 59, 58, 61, 60, 59] {
+            s.observe(&raw(p, ChargingState::NotCharging), 0);
+        }
+        assert!(
+            s.drain_events().is_empty(),
+            "§114: do not journal every battery change"
+        );
+        s.observe(&raw(10, ChargingState::NotCharging), 1);
+        s.submit(OpId(1), bulk(EnergyClass::High), 2).unwrap();
+        assert_eq!(
+            s.drain_events(),
+            vec![PowerEvent::TransferDeferredByPower {
+                id: OpId(1),
+                reason: DecisionReason::BackgroundBudget
+            }]
+        );
+        s.observe(&raw(10, ChargingState::Full), 3);
+        let mut t = 3;
+        while s.poll(t, 5).is_empty() && t < 40_000 {
+            t += 500;
+        }
+        assert_eq!(
+            s.drain_events(),
+            vec![PowerEvent::TransferResumedAfterPower { id: OpId(1) }]
+        );
+        assert!(s.drain_events().is_empty());
+    }
+
+    #[test]
+    fn event_outbox_is_bounded() {
+        let mut s = PowerScheduler::new(
+            PowerPolicyConfig::default(),
+            SchedulerConfig {
+                max_deferred: 10_000,
+                ..Default::default()
+            },
+        );
+        s.observe(&raw(8, ChargingState::NotCharging), 0);
+        for i in 0..1_000 {
+            s.submit(OpId(i), bulk(EnergyClass::Medium), 1).unwrap();
+        }
+        assert!(s.drain_events().len() <= 256);
     }
 
     #[test]

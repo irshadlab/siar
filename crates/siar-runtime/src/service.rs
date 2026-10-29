@@ -53,6 +53,70 @@ pub async fn terminate_signal() {
     }
 }
 
+/// §87: call `f` every time the process receives SIGHUP (the conventional
+/// "re-read your config" signal). Returns when the runtime shuts down.
+#[cfg(unix)]
+pub async fn on_hangup(lifecycle: crate::lifecycle::Lifecycle, mut f: impl FnMut()) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let Ok(mut hup) = signal(SignalKind::hangup()) else {
+        return;
+    };
+    loop {
+        tokio::select! {
+            _ = hup.recv() => f(),
+            () = lifecycle.shutdown_requested() => return,
+        }
+    }
+}
+
+/// §97: the watchdog ping interval systemd expects, from `WATCHDOG_USEC`.
+/// We ping at **half** the deadline. `None` when no watchdog is configured.
+#[must_use]
+pub fn watchdog_interval() -> Option<std::time::Duration> {
+    let usec: u64 = std::env::var("WATCHDOG_USEC").ok()?.trim().parse().ok()?;
+    (usec >= 2).then(|| std::time::Duration::from_micros(usec / 2))
+}
+
+/// Ping the watchdog while the runtime is *actually* healthy: stop pinging if
+/// a critical subsystem is `Unavailable`, so systemd restarts a wedged daemon
+/// instead of being reassured by a loop that proves nothing.
+pub async fn watchdog_loop(
+    lifecycle: crate::lifecycle::Lifecycle,
+    health: crate::health::HealthRegistry,
+) {
+    let Some(every) = watchdog_interval() else {
+        return;
+    };
+    let mut tick = tokio::time::interval(every);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                if watchdog_should_ping(&lifecycle, &health) {
+                    #[cfg(unix)]
+                    sd_notify("WATCHDOG=1");
+                }
+            }
+            () = lifecycle.shutdown_requested() => return,
+        }
+    }
+}
+
+/// The liveness rule, separated so it can be tested.
+#[must_use]
+pub fn watchdog_should_ping(
+    lifecycle: &crate::lifecycle::Lifecycle,
+    health: &crate::health::HealthRegistry,
+) -> bool {
+    use crate::health::HealthState;
+    use crate::lifecycle::RuntimeState;
+    let critical_down = health
+        .report()
+        .subsystems
+        .iter()
+        .any(|s| s.critical && s.state == HealthState::Unavailable);
+    !critical_down && !matches!(lifecycle.state(), RuntimeState::Stopped)
+}
+
 /// `systemd --user` unit for a long-running node/daemon.
 ///
 /// Hardening follows §117-§118 (least privilege): no new privileges, private
@@ -135,5 +199,38 @@ mod tests {
         let n = rx.recv(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"READY=1");
         std::env::remove_var("NOTIFY_SOCKET");
+    }
+
+    #[test]
+    fn watchdog_interval_is_half_the_deadline_and_absent_by_default() {
+        // One test mutates this env var, to avoid races between tests.
+        std::env::remove_var("WATCHDOG_USEC");
+        assert_eq!(watchdog_interval(), None);
+        std::env::set_var("WATCHDOG_USEC", "60000000");
+        assert_eq!(
+            watchdog_interval(),
+            Some(std::time::Duration::from_secs(30))
+        );
+        std::env::set_var("WATCHDOG_USEC", "garbage");
+        assert_eq!(watchdog_interval(), None);
+        std::env::remove_var("WATCHDOG_USEC");
+    }
+
+    #[test]
+    fn watchdog_withholds_the_ping_when_a_critical_subsystem_is_down() {
+        use crate::health::{HealthRegistry, HealthState};
+        let (l, h) = (crate::lifecycle::Lifecycle::new(), HealthRegistry::new());
+        assert!(watchdog_should_ping(&l, &h));
+        h.set("storage", HealthState::Unavailable, "disk gone", true);
+        assert!(
+            !watchdog_should_ping(&l, &h),
+            "a wedged daemon must be allowed to be restarted"
+        );
+        h.set("storage", HealthState::Healthy, "", true);
+        h.set("thumbs", HealthState::Unavailable, "crashed", false);
+        assert!(
+            watchdog_should_ping(&l, &h),
+            "a non-critical failure does not trip the watchdog"
+        );
     }
 }

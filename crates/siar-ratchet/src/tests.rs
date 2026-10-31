@@ -637,3 +637,18 @@ proptest! {
 
 #[allow(dead_code)]
 fn _types_used(_: VerifyingKey) {}
+
+#[test]
+fn a_signed_prekey_secret_round_trips_and_mismatched_halves_are_refused() {
+    let bob = DeviceIdentity::generate();
+    let (spk, _b) = new_signed_prekey(&bob, &mut rand_core::OsRng);
+    let bytes = spk.to_bytes();
+    let back = SignedPrekeySecret::from_bytes(&bytes).unwrap();
+    assert_eq!(back.public(), spk.public());
+    let mut bad = *bytes;
+    bad[40] ^= 1; // corrupt the public half
+    assert!(SignedPrekeySecret::from_bytes(&bad).is_err());
+    let mut bad = *bytes;
+    bad[3] ^= 1; // corrupt the secret half
+    assert!(SignedPrekeySecret::from_bytes(&bad).is_err());
+}

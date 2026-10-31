@@ -435,6 +435,12 @@ impl MessageService {
     /// `siar-crypto`, and this is the one signing operation a mailbox-
     /// checking caller (`apps/cli`'s `check-mailbox` command today)
     /// actually needs.
+    /// Gracefully close the transport (peers see an orderly close instead of
+    /// a timeout). Call once on shutdown, after the last send.
+    pub async fn shutdown(&self) {
+        self.endpoint.close().await;
+    }
+
     pub fn sign_mailbox_check_in(&self, now_millis: u64) -> MailboxCheckIn {
         MailboxCheckIn::new(&self.identity, self.device_id, now_millis)
     }

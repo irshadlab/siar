@@ -24,7 +24,7 @@ pub const MESSENGER_ALPN: &[u8] = b"messenger/msg/1";
 /// nothing above this crate imports `iroh` directly (plan.md §9).
 pub struct SiarEndpoint {
     endpoint: Endpoint,
-    _router: Router,
+    router: Router,
     pool: ConnectionPool,
     local_peers: Arc<LocalPeerDirectory>,
     /// One persistent, ordered `files/1` stream per peer (see
@@ -119,7 +119,7 @@ impl SiarEndpoint {
 
         Ok(Self {
             endpoint,
-            _router: router,
+            router,
             pool: ConnectionPool::default(),
             local_peers,
             files_streams: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -142,6 +142,15 @@ impl SiarEndpoint {
     /// need to.
     pub fn local_peers(&self) -> Vec<EndpointAddr> {
         self.local_peers.snapshot()
+    }
+
+    /// Close down gracefully: stop accepting, tell connected peers we are
+    /// leaving (a proper QUIC close, not a silent drop they must time out
+    /// on), and release the sockets. Safe to call more than once.
+    pub async fn close(&self) {
+        if let Err(e) = self.router.shutdown().await {
+            tracing::warn!(error = %e, "endpoint shutdown did not complete cleanly");
+        }
     }
 
     /// plan.md §35: called periodically by the retry scheduler to drop

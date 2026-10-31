@@ -14,6 +14,7 @@ path = "src/main.rs"
 siar-app-core.workspace = true
 siar-runtime.workspace = true
 siar-ui-model.workspace = true
+siar-ui-sync.workspace = true
 siar-ui-state.workspace = true
 siar-domain.workspace = true
 siar-power.workspace = true

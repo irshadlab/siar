@@ -549,3 +549,18 @@ Section fractions are deliberately not claimed; each line below names the spec s
 
 ### Part 28 — what remains
 Already substantial in `siar-crypto`/`siar-identity-multidevice`/`siar-crypto-mls`/`siar-backup` (not re-audited here): identity & device trust, envelopes, replay window, clone detection, revocation, restore safety, key store, MLS groups. **Open:** wiring the ratchet and the abuse gate into the message path; §79-§80 security safe mode and §106-§110 security profiles; §93 cross-implementation test vectors beyond the primitives above; fuzz targets for envelope/handshake parsing; external review; side-channel and memory-hygiene review (zeroization is applied to ratchet state, not audited workspace-wide).
+
+
+## Wiring round — stopped early, by decision (state as handed over)
+
+**Done and verified**
+* **Graceful iroh close:** `SiarEndpoint::close` (→ `Router::shutdown`), `MessageService::shutdown`, `Core::shutdown_transport`; the daemon calls it on exit. Live check (`scripts/daemon-sync-smoke.sh`): both daemons exit 0 and the "dropped without calling `Endpoint::close`" warning is gone.
+* **`siar-secure-session`** (32 tests, clippy clean): crash-safe blob store; XChaCha20-Poly1305 at-rest encryption with per-purpose derived keys and AAD binding; `SessionVault` with high-water marks that must live outside backups (stale-restore is refused); signed-prekey rotation with bounded retention (a failed write never publishes a key whose secret isn't durable; a corrupt file is an error, never a silent regeneration); `SecureSessions` facade enforcing persist-before-send, commit-before-save, a per-session lock, and **no silent session replacement** (a replayed first-flight yields `ResetNeeded`, never a rollback).
+* `siar-ratchet` gained validated `SignedPrekeySecret::to_bytes/from_bytes` (29 tests).
+
+**Set aside, unfinished — `wip/siar-messaging-ingress/` (NOT built, NOT tested, NOT in the workspace)**
+Ticket-carried prekey bundle and the ingress gate in front of `handle_incoming`. An interrupted script left a duplicate Cargo key; the verified originals were restored and the workspace re-checked.
+
+**Not started:** wiring `SecureSessions` into `MessageService`; the **message storage format change** a ratchet requires (history is stored as session ciphertext and re-decrypted on demand — impossible once keys are deleted on use); extra sync sections; remote admin; multi-account in one daemon; plugin isolation; daemon notifications.
+
+**Open architectural decision (discussed, not decided):** whether 1:1 uses OpenMLS (2-member groups), vodozemac, or this hand-written ratchet — and, more broadly, which hand-written mechanisms to replace with maintained crates (see the discussion in the hand-off message). Until decided, **`siar-ratchet`/`siar-secure-session` must not be wired into the message path.**

@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 pub struct Live {
     pub core: Arc<Core>,
     pub commands: mpsc::Sender<AppCommand>,
+    pub sync: Arc<siar_ui_sync::UiSyncService>,
 }
 
 #[derive(Clone, Default)]
@@ -42,6 +43,9 @@ impl DaemonApp {
 
     async fn run_query(&self, name: &str, data: Vec<u8>) -> Result<Vec<u8>, RuntimeError> {
         let live = self.live()?;
+        if name == "ui-snapshot" {
+            return live.sync.snapshot_page(&data);
+        }
         let hub = live.core.state();
         let out = match name {
             "ticket" => hub.read(|s| s.identity.ticket.clone()),
@@ -110,6 +114,10 @@ impl DaemonApp {
 
     fn run_command(&self, name: &str, data: Vec<u8>) -> Result<Vec<u8>, RuntimeError> {
         let live = self.live()?;
+        if name == "ui-command" {
+            // Window commands are validated again inside; see siar-ui-sync.
+            return live.sync.command(&data).map(|()| Vec::new());
+        }
         let cmd = match name {
             "pair" => AppCommand::PairWithTicket {
                 ticket_text: utf8(data)?.trim().to_owned(),

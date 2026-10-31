@@ -1,0 +1,14 @@
+[package]
+name = "siar-abuse"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"
+description = "Part 28 §60-§67, §121: resource abuse resistance — cheap-validation-first admission, per-kind quotas, blocklist, message-request inbox, unknown file-offer policy, and un-forgeable emergency authority"
+
+[dependencies]
+thiserror.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+proptest.workspace = true

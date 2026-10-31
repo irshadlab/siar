@@ -33,6 +33,15 @@ impl TimelineState {
         }
     }
 
+    /// Rebuild a window from a snapshot (entries oldest-first). Used by a
+    /// UI that mirrors a core running in another process.
+    pub fn from_snapshot(entries: Vec<TimelineWindow>, has_more_history: bool) -> Self {
+        Self {
+            entries,
+            has_more_history,
+        }
+    }
+
     /// A freshly-sent or freshly-received message — always appended at
     /// the newest end, regardless of paging state.
     pub fn push_latest(&mut self, entry: TimelineWindow) {

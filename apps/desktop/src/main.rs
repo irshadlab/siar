@@ -1,6 +1,7 @@
 //! Siar desktop shell.
 //!
-//! Slint UI (`siar-ui-slint`) on top of the unchanged messaging core.
+//! Slint UI (`siar-ui-slint`) on top of the messaging core — embedded by
+//! default, or attached to a running `siar-daemon` with `--connect [SOCKET]`.
 //!
 //! Threading: Slint owns the main thread and its event loop; everything
 //! that touches `siar-messaging` / `siar-transport` runs on a separate
@@ -30,9 +31,10 @@ fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let connect = take_connect(&mut args);
     match cli::parse(&args) {
-        Ok(cli::Command::Run) => run_app(),
+        Ok(cli::Command::Run) => run_app(connect),
         Ok(command) => cli::execute(command),
         Err(why) => {
             eprintln!("{why}\n\n{}", cli::USAGE);
@@ -41,7 +43,23 @@ fn main() -> Result<()> {
     }
 }
 
-fn run_app() -> Result<()> {
+/// `--connect [SOCKET]`: attach this window to a running `siar-daemon`
+/// instead of embedding the core. Removes the flag so the normal parser never
+/// sees it.
+fn take_connect(args: &mut Vec<String>) -> Option<std::path::PathBuf> {
+    let i = args.iter().position(|a| a == "--connect")?;
+    args.remove(i);
+    let explicit = args.get(i).filter(|a| !a.starts_with('-')).cloned();
+    if explicit.is_some() {
+        args.remove(i);
+    }
+    Some(explicit.map_or_else(
+        || siar_runtime::ipc::default_socket_path("daemon"),
+        std::path::PathBuf::from,
+    ))
+}
+
+fn run_app(connect: Option<std::path::PathBuf>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("siar-core")
@@ -50,9 +68,11 @@ fn run_app() -> Result<()> {
     // One copy of the app per data folder. Two would write the same
     // database and key files; a backup also needs the folder quiet. The OS
     // releases the lock if we crash, so it can never get stuck.
+    // (A window attached to a daemon takes no lock: the daemon holds it.)
     let data_dir = siar_app_core::bootstrap::resolve_data_paths()
         .ok()
-        .map(|p| p.data_dir);
+        .map(|p| p.data_dir)
+        .filter(|_| connect.is_none());
     let lock = data_dir.as_deref().map(siar_backup::InstanceLock::acquire);
     let already_running = matches!(lock, Some(Err(siar_backup::LockError::Held)));
     if let Some(Err(siar_backup::LockError::Io(e))) = &lock {
@@ -97,6 +117,7 @@ fn run_app() -> Result<()> {
     .map_err(|e| anyhow!("couldn't create the window: {e}"))?;
 
     let hub = ui.hub();
+    let mut stop_remote = None;
     if already_running {
         // Show why, instead of silently doing nothing (or worse, starting a
         // second core on a database the first one is using).
@@ -106,13 +127,30 @@ fn run_app() -> Result<()> {
                     .into(),
             );
         });
+    } else if let Some(socket) = connect {
+        tracing::info!(socket = %socket.display(), "attaching to the Siar daemon");
+        stop_remote = Some(spawn_remote(&runtime, hub.state(), command_rx, socket));
     } else {
         spawn_core(&runtime, hub.state(), command_rx);
     }
 
     let result = ui.run().map_err(|e| anyhow!("UI event loop failed: {e}"));
+    if let Some(stop) = stop_remote {
+        let _ = stop.send(true);
+    }
     runtime.shutdown_timeout(Duration::from_secs(2));
     result
+}
+
+fn spawn_remote(
+    runtime: &tokio::runtime::Runtime,
+    hub: std::sync::Arc<siar_ui_slint::StateHub>,
+    command_rx: mpsc::Receiver<AppCommand>,
+    socket: std::path::PathBuf,
+) -> tokio::sync::watch::Sender<bool> {
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    runtime.spawn(siar_ui_sync::run_remote(socket, hub, command_rx, stop_rx));
+    stop
 }
 
 fn spawn_core(

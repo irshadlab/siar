@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 siar-app-core.workspace = true
+siar-runtime.workspace = true
+siar-ui-sync.workspace = true
 siar-ui-slint.workspace = true
 siar-ui-state.workspace = true
 siar-messaging.workspace = true

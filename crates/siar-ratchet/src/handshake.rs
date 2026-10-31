@@ -72,6 +72,29 @@ impl SignedPrekeySecret {
     pub const fn public(&self) -> [u8; 32] {
         self.public
     }
+
+    /// `secret ‖ public`, for storage. **Contains a secret**: encrypt at rest.
+    #[must_use]
+    pub fn to_bytes(&self) -> Zeroizing<[u8; 64]> {
+        let mut o = Zeroizing::new([0u8; 64]);
+        o[..32].copy_from_slice(&self.secret);
+        o[32..].copy_from_slice(&self.public);
+        o
+    }
+
+    /// Rebuild from [`Self::to_bytes`], refusing a pair whose halves do not
+    /// match (a corrupted or tampered record).
+    pub fn from_bytes(b: &[u8; 64]) -> Result<Self, HandshakeError> {
+        let mut secret = [0u8; 32];
+        secret.copy_from_slice(&b[..32]);
+        let mut public = [0u8; 32];
+        public.copy_from_slice(&b[32..]);
+        if PublicKey::from(&StaticSecret::from(secret)).to_bytes() != public {
+            secret.zeroize();
+            return Err(HandshakeError::UnknownPrekey);
+        }
+        Ok(Self { secret, public })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

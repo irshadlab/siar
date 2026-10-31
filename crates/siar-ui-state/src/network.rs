@@ -42,6 +42,11 @@ impl NetworkStatus {
         self.peers.insert(device, reachability);
     }
 
+    /// Every peer with a known reachability (for mirroring this state).
+    pub fn peers(&self) -> impl Iterator<Item = (DeviceId, PeerReachability)> + '_ {
+        self.peers.iter().map(|(d, r)| (*d, *r))
+    }
+
     pub fn peer(&self, device: DeviceId) -> Option<PeerReachability> {
         self.peers.get(&device).copied()
     }

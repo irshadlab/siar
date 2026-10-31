@@ -214,9 +214,7 @@ had 1697 passing / 0 failing at last count. Defects fixed:
   `ResourceError`, `Retryability`, `RetryClass`, `ResourceCause` and
   `UserMessage` are `#[non_exhaustive]`: downstream exhaustive `match`es
   need a wildcard arm once.
-
-
-  - 07 (round N+3): `HierarchicalSession::finish` honoured results for
+- 07 (round N+3): `HierarchicalSession::finish` honoured results for
   extensions never begun / unsupported, so a stray `Ok` made an
   unsupported extension usable and a forged fatal `Err` could terminate a
   healthy session (property test with the intended invariant found it).
@@ -521,3 +519,33 @@ Section fractions are deliberately not claimed; each line below names the spec s
 **Open — and why.**
 * **GUI as a daemon client.** `siar-ui-state` types and `AppCommand` have no serde; shipping `Slices` would couple the wire format to UI structs. Needs domain-level snapshot+delta (conversations, messages, delivery, security events). Until then window and daemon are mutually exclusive per data folder.
 * Windows named pipes (§180) · Android service hosting / iOS execution windows (§42-46) · remote admin over Iroh (§66-71,159-162) · multi-account *inside one daemon* (§80-84: the path/namespace layer exists, the account-scoped command ledger and per-account core do not) · plugin-host isolation (§120) · Unix FD passing (§63) · desktop notifications from the daemon (§151-158) · the iroh endpoint is not closed gracefully on exit (log line only) · `ctl` has no `--json`.
+
+
+## Window ⇄ daemon sync, and Part 28 phases 2 & 7 (this round)
+
+### `siar-ui-sync` — domain-level snapshot + delta (closes the "GUI as a daemon client" gap)
+**Why it was blocked, and what changed.** `siar-ui-state` types and `AppCommand` have no serde, and shipping `Slices` would have welded the wire format to UI structs. So the protocol carries **domain data in explicit wire sections** (`Core`, `Identity`, `Conversations`, `Contacts`+safety, `Network`, `Power`, one `Timeline` per conversation), reusing the domain types that already derive serde (`DeliveryState`, `MessageContent`, ids). Window-local state (selection, composer, filter, banner dismissals) is never sent and is never touched by a sync.
+* **Idempotent sections** — a snapshot and deltas may overlap harmlessly; per-section version + content hash, only changed sections are sent (tested).
+* **Bounded** — a timeline over 192 KiB is truncated at its *old* end and says `has_more`; frames split at 384 KiB; lists capped at 2000; event queues are the runtime's bounded ones, a slow window gets a `Gap` and re-snapshots.
+* **Consistent** — gap-free `seq` per daemon instance; a gap or a different `instance_id` forces a resync; snapshots are taken under the sync lock and paged under a short-lived id.
+* **Commands** cross as `WireCommand`, **re-validated on the daemon** (`MessageText` derives `Deserialize` without checking its invariants — a hostile client could otherwise send a 100 KB "message"; tested). Unsupported commands tell the user instead of vanishing.
+* **Live-verified:** 17 unit + 4 socket end-to-end tests (convergence, command forwarding, 40-conversation paged snapshot, reconnect to a *restarted daemon with different state*) and `scripts/daemon-sync-smoke.sh` (two real daemons; each side's state read back through the protocol with `ctl ui-state`).
+* `apps/desktop --connect [SOCKET]` attaches the Slint window to a running daemon (no data-folder lock taken). **Compiles; not run against a display in this sandbox.**
+**Not synced yet (named):** groups and invites, attachment *preview pixels*, security events, devices list, diagnostics, contact-safety *actions* beyond verify, group management commands. Until those sections exist the window attached to a daemon is a **messaging-only** client. No auto-start of the daemon from the window. The window shows a reconnect notice once per outage. Capture re-encodes all sections per diff (fine for hundreds of conversations; add dirty-tracking before thousands).
+**Observed, not caused here:** a first message into a never-opened chat shows `unread=0` on the receiving daemon — existing read-mark semantics ("no recorded mark ⇒ already read") in `siar-app-core`; matters for daemon-mode notifications.
+
+### Part 28 Phase 2 — `siar-ratchet` (28 tests, incl. 1,500-schedule randomized delivery property; clippy clean)
+`siar-crypto`'s own docs state its `Session` has **no forward secrecy** ("ratchet still unbuilt"), which contradicts Part 28's Definition of Done. This crate is that ratchet.
+* Double Ratchet (Signal spec) on audited primitives — X25519, HKDF-SHA256, HMAC-SHA256, ChaCha20-Poly1305. §12 forward secrecy and §13 post-compromise recovery are **tests, not claims**: a state stolen later cannot read earlier traffic; after the victim's next fresh key is answered, the thief goes blind (and the test records the honest two exposure windows before that).
+* §75-§77 crash safety by construction: `encrypt`/`decrypt` are **functional** and return the *next* state; a forged message cannot advance or corrupt anything (every single-byte flip rejected, state byte-identical afterwards); "persist then send" is the only way to use it.
+* §16-§17 replay and nonce safety; §60 bounded work (`MAX_SKIP`, 2000 stored keys, 32 remembered DH keys so a replay from an old epoch is rejected *before* any derivation); §46-§48 suite in every KDF label and AAD, unknown suite/version is an error, never a fallback.
+* §11/§15/§37-§41 handshake: signed prekey bundle verified against the **trusted** signer (a relay swapping the bundle, the prekey or the identity key is rejected), 3-DH with transcript binding, low-order keys refused, identity DH key *derived* from the device identity (key separation, §44).
+* §24/§103 `HighWaterMarks` detect a restore of a stale state (and a test shows why: re-encrypting from stale state reproduces the same key and nonce).
+* KATs: HKDF RFC 5869 A.1/A.3 and HMAC RFC 4231 #1 (cross-checked against an independent implementation); one **regression** vector, labelled as such.
+**NOT wired into `siar-messaging` — the messenger still uses the static-key `Session`, so users do not yet get forward secrecy.** Wiring is a wire-format change needing a session-upgrade/migration plan (initial-header carriage, prekey publication/rotation, persisted encrypted state, a high-water mark outside backups). **Not externally reviewed** (§123 phase 9). No header encryption; no one-time prekeys (first flight protected by the signed prekey only until the first reply).
+
+### Part 28 Phase 7 — `siar-abuse` (30 tests; clippy clean)
+§61 cheap-validation-first admission (length → version → blocklist → rate limit → duplicate → authorization; a blocked or oversize item **allocates nothing**), §62 six separate quotas per peer *and* a shared global budget for all unknown peers, §63 bounded message-request inbox (refuses new rather than evicting genuine ones), §64 file-offer policy (unknown peers never auto-download; large offers refused), §65 blocklist before any crypto (blocking revokes standing; unblocking never silently restores trust), §60 exponential pairing cooldown, §67 un-forgeable emergency authority (a remote *request* for critical is ignored; only a local grant counts). **§66 stated plainly:** this does not prevent Sybil identities; it bounds what all strangers together can spend (10 000 fresh identities get the same global allowance as one — tested). **Not wired** into transport/messaging ingress; defaults are reasoned, untuned.
+
+### Part 28 — what remains
+Already substantial in `siar-crypto`/`siar-identity-multidevice`/`siar-crypto-mls`/`siar-backup` (not re-audited here): identity & device trust, envelopes, replay window, clone detection, revocation, restore safety, key store, MLS groups. **Open:** wiring the ratchet and the abuse gate into the message path; §79-§80 security safe mode and §106-§110 security profiles; §93 cross-implementation test vectors beyond the primitives above; fuzz targets for envelope/handshake parsing; external review; side-channel and memory-hygiene review (zeroization is applied to ratchet state, not audited workspace-wide).

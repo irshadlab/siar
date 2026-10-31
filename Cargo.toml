@@ -18,6 +18,7 @@ members = [
     "crates/siar-ui-model",
     "crates/siar-ui-sync",
     "crates/siar-ratchet",
+    "crates/siar-secure-session",
     "crates/siar-abuse",
     "crates/siar-app-core",
     "crates/siar-runtime",
@@ -96,6 +97,7 @@ siar-power = { path = "crates/siar-power" }
 siar-ui-model = { path = "crates/siar-ui-model" }
 siar-ui-sync = { path = "crates/siar-ui-sync" }
 siar-ratchet = { path = "crates/siar-ratchet" }
+siar-secure-session = { path = "crates/siar-secure-session" }
 siar-abuse = { path = "crates/siar-abuse" }
 siar-app-core = { path = "crates/siar-app-core" }
 siar-runtime = { path = "crates/siar-runtime" }

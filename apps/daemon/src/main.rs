@@ -297,6 +297,9 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     siar_runtime::service::sd_notify("STOPPING=1");
     drop(cmd_tx); // lets the core's command loop finish
     let aborted = runtime.shutdown(runtime.shutdown_grace()).await;
+    if let Some(live) = app.live.get() {
+        live.core.shutdown_transport().await;
+    }
     if let Some(dir) = socket_dir.as_deref() {
         siar_runtime::instance::remove_meta(dir);
     }

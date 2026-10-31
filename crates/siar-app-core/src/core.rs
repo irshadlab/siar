@@ -233,6 +233,17 @@ impl Core {
         self.hub.clone()
     }
 
+    /// Leave the network politely (idempotent). Hosts that keep command
+    /// senders alive past shutdown — a daemon — call this directly.
+    pub async fn shutdown_transport(&self) {
+        if tokio::time::timeout(Duration::from_secs(5), self.service.shutdown())
+            .await
+            .is_err()
+        {
+            tracing::warn!("transport shutdown timed out; exiting anyway");
+        }
+    }
+
     /// Part 13: the gate deferred background work waits behind.
     #[must_use]
     pub fn power_gate(&self) -> &Arc<PowerGate> {
@@ -924,6 +935,14 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                 spawn_preview(core.clone(), admission, peer, message_id, reference);
             }
         }
+    }
+    // The UI (or daemon) is done with us: leave the network politely so peers
+    // see an orderly close rather than waiting out a timeout.
+    if tokio::time::timeout(Duration::from_secs(5), core.service.shutdown())
+        .await
+        .is_err()
+    {
+        tracing::warn!("transport shutdown timed out; exiting anyway");
     }
 }
 

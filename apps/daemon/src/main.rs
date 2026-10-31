@@ -27,6 +27,7 @@ usage:
   siar-daemon ctl [--socket PATH] <command>
       status | health | power | metrics | summary | ticket | conversations
       audit                   recent admin actions (kinds only), Admin
+      ui-state                what a window would see (via the sync protocol)
       messages <conversation-id>
       pair <ticket>
       send <conversation-id> <text...>
@@ -189,6 +190,11 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(64);
     let hub_tx = cmd_tx.clone();
     let live = app.live.clone();
+    let (bus, lifecycle, supervisor) = (
+        runtime.bus.clone(),
+        runtime.lifecycle.clone(),
+        runtime.supervisor.clone(),
+    );
     runtime
         .start(
             async move {
@@ -202,9 +208,23 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
                 let boot = b2.lock().unwrap().take().ok_or("no bootstrap")?;
                 let hub = Arc::new(siar_ui_model::StateHub::new(hub_tx.clone()));
                 let core = siar_app_core::core::start(boot, hub).await;
+                // Part 16 §25: a window attaches to this — domain-level
+                // snapshot + deltas, never UI structs.
+                let sync = siar_ui_sync::UiSyncService::new(core.state(), bus.clone());
+                {
+                    let (svc, lc) = (sync.clone(), lifecycle.clone());
+                    supervisor.spawn("ui-sync", false, RestartPolicy::default(), move || {
+                        let (svc, lc) = (svc.clone(), lc.clone());
+                        async move {
+                            svc.run(lc).await;
+                            Ok(())
+                        }
+                    });
+                }
                 let _ = live.set(app::Live {
                     core: core.clone(),
                     commands: hub_tx,
+                    sync,
                 });
                 tokio::spawn(siar_app_core::core::command_loop(core, cmd_rx));
                 Ok::<(), String>(())
@@ -361,6 +381,15 @@ async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
         "audit" => Request::Query(Query::Audit),
         "summary" | "ticket" | "conversations" => app_query(&args[0], ""),
         "messages" => app_query("messages", &rest),
+        "ui-state" => {
+            outln!(
+                "{}",
+                siar_ui_sync::client::snapshot_summary(socket)
+                    .await
+                    .map_err(|e| anyhow!(e))?
+            );
+            return Ok(());
+        }
         "pair" => Request::Command {
             id: CommandId(uuid::Uuid::new_v4().as_u128()),
             cmd: Command::App {

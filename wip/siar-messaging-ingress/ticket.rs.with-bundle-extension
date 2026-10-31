@@ -1,0 +1,171 @@
+//! Phase-1 pairing ticket (see module docs on `lib.rs`).
+//!
+//! Encodes everything the other side needs to both reach us over iroh
+//! *and* establish an application-E2EE session with us: the transport
+//! address, our X25519 public key (for ECDH), and our Ed25519 verifying
+//! key (for future signature verification — unused by `Session` itself
+//! yet, carried now so Phase 2 doesn't need a wire-format break to add
+//! signing).
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerTicket {
+    pub endpoint_addr: iroh::EndpointAddr,
+    pub x25519_public: [u8; 32],
+    pub ed25519_verifying: [u8; 32],
+}
+
+#[derive(Debug, Error)]
+pub enum TicketError {
+    #[error("ticket is not valid hex: {0}")]
+    Hex(String),
+    #[error("ticket could not be decoded: {0}")]
+    Postcard(#[from] postcard::Error),
+}
+
+impl PeerTicket {
+    pub fn encode(&self) -> String {
+        let bytes = postcard::to_allocvec(self).expect("PeerTicket always serializes");
+        to_hex(&bytes)
+    }
+
+    pub fn decode(s: &str) -> Result<Self, TicketError> {
+        let bytes = from_hex(s).map_err(TicketError::Hex)?;
+        Ok(postcard::from_bytes(&bytes)?)
+    }
+}
+
+/// Marks the optional extension block that follows the v1 ticket body.
+const EXT_PREKEY_BUNDLE: u8 = 0xB1;
+
+impl PeerTicket {
+    /// The v1 ticket followed by an extension block carrying the owner's
+    /// **signed prekey bundle** (Part 28 §11: how a peer learns the key a
+    /// forward-secret session can start from).
+    ///
+    /// Backward compatible in both directions: a v1 reader decodes the ticket
+    /// and ignores the trailing block, and [`Self::decode_with_bundle`]
+    /// accepts v1 tickets (no bundle).
+    pub fn encode_with_bundle(&self, bundle: &siar_ratchet::PrekeyBundle) -> String {
+        let mut bytes = postcard::to_allocvec(self).expect("PeerTicket always serializes");
+        bytes.push(EXT_PREKEY_BUNDLE);
+        bytes.extend_from_slice(&postcard::to_allocvec(bundle).expect("PrekeyBundle always serializes"));
+        to_hex(&bytes)
+    }
+
+    /// Decode a ticket and, if present and well-formed, its prekey bundle.
+    /// An unknown or malformed extension is ignored rather than failing the
+    /// whole ticket (forward compatibility); callers that *require* a bundle
+    /// check for `None`. The bundle is **not verified here** — it must be
+    /// checked against the signer the user trusts (`PrekeyBundle::verify`).
+    pub fn decode_with_bundle(s: &str) -> Result<(Self, Option<siar_ratchet::PrekeyBundle>), TicketError> {
+        let bytes = from_hex(s).map_err(TicketError::Hex)?;
+        let (ticket, rest) = postcard::take_from_bytes::<Self>(&bytes)?;
+        let bundle = match rest.split_first() {
+            Some((&EXT_PREKEY_BUNDLE, body)) => postcard::from_bytes(body).ok(),
+            _ => None,
+        };
+        Ok((ticket, bundle))
+    }
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+fn from_hex(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return Err("odd-length hex string".to_string());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroh::EndpointAddr;
+
+    #[test]
+    fn round_trips_through_text_encoding() {
+        use std::str::FromStr;
+        let hex = format!("{:02x}", 7u8).repeat(32);
+        let secret = iroh::SecretKey::from_str(&hex).expect("valid 64-char hex test secret key");
+        let id = secret.public();
+        let ticket = PeerTicket {
+            endpoint_addr: EndpointAddr::new(id),
+            x25519_public: [1u8; 32],
+            ed25519_verifying: [2u8; 32],
+        };
+
+        let encoded = ticket.encode();
+        let decoded = PeerTicket::decode(&encoded).unwrap();
+        assert_eq!(decoded.endpoint_addr.id, id);
+        assert_eq!(decoded.x25519_public, [1u8; 32]);
+    }
+
+    fn sample() -> PeerTicket {
+        use std::str::FromStr;
+        let secret = iroh::SecretKey::from_str(&format!("{:02x}", 7u8).repeat(32)).unwrap();
+        PeerTicket { endpoint_addr: EndpointAddr::new(secret.public()), x25519_public: [1u8; 32], ed25519_verifying: [2u8; 32] }
+    }
+
+    fn bundle() -> (siar_crypto::DeviceIdentity, siar_ratchet::PrekeyBundle) {
+        let id = siar_crypto::DeviceIdentity::generate();
+        let (_s, b) = siar_ratchet::new_signed_prekey(&id, &mut rand_core::OsRng);
+        (id, b)
+    }
+
+    #[test]
+    fn a_ticket_with_a_bundle_round_trips_and_the_bundle_still_verifies() {
+        let (id, b) = bundle();
+        let text = sample().encode_with_bundle(&b);
+        let (t, got) = PeerTicket::decode_with_bundle(&text).unwrap();
+        assert_eq!(t, sample());
+        let got = got.expect("bundle present");
+        assert_eq!(got, b);
+        assert!(got.verify(&id.verifying_key()).is_ok());
+    }
+
+    #[test]
+    fn old_readers_still_read_new_tickets_and_new_readers_read_old_ones() {
+        let (_id, b) = bundle();
+        let extended = sample().encode_with_bundle(&b);
+        // A v1 reader (the existing `decode`) ignores the extension.
+        assert_eq!(PeerTicket::decode(&extended).unwrap(), sample());
+        // A v2 reader accepts a v1 ticket and reports no bundle.
+        let (t, none) = PeerTicket::decode_with_bundle(&sample().encode()).unwrap();
+        assert_eq!((t, none), (sample(), None));
+    }
+
+    #[test]
+    fn a_garbled_or_unknown_extension_never_breaks_the_ticket() {
+        let v1 = sample().encode();
+        for tail in ["b1", "b1ff", "b1000102", "07", "ffffffff"] {
+            let (t, b) = PeerTicket::decode_with_bundle(&format!("{v1}{tail}")).unwrap();
+            assert_eq!(t, sample());
+            assert!(b.is_none(), "tail {tail}");
+        }
+    }
+
+    #[test]
+    fn a_bundle_tampered_inside_a_ticket_fails_verification_not_decoding() {
+        let (id, b) = bundle();
+        let mut bytes = from_hex(&sample().encode_with_bundle(&b)).unwrap();
+        let n = bytes.len();
+        bytes[n - 70] ^= 1; // inside the signature region
+        let (_t, got) = PeerTicket::decode_with_bundle(&to_hex(&bytes)).unwrap();
+        if let Some(g) = got {
+            assert!(g.verify(&id.verifying_key()).is_err(), "a relay editing the ticket is caught at verification");
+        }
+    }
+}

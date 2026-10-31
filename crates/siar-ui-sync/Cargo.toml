@@ -1,0 +1,20 @@
+[package]
+name = "siar-ui-sync"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"
+description = "Domain-level snapshot+delta sync between a core (daemon) and a window. Carries domain data, never UI structs; sections are versioned, bounded and idempotent."
+
+[dependencies]
+siar-domain.workspace = true
+siar-ui-state.workspace = true
+siar-ui-model.workspace = true
+siar-runtime.workspace = true
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+blake3.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

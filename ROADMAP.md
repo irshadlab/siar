@@ -562,4 +562,13 @@ Ticket-carried prekey bundle and the ingress gate in front of `handle_incoming`.
 
 **Not started:** wiring `SecureSessions` into `MessageService`; the **message storage format change** a ratchet requires (history is stored as session ciphertext and re-decrypted on demand — impossible once keys are deleted on use); extra sync sections; remote admin; multi-account in one daemon; plugin isolation; daemon notifications.
 
-**Open architectural decision (discussed, not decided):** whether 1:1 uses OpenMLS (2-member groups), vodozemac, or this hand-written ratchet — and, more broadly, which hand-written mechanisms to replace with maintained crates (see the discussion in the hand-off message). Until decided, **`siar-ratchet`/`siar-secure-session` must not be wired into the message path.**
+**Decided (2026-11-02): 1:1 uses OpenMLS** (two-member groups, `siar-crypto-mls::pairwise`), post-quantum suite `MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44` (hybrid ML-KEM-768+X25519 key exchange, ML-DSA-44 signatures; draft code points). DTN adaptations: alternating commit turns (creator at even epochs, peer at odd) so commits never collide; bounded deferral of messages from future epochs; `max_past_epochs=4`, out-of-order tolerance 512, forward distance 4096; replayed commits reported as duplicates. 10 tests, clippy clean. **Not yet wired into the message path** (no real-world run yet; ML-DSA key/signature sizes ≈1.3 KB/2.4 KB are unmeasured on BLE).
+**`siar-ratchet` and `siar-secure-session` are deliberately KEPT** (owner's decision): nobody knows yet how OpenMLS 1:1 behaves in the field, and they are the fallback. They stay unwired, tested and maintained; revisit after real-world use of the pairwise path.
+
+### Crate swaps (2026-11-02)
+* `interprocess` 2.4 replaces the Unix-only IPC server (one path for Unix socket / Windows named pipe; peer creds via `peer_creds()`: euid on Unix, pid only on Windows → Windows relies on an owner-only pipe DACL, **uncompiled/untested on Windows**).
+* `tokio-util`: `CancellationToken` (runtime lifecycle, `siar-calls`, `siar-ui-sync`, desktop stop) and `TaskTracker` (supervisor drain). Restart/backoff/breaker policy stays ours. tokio floor raised to 1.54 (interprocess needs it, undeclared upstream).
+* `sd-notify` 0.5 replaces hand-rolled notify (Unix-only; now honours `WATCHDOG_PID`).
+* `service-manager` + `clap` in daemon/emergency-node were already present; `windows-service` dispatcher still NOT built (install refuses on Windows). `apps/cli` still hand-parses args.
+* Bumps: openmls 0.9.2 (+ traits/rust_crypto/basic_credential 0.6.0, sqlite_storage 0.3.0), stoolap 0.4.2.
+* Not verified in the sandbox (disk): full `siar-daemon`/`siar-messaging`/`siar-event-log` test runs, `apps/desktop` compile, `workspace-hack` regeneration.

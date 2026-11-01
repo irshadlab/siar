@@ -30,7 +30,7 @@ async-trait.workspace = true
 # Backing `stoolap_projections::StoolapConversationSummaryProjection` —
 # same crate, same feature set, `siar-event-log`'s own
 # `stoolap_store`/`stoolap_checkpoint_store` already use.
-stoolap = { version = "0.4", default-features = false, features = ["parallel"] }
+stoolap = { version = "0.4.2", default-features = false, features = ["parallel"] }
 uuid.workspace = true
 x25519-dalek.workspace = true
 zeroize.workspace = true

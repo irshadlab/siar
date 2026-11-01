@@ -59,6 +59,8 @@ pub enum MlsGroupError {
     Process(String),
     #[error("failed to merge commit: {0}")]
     Merge(String),
+    #[error("self-update failed: {0}")]
+    Update(String),
     #[error("failed to serialize MLS message: {0}")]
     Serialize(String),
     #[error("failed to deserialize MLS message: {0}")]
@@ -132,6 +134,46 @@ pub struct MlsGroupSession<P: OpenMlsProvider = OpenMlsRustCrypto> {
     signature_keys: SignatureKeyPair,
 }
 
+/// Per-group tunables. [`Default`] is exactly what plain group chats have
+/// always used; [`GroupParams::pairwise_dtn`] is for 1:1 sessions carried
+/// over a delay-tolerant network.
+#[derive(Debug, Clone, Copy)]
+pub struct GroupParams {
+    pub ciphersuite: openmls_traits::types::Ciphersuite,
+    /// How many application messages *behind* the newest one a sender's
+    /// ratchet will still decrypt (reordering window).
+    pub out_of_order_tolerance: u32,
+    /// How far *ahead* a sender's ratchet may jump (gap = lost messages).
+    pub maximum_forward_distance: u32,
+    /// Past epochs whose secrets are kept so late messages still decrypt.
+    pub max_past_epochs: usize,
+}
+
+impl Default for GroupParams {
+    fn default() -> Self {
+        Self {
+            ciphersuite: CIPHERSUITE,
+            out_of_order_tolerance: 5,
+            maximum_forward_distance: 1000,
+            max_past_epochs: 0,
+        }
+    }
+}
+
+impl GroupParams {
+    /// Post-quantum hybrid suite, with windows sized for store-carry-forward
+    /// delivery (hours of reordering, long gaps) instead of a live socket.
+    #[must_use]
+    pub fn pairwise_dtn() -> Self {
+        Self {
+            ciphersuite: crate::PQ_CIPHERSUITE,
+            out_of_order_tolerance: 512,
+            maximum_forward_distance: 4096,
+            max_past_epochs: 4,
+        }
+    }
+}
+
 impl<P: OpenMlsProvider> MlsGroupSession<P> {
     /// Creates a brand-new group with `founder_identity` as its sole
     /// member — book_code.rs anchors `mls_group_create_config_example`
@@ -142,8 +184,23 @@ impl<P: OpenMlsProvider> MlsGroupSession<P> {
         provider: P,
         founder_identity: &crate::MlsIdentity,
     ) -> Result<Self, MlsGroupError> {
+        Self::create_with(provider, founder_identity, GroupParams::default())
+    }
+
+    /// [`Self::create`] with explicit [`GroupParams`]. `founder_identity`
+    /// must have been generated for `params.ciphersuite`.
+    pub fn create_with(
+        provider: P,
+        founder_identity: &crate::MlsIdentity,
+        params: GroupParams,
+    ) -> Result<Self, MlsGroupError> {
         let config = MlsGroupCreateConfig::builder()
-            .ciphersuite(CIPHERSUITE)
+            .ciphersuite(params.ciphersuite)
+            .max_past_epochs(params.max_past_epochs)
+            .sender_ratchet_configuration(SenderRatchetConfiguration::new(
+                params.out_of_order_tolerance,
+                params.maximum_forward_distance,
+            ))
             // Without this a Welcome does not carry the ratchet tree, and
             // `join_from_welcome` (which has no out-of-band tree to pass)
             // fails with `MissingRatchetTree`: no member could ever have
@@ -195,7 +252,29 @@ impl<P: OpenMlsProvider> MlsGroupSession<P> {
         signature_keys: SignatureKeyPair,
         welcome_bytes: &[u8],
     ) -> Result<Self, MlsGroupError> {
-        let config = MlsGroupJoinConfig::builder().build();
+        Self::join_from_welcome_with(
+            provider,
+            signature_keys,
+            welcome_bytes,
+            GroupParams::default(),
+        )
+    }
+
+    /// [`Self::join_from_welcome`] with the same [`GroupParams`] windows the
+    /// creator used (they are local settings, not carried in the Welcome).
+    pub fn join_from_welcome_with(
+        provider: P,
+        signature_keys: SignatureKeyPair,
+        welcome_bytes: &[u8],
+        params: GroupParams,
+    ) -> Result<Self, MlsGroupError> {
+        let config = MlsGroupJoinConfig::builder()
+            .max_past_epochs(params.max_past_epochs)
+            .sender_ratchet_configuration(SenderRatchetConfiguration::new(
+                params.out_of_order_tolerance,
+                params.maximum_forward_distance,
+            ))
+            .build();
 
         let message_in = MlsMessageIn::tls_deserialize_exact(welcome_bytes)
             .map_err(|e| MlsGroupError::Deserialize(format!("{e:?}")))?;
@@ -249,10 +328,12 @@ impl<P: OpenMlsProvider> MlsGroupSession<P> {
         else {
             return Ok(None);
         };
+        // The signature scheme follows the *group's* suite (Ed25519 for chats,
+        // ML-DSA for 1:1), never an assumed constant.
         let signature_keys = SignatureKeyPair::read(
             provider.storage(),
             signature_public_key,
-            CIPHERSUITE.signature_algorithm(),
+            group.ciphersuite().signature_algorithm(),
         )
         .ok_or_else(|| MlsGroupError::Load("the group's signing key is missing".to_string()))?;
         Ok(Some(Self {
@@ -471,6 +552,56 @@ impl<P: OpenMlsProvider> MlsGroupSession<P> {
         // check: two sessions agree on this iff they're at the same
         // epoch with the same key material.
         self.group.epoch_authenticator().as_slice().to_vec()
+    }
+
+    /// The ciphersuite this group runs.
+    #[must_use]
+    pub fn ciphersuite(&self) -> openmls_traits::types::Ciphersuite {
+        self.group.ciphersuite()
+    }
+
+    /// Current epoch number.
+    #[must_use]
+    pub fn epoch(&self) -> u64 {
+        self.group.epoch().as_u64()
+    }
+
+    /// This member's leaf index in the tree (0 = the creator).
+    #[must_use]
+    pub fn own_leaf_index(&self) -> u32 {
+        self.group.own_leaf_index().u32()
+    }
+
+    /// Refresh this member's own key material (post-compromise security): a
+    /// self-update commit, merged locally at once. Returns the commit bytes
+    /// for the other members.
+    pub fn self_update(&mut self) -> Result<Vec<u8>, MlsGroupError> {
+        let bundle = self
+            .group
+            .self_update(
+                &self.provider,
+                &self.signature_keys,
+                LeafNodeParameters::default(),
+            )
+            .map_err(|e| MlsGroupError::Update(format!("{e:?}")))?;
+        self.group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| MlsGroupError::Merge(format!("{e:?}")))?;
+        bundle
+            .into_commit()
+            .to_bytes()
+            .map_err(|e| MlsGroupError::Serialize(format!("{e:?}")))
+    }
+
+    /// `(epoch, is_commit)` of a wire message without processing it — what a
+    /// delay-tolerant receiver needs to decide "now, later, or never".
+    pub fn peek(bytes: &[u8]) -> Result<(u64, bool), MlsGroupError> {
+        let m = MlsMessageIn::tls_deserialize_exact(bytes)
+            .map_err(|e| MlsGroupError::Deserialize(format!("{e:?}")))?;
+        let p: ProtocolMessage = m
+            .try_into_protocol_message()
+            .map_err(|_| MlsGroupError::Process("not a protocol message".into()))?;
+        Ok((p.epoch().as_u64(), p.content_type() == ContentType::Commit))
     }
 
     pub fn member_count(&self) -> usize {

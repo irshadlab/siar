@@ -16,7 +16,7 @@ async-trait.workspace = true
 # same feature set, as `siar-storage`'s own dependency declaration —
 # not pulled in via `siar-storage` itself (see that module's own doc
 # comment on why this crate stays independent of that one).
-stoolap = { version = "0.4", default-features = false, features = ["parallel"] }
+stoolap = { version = "0.4.2", default-features = false, features = ["parallel"] }
 base64.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 

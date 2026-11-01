@@ -215,8 +215,7 @@ had 1697 passing / 0 failing at last count. Defects fixed:
   `UserMessage` are `#[non_exhaustive]`: downstream exhaustive `match`es
   need a wildcard arm once.
 - 07 (round N+3): `HierarchicalSession::finish` honoured results for
-  extensions never begun / unsupported, so a stray `Ok` made an
-  unsupported extension usable and a forged fatal `Err` could terminate a
+  extensions never begun / unsupported, so a stray `Ok` made an  unsupported extension usable and a forged fatal `Err` could terminate a
   healthy session (property test with the intended invariant found it).
   Also noted: a generic bitset intersection is wrong for directional
   capabilities (AND keeps "send" between two send-only peers); they use

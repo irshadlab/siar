@@ -14,7 +14,8 @@ use siar_runtime::protocol::{Command, Query, Reply, Role};
 use siar_runtime::{CommandId, Delivery};
 use siar_ui_model::{NoticeLevel, StateHub};
 use siar_ui_state::AppCommand;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::apply::{apply_delta, apply_snapshot, ClientCursor, Verdict};
 use crate::commands::{WireCommand, WireCommandError};
@@ -31,20 +32,20 @@ enum SessionError {
     Closed,
 }
 
-/// Run until `shutdown` flips or the UI's command channel closes.
+/// Run until `shutdown` is cancelled or the UI's command channel closes.
 pub async fn run_remote(
     socket: PathBuf,
     hub: Arc<StateHub>,
     mut commands: mpsc::Receiver<AppCommand>,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: CancellationToken,
 ) {
     let mut delay = Duration::from_millis(250);
     let mut told_user = false;
     loop {
-        if *shutdown.borrow() {
+        if shutdown.is_cancelled() {
             return;
         }
-        match session(&socket, &hub, &mut commands, &mut shutdown, &mut told_user).await {
+        match session(&socket, &hub, &mut commands, &shutdown, &mut told_user).await {
             Ok(()) => return, // clean stop
             Err(e) => {
                 tracing::warn!(error = %e, "background-service session ended");
@@ -59,7 +60,7 @@ pub async fn run_remote(
         }
         tokio::select! {
             () = tokio::time::sleep(delay) => {}
-            _ = shutdown.changed() => return,
+            () = shutdown.cancelled() => return,
         }
         delay = (delay * 2).min(Duration::from_secs(5));
     }
@@ -69,11 +70,11 @@ async fn session(
     socket: &Path,
     hub: &Arc<StateHub>,
     commands: &mut mpsc::Receiver<AppCommand>,
-    shutdown: &mut watch::Receiver<bool>,
+    shutdown: &CancellationToken,
     told_user: &mut bool,
 ) -> Result<(), SessionError> {
-    let mut sub = IpcClient::connect_unix(socket, Role::Observer, "window-events").await?;
-    let mut cmd = IpcClient::connect_unix(socket, Role::Operator, "window").await?;
+    let mut sub = IpcClient::connect_local(socket, Role::Observer, "window-events").await?;
+    let mut cmd = IpcClient::connect_local(socket, Role::Operator, "window").await?;
     sub.subscribe(vec![SYNC_TOPIC], 1024).await?;
 
     let mut cursor = ClientCursor::default();
@@ -92,7 +93,7 @@ async fn session(
 
     let result = loop {
         tokio::select! {
-            _ = shutdown.changed() => break Ok(()),
+            () = shutdown.cancelled() => break Ok(()),
             d = rx.recv() => match d {
                 None => break Err(SessionError::Closed),
                 Some(Delivery::Gap { .. }) => {
@@ -187,7 +188,7 @@ fn rand_id() -> u128 {
 pub async fn snapshot_summary(socket: &Path) -> Result<String, String> {
     let (tx, _rx) = mpsc::channel(1);
     let hub = Arc::new(StateHub::new(tx));
-    let mut cmd = IpcClient::connect_unix(socket, Role::Observer, "ui-state")
+    let mut cmd = IpcClient::connect_local(socket, Role::Observer, "ui-state")
         .await
         .map_err(|e| e.to_string())?;
     let mut cursor = ClientCursor::default();

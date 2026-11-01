@@ -5,12 +5,13 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use siar_domain::{ConversationId, DeliveryState, MessageContent, MessageId, MessageText};
-use siar_runtime::ipc::{serve_unix, ServerConfig};
+use siar_runtime::ipc::{serve_local, ServerConfig};
 use siar_runtime::{AppService, BoxFuture, Runtime, RuntimeError};
 use siar_ui_model::{NoticeLevel, StateHub};
 use siar_ui_state::{AppCommand, ConversationKind, ConversationSummary, TimelineWindow};
 use siar_ui_sync::{capture, run_remote, UiSyncService};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default)]
 struct SyncApp(Arc<OnceLock<Arc<UiSyncService>>>);
@@ -61,7 +62,7 @@ async fn start_daemon(sock: &std::path::Path) -> Daemon {
     let _ = app.0.set(svc.clone());
     tokio::spawn(svc.run(rt.lifecycle.clone()));
     let (rt2, p2) = (rt.clone(), sock.to_path_buf());
-    let serve = tokio::spawn(async move { serve_unix(rt2, &p2, ServerConfig::default()).await });
+    let serve = tokio::spawn(async move { serve_local(rt2, &p2, ServerConfig::default()).await });
     for _ in 0..200 {
         if sock.exists() {
             break;
@@ -130,14 +131,15 @@ async fn converged(a: &StateHub, b: &StateHub) -> bool {
 
 struct Window {
     hub: Arc<StateHub>,
-    stop: watch::Sender<bool>,
+    stop: CancellationToken,
     task: tokio::task::JoinHandle<()>,
 }
 
 fn open_window(sock: &std::path::Path) -> Window {
     let (tx, rx) = mpsc::channel(64);
     let hub = Arc::new(StateHub::new(tx));
-    let (stop, stop_rx) = watch::channel(false);
+    let stop = CancellationToken::new();
+    let stop_rx = stop.clone();
     let task = tokio::spawn(run_remote(sock.to_path_buf(), hub.clone(), rx, stop_rx));
     Window { hub, stop, task }
 }
@@ -161,7 +163,7 @@ async fn window_mirrors_the_daemon_and_follows_live_changes() {
     assert_eq!(w.hub.read(|s| s.selected), Some(a));
     assert_eq!(w.hub.read(|s| s.timelines[&a].visible().count()), 6);
 
-    let _ = w.stop.send(true);
+    w.stop.cancel();
     let _ = w.task.await;
     d.rt.shutdown(Duration::from_secs(1)).await;
 }
@@ -201,7 +203,7 @@ async fn commands_cross_the_boundary_validated_and_unsupported_ones_say_so() {
     assert_eq!(n.level, NoticeLevel::Warning);
     assert!(d.commands.try_recv().is_err());
 
-    let _ = w.stop.send(true);
+    w.stop.cancel();
     let _ = w.task.await;
     d.rt.shutdown(Duration::from_secs(1)).await;
 }
@@ -214,7 +216,7 @@ async fn a_snapshot_too_big_for_one_frame_is_paged_and_still_converges() {
     let w = open_window(&path);
     assert!(converged(&d.hub, &w.hub).await, "multi-page snapshot");
     assert_eq!(w.hub.read(|s| s.conversations.ordered().len()), 40);
-    let _ = w.stop.send(true);
+    w.stop.cancel();
     let _ = w.task.await;
     d.rt.shutdown(Duration::from_secs(1)).await;
 }
@@ -251,7 +253,7 @@ async fn the_window_reconnects_to_a_restarted_daemon_and_adopts_its_state() {
     );
     assert_eq!(w.hub.read(|s| s.conversations.ordered().len()), 5);
 
-    let _ = w.stop.send(true);
+    w.stop.cancel();
     let _ = w.task.await;
     d2.rt.shutdown(Duration::from_secs(1)).await;
 }

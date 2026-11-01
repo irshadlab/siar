@@ -137,7 +137,7 @@ slint = { version = "=1.16.1", default-features = false }
 slint-build = "=1.16.1"
 
 # --- pure-Rust, zero-overhead-first choices ---
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }
 # Lets `siar-testkit::mesh_sim` call `siar_dtn_bundle`'s async
 # `BundleStore` trait synchronously via `block_on` — everything that
 # trait does here resolves immediately (no real disk/network I/O), so
@@ -176,7 +176,7 @@ rand_core = { version = "0.6", features = ["std"] }
 blake3 = "1"
 
 # storage: pure-Rust embedded SQL (replaces SQLite/rusqlite per explicit instruction)
-stoolap = "0.4"
+stoolap = "0.4.2"
 # stoolap 0.4's `Value`/`ToParam`/`FromValue` have no blob variant yet —
 # `BLOB` columns are parsed but stored as `DataType::Text` internally
 # (confirmed in stoolap's own `executor/ddl.rs`). Ciphertext therefore

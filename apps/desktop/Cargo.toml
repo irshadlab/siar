@@ -18,6 +18,7 @@ siar-ui-state.workspace = true
 siar-messaging.workspace = true
 siar-backup.workspace = true
 tokio.workspace = true
+tokio-util = { version = "0.7", default-features = false }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true

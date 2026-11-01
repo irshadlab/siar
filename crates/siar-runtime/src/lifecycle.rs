@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RuntimeState {
@@ -101,9 +102,16 @@ pub struct IllegalTransition {
 }
 
 /// Shared, observable lifecycle. Cloning shares the same state.
+///
+/// The *state machine* (table, barrier, observable `watch`) is ours; the
+/// one-way "shutdown has been requested" signal that every worker, listener
+/// and connection waits on is a [`CancellationToken`] — a maintained
+/// primitive with child tokens and cancel-safe waiting, instead of a
+/// re-implemented wait loop over the state channel.
 #[derive(Debug, Clone)]
 pub struct Lifecycle {
     tx: std::sync::Arc<watch::Sender<RuntimeState>>,
+    shutdown: CancellationToken,
 }
 
 impl Default for Lifecycle {
@@ -117,6 +125,7 @@ impl Lifecycle {
     pub fn new() -> Self {
         Self {
             tx: std::sync::Arc::new(watch::channel(RuntimeState::Starting).0),
+            shutdown: CancellationToken::new(),
         }
     }
 
@@ -144,6 +153,11 @@ impl Lifecycle {
                 false
             }
         });
+        // `ShuttingDown` is the only way into `Stopped` and is never left, so
+        // cancelling on first entry is exact; cancelling twice is a no-op.
+        if result.is_ok() && matches!(to, RuntimeState::ShuttingDown | RuntimeState::Stopped) {
+            self.shutdown.cancel();
+        }
         result
     }
 
@@ -152,20 +166,19 @@ impl Lifecycle {
         let _ = self.transition(RuntimeState::ShuttingDown);
     }
 
-    /// Resolves when the runtime is `ShuttingDown` or `Stopped`.
+    /// Resolves when the runtime is `ShuttingDown` or `Stopped`. Cancel-safe,
+    /// and ready immediately if shutdown was requested before the call.
     pub async fn shutdown_requested(&self) {
-        let mut rx = self.subscribe();
-        loop {
-            if matches!(
-                *rx.borrow_and_update(),
-                RuntimeState::ShuttingDown | RuntimeState::Stopped
-            ) {
-                return;
-            }
-            if rx.changed().await.is_err() {
-                return;
-            }
-        }
+        self.shutdown.cancelled().await;
+    }
+
+    /// A token that is cancelled when shutdown begins. Hand a
+    /// [`CancellationToken::child_token`] of it to any component that needs
+    /// to be cancelled *separately* as well (e.g. one connection) without
+    /// being able to cancel the runtime.
+    #[must_use]
+    pub fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown.clone()
     }
 }
 
@@ -242,5 +255,37 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_requested_is_ready_if_shutdown_already_began() {
+        let l = Lifecycle::new();
+        l.begin_shutdown();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            l.shutdown_requested(),
+        )
+        .await
+        .expect("late waiters must not hang");
+    }
+
+    #[tokio::test]
+    async fn child_tokens_cancel_with_the_runtime_but_not_the_other_way() {
+        let l = Lifecycle::new();
+        let (a, b) = (
+            l.shutdown_token().child_token(),
+            l.shutdown_token().child_token(),
+        );
+        a.cancel(); // one connection going away…
+        assert!(!b.is_cancelled() && !l.shutdown_token().is_cancelled());
+        l.begin_shutdown(); // …versus the whole runtime going away
+        assert!(b.is_cancelled());
+    }
+
+    #[test]
+    fn an_illegal_transition_does_not_signal_shutdown() {
+        let l = Lifecycle::new();
+        assert!(l.transition(S::Ready).is_err());
+        assert!(!l.shutdown_token().is_cancelled());
     }
 }

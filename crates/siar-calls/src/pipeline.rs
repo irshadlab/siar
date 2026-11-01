@@ -35,7 +35,8 @@ use siar_media_core::{
     AudioDecoder, AudioEncoder, DecodedVideoFrame, EncodedAudioFrame, EncodedVideoFrame,
     RawVideoFrame, VideoDecoder, VideoEncoder,
 };
-use tokio::sync::{mpsc, watch, Notify};
+use tokio::sync::{mpsc, Notify};
+use tokio_util::sync::CancellationToken;
 
 /// Always holds only the most recently `put` value. `take` waits for a
 /// value to become available rather than returning `None` — there's
@@ -76,17 +77,19 @@ impl<T> LatestFrameSlot<T> {
     }
 }
 
-/// Races `shutdown.changed()` against `future`. `Some(value)` is the
+/// Races `shutdown.cancelled()` against `future`. `Some(value)` is the
 /// normal case; `None` means shutdown fired first. Lives here rather
 /// than duplicated per call site since every loop below (and every loop
 /// in `android.rs`) needs exactly this race.
 pub(crate) async fn select_shutdown<F: std::future::Future>(
-    shutdown: &mut watch::Receiver<bool>,
+    shutdown: &CancellationToken,
     future: F,
 ) -> Option<F::Output> {
     tokio::select! {
+        // Shutdown first: once a call has ended, never start another unit of work.
+        biased;
+        () = shutdown.cancelled() => None,
         value = future => Some(value),
-        _ = shutdown.changed() => None,
     }
 }
 
@@ -103,7 +106,7 @@ pub struct VideoEncodePipeline {
 pub fn spawn_video_encode_pipeline(
     mut encoder: Box<dyn VideoEncoder>,
     output_capacity: usize,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: CancellationToken,
 ) -> VideoEncodePipeline {
     let input = LatestFrameSlot::new();
     let (tx, rx) = mpsc::channel(output_capacity);
@@ -111,7 +114,7 @@ pub fn spawn_video_encode_pipeline(
     let task_input = Arc::clone(&input);
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || loop {
-        let frame = match handle.block_on(select_shutdown(&mut shutdown, task_input.take())) {
+        let frame = match handle.block_on(select_shutdown(&shutdown, task_input.take())) {
             Some(frame) => frame,
             None => return, // shutdown signaled — call ended, stop encoding
         };
@@ -142,14 +145,14 @@ pub fn spawn_video_decode_pipeline(
     mut decoder: Box<dyn VideoDecoder>,
     input_capacity: usize,
     output_capacity: usize,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: CancellationToken,
 ) -> VideoDecodePipeline {
     let (in_tx, mut in_rx) = mpsc::channel::<EncodedVideoFrame>(input_capacity);
     let (out_tx, out_rx) = mpsc::channel(output_capacity);
 
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || loop {
-        let encoded = match handle.block_on(select_shutdown(&mut shutdown, in_rx.recv())) {
+        let encoded = match handle.block_on(select_shutdown(&shutdown, in_rx.recv())) {
             Some(Some(encoded)) => encoded,
             Some(None) => return, // sender dropped — upstream is gone
             None => return,       // shutdown signaled
@@ -188,14 +191,14 @@ pub fn spawn_audio_encode_pipeline(
     mut encoder: Box<dyn AudioEncoder>,
     input_capacity: usize,
     output_capacity: usize,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: CancellationToken,
 ) -> AudioEncodePipeline {
     let (in_tx, mut in_rx) = mpsc::channel::<Vec<i16>>(input_capacity);
     let (out_tx, out_rx) = mpsc::channel(output_capacity);
 
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || loop {
-        let pcm = match handle.block_on(select_shutdown(&mut shutdown, in_rx.recv())) {
+        let pcm = match handle.block_on(select_shutdown(&shutdown, in_rx.recv())) {
             Some(Some(pcm)) => pcm,
             Some(None) => return,
             None => return,
@@ -234,14 +237,14 @@ pub fn spawn_audio_decode_pipeline(
     mut decoder: Box<dyn AudioDecoder>,
     input_capacity: usize,
     output_capacity: usize,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: CancellationToken,
 ) -> AudioDecodePipeline {
     let (in_tx, mut in_rx) = mpsc::channel::<(Vec<u8>, bool)>(input_capacity);
     let (out_tx, out_rx) = mpsc::channel(output_capacity);
 
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || loop {
-        let (packet, fec) = match handle.block_on(select_shutdown(&mut shutdown, in_rx.recv())) {
+        let (packet, fec) = match handle.block_on(select_shutdown(&shutdown, in_rx.recv())) {
             Some(Some(item)) => item,
             Some(None) => return,
             None => return,

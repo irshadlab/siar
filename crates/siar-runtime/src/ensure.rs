@@ -36,14 +36,14 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = io::Result<()>>,
 {
-    if let Ok(c) = IpcClient::connect_unix(socket, role, client_name).await {
+    if let Ok(c) = IpcClient::connect_local(socket, role, client_name).await {
         return Ok(c);
     }
     spawn().await.map_err(EnsureError::Spawn)?;
     let deadline = Instant::now() + timeout;
     let mut delay = Duration::from_millis(20);
     loop {
-        match IpcClient::connect_unix(socket, role, client_name).await {
+        match IpcClient::connect_local(socket, role, client_name).await {
             Ok(c) => return Ok(c),
             Err(e) => {
                 if Instant::now() >= deadline {
@@ -63,7 +63,7 @@ fn describe(e: &ClientError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::{serve_unix, ServerConfig};
+    use crate::ipc::{serve_local, ServerConfig};
     use crate::runtime::Runtime;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
@@ -82,7 +82,7 @@ mod tests {
                 .unwrap();
             started.fetch_add(1, Ordering::SeqCst);
             // The loser of a bind race gets AddrInUse and simply exits.
-            let _ = serve_unix(rt, &path, ServerConfig::default()).await;
+            let _ = serve_local(rt, &path, ServerConfig::default()).await;
         });
         Ok(())
     }

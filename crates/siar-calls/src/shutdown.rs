@@ -1,54 +1,76 @@
 //! A shutdown signal shared by every background task a `CallSession`
 //! owns (`pipeline.rs`'s `spawn_blocking` loops, `android.rs`'s two
 //! `tokio::spawn` tasks per direction). One `CallShutdown` per call;
-//! every pipeline gets its own `subscribe()`d receiver at construction
-//! time, and `CallSession::apply_control_event` fires it the moment the
-//! signaling state machine reaches `CallState::Ended` — that's the hook
-//! this was flagged as missing for.
+//! every pipeline gets its own [`CancellationToken`] at construction time,
+//! and `CallSession::apply_control_event` fires it the moment the signaling
+//! state machine reaches `CallState::Ended`.
 //!
-//! Wraps `tokio::sync::watch` rather than `tokio_util::CancellationToken`
-//! specifically to avoid adding a new dependency for this — `watch`'s
-//! `changed()` is already exactly the "wait for one flip from false to
-//! true" primitive this needs, and it's already reachable through
-//! `tokio`'s existing `sync` feature.
+//! This is a thin, call-shaped wrapper over [`tokio_util::sync::CancellationToken`]
+//! (the maintained primitive for exactly this). The earlier hand-made
+//! `watch::Sender<bool>` version had a documented hole — a receiver created
+//! *after* `signal()` never resolved — that a token does not have:
+//! `cancelled()` is ready immediately on an already-cancelled token, so a
+//! pipeline spawned during hang-up still stops.
 
-use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
-use tokio::sync::watch;
-
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct CallShutdown {
-    tx: Arc<watch::Sender<bool>>,
+    token: CancellationToken,
 }
 
 impl CallShutdown {
-    /// The returned `watch::Receiver` is the initial one `watch::channel`
-    /// hands back — most callers can drop it immediately after taking
-    /// at least one `subscribe()`'d clone for a pipeline, since `send`
-    /// only fails once *every* receiver (including subscribed clones)
-    /// has been dropped, not specifically this original one.
-    pub fn new() -> (Self, watch::Receiver<bool>) {
-        let (tx, rx) = watch::channel(false);
-        (Self { tx: Arc::new(tx) }, rx)
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// A fresh receiver for one background task to select against. Call
-    /// once per `spawn_*_pipeline` call before wiring it into a
-    /// `CallSession` — a receiver made *after* `signal()` already fired
-    /// still observes the current (already-true) value via `borrow()`,
-    /// but `changed()` alone won't resolve for it until a *further*
-    /// change, so pipelines should subscribe before the call can
-    /// possibly end, not lazily.
-    pub fn subscribe(&self) -> watch::Receiver<bool> {
-        self.tx.subscribe()
+    /// A token for one background task to race against. Safe to take at any
+    /// time, including after [`Self::signal`]: it is then already cancelled.
+    #[must_use]
+    pub fn subscribe(&self) -> CancellationToken {
+        self.token.child_token()
     }
 
-    /// Idempotent — signaling an already-signaled shutdown is a no-op
-    /// (`watch::Sender::send` just republishes the same `true` value).
-    /// Ignores the "no receivers left" error: if every pipeline task
-    /// already exited on its own, there's nothing left to signal, which
-    /// isn't a failure this caller needs to react to.
+    /// Idempotent. Stops every task holding a token from [`Self::subscribe`].
     pub fn signal(&self) {
-        let _ = self.tx.send(true);
+        self.token.cancel();
+    }
+
+    #[must_use]
+    pub fn is_signaled(&self) -> bool {
+        self.token.is_cancelled()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_token_taken_after_signal_is_already_cancelled() {
+        let s = CallShutdown::new();
+        s.signal();
+        let late = s.subscribe();
+        tokio::time::timeout(std::time::Duration::from_millis(100), late.cancelled())
+            .await
+            .expect("the old watch-based version hung here");
+    }
+
+    #[tokio::test]
+    async fn signal_is_idempotent_and_reaches_every_subscriber() {
+        let s = CallShutdown::new();
+        let (a, b) = (s.subscribe(), s.subscribe());
+        s.signal();
+        s.signal();
+        assert!(a.is_cancelled() && b.is_cancelled() && s.is_signaled());
+    }
+
+    #[test]
+    fn a_task_cancelling_its_own_token_does_not_end_the_call() {
+        let s = CallShutdown::new();
+        let a = s.subscribe();
+        a.cancel();
+        assert!(!s.is_signaled());
     }
 }

@@ -6,13 +6,20 @@
 //! by a circuit breaker: more than `max_restarts` failures inside `window`
 //! and the worker is parked as `Unavailable` instead of restart-looping
 //! forever (§98).
+//!
+//! The restart/backoff/circuit-breaker policy and the health bookkeeping are
+//! ours (no off-the-shelf crate models "restart with a window-bounded breaker
+//! and report it as `Degraded`"). What is *not* ours any more is the
+//! bookkeeping of "which tasks are still running, and wait for all of them":
+//! that is [`tokio_util::task::TaskTracker`].
 
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::task::JoinHandle;
+use tokio::task::AbortHandle;
+use tokio_util::task::TaskTracker;
 
 use crate::health::{HealthRegistry, HealthState};
 use crate::lifecycle::{Lifecycle, RuntimeState};
@@ -68,7 +75,10 @@ pub fn sync_lifecycle(lifecycle: &Lifecycle, health: &HealthRegistry) {
 pub struct Supervisor {
     lifecycle: Lifecycle,
     health: HealthRegistry,
-    tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// Tracks every supervisor loop so shutdown can wait for all of them.
+    tracker: TaskTracker,
+    /// Only for the §36 forced path: the tracker waits, it does not abort.
+    aborts: Arc<Mutex<Vec<AbortHandle>>>,
     metrics: Option<Arc<Metrics>>,
 }
 
@@ -78,7 +88,8 @@ impl Supervisor {
         Self {
             lifecycle,
             health,
-            tasks: Arc::default(),
+            tracker: TaskTracker::new(),
+            aborts: Arc::default(),
             metrics: None,
         }
     }
@@ -105,7 +116,7 @@ impl Supervisor {
         let health = self.health.clone();
         let factory = Arc::new(factory);
         let metrics = self.metrics.clone();
-        let handle = tokio::spawn(async move {
+        let handle = self.tracker.spawn(async move {
             let mut failures: VecDeque<Instant> = VecDeque::new();
             health.set(name, HealthState::Healthy, "", critical);
             loop {
@@ -170,28 +181,34 @@ impl Supervisor {
                 sync_lifecycle(&lifecycle, &health);
             }
         });
-        self.tasks
+        let mut aborts = self
+            .aborts
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(handle);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        aborts.retain(|h| !h.is_finished());
+        aborts.push(handle.abort_handle());
     }
 
     /// §35: wait for every worker to finish, up to `grace`; abort stragglers
     /// (§36 forced shutdown). Returns how many had to be aborted.
     pub async fn drain(&self, grace: Duration) -> usize {
-        let handles: Vec<_> = std::mem::take(
+        self.tracker.close();
+        if tokio::time::timeout(grace, self.tracker.wait())
+            .await
+            .is_ok()
+        {
+            return 0;
+        }
+        let stragglers: Vec<AbortHandle> = std::mem::take(
             &mut *self
-                .tasks
+                .aborts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        let deadline = tokio::time::Instant::now() + grace;
         let mut aborted = 0;
-        for mut h in handles {
-            if tokio::time::timeout_at(deadline, &mut h).await.is_err() {
-                h.abort();
-                aborted += 1;
-            }
+        for h in stragglers.into_iter().filter(|h| !h.is_finished()) {
+            h.abort();
+            aborted += 1;
         }
         aborted
     }
@@ -311,6 +328,27 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         assert!(h.report().subsystems.is_empty());
         assert_eq!(l.state(), RuntimeState::Ready);
+    }
+
+    /// The §36 forced path, which the test above never reaches: shutdown was
+    /// *not* requested, so the supervisor loop is still running when the grace
+    /// period ends. `TaskTracker` only waits; the abort count is ours.
+    #[tokio::test]
+    async fn drain_aborts_and_counts_loops_still_running_after_the_grace_period() {
+        let (_l, _h, s) = ready();
+        for name in ["a", "b"] {
+            s.spawn(name, false, fast(), || async {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                Ok(())
+            });
+        }
+        s.spawn("quick", false, fast(), || async { Ok(()) });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let aborted = s.drain(Duration::from_millis(50)).await;
+        assert_eq!(
+            aborted, 2,
+            "the finished worker is not counted, the two sleepers are"
+        );
     }
 
     #[tokio::test]

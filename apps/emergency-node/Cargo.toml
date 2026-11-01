@@ -23,6 +23,7 @@ siar-power.workspace = true
 siar-runtime.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+clap = { version = "4", features = ["derive"] }
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 iroh.workspace = true

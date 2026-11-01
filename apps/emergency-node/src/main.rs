@@ -183,46 +183,45 @@ struct Config {
     seen_capacity: usize,
 }
 
+/// Command line, parsed by `clap`. Unlike the hand-rolled loop it replaces, a
+/// malformed value (`--quota-bytes lots`) is an error, not silently ignored.
+#[derive(Debug, clap::Parser)]
+#[command(name = "siar-emergency-node", version, about)]
+struct Cli {
+    /// Identity file (default: under $HOME).
+    #[arg(long)]
+    identity: Option<PathBuf>,
+    /// Admin socket path (default: per-user runtime dir).
+    #[arg(long, conflicts_with = "no_admin")]
+    admin_socket: Option<PathBuf>,
+    /// Do not open an admin socket.
+    #[arg(long)]
+    no_admin: bool,
+    /// Bundle store quota in bytes.
+    #[arg(long, default_value_t = DEFAULT_QUOTA_BYTES)]
+    quota_bytes: u64,
+    /// How many recently seen bundle ids to remember.
+    #[arg(long, default_value_t = DEFAULT_SEEN_CAPACITY)]
+    seen_capacity: usize,
+}
+
+impl From<Cli> for Config {
+    fn from(c: Cli) -> Self {
+        Self {
+            admin_socket: (!c.no_admin).then(|| {
+                c.admin_socket
+                    .unwrap_or_else(|| siar_runtime::ipc::default_socket_path("emergency-node"))
+            }),
+            identity_path: c.identity.unwrap_or_else(default_identity_path),
+            quota_bytes: c.quota_bytes,
+            seen_capacity: c.seen_capacity,
+        }
+    }
+}
+
 impl Config {
     fn from_args() -> Self {
-        let mut config = Self {
-            admin_socket: Some(siar_runtime::ipc::default_socket_path("emergency-node")),
-            identity_path: default_identity_path(),
-            quota_bytes: DEFAULT_QUOTA_BYTES,
-            seen_capacity: DEFAULT_SEEN_CAPACITY,
-        };
-
-        let mut args = std::env::args().skip(1);
-        while let Some(flag) = args.next() {
-            match flag.as_str() {
-                "--identity" => {
-                    if let Some(value) = args.next() {
-                        config.identity_path = PathBuf::from(value);
-                    }
-                }
-                "--admin-socket" => {
-                    if let Some(value) = args.next() {
-                        config.admin_socket = Some(PathBuf::from(value));
-                    }
-                }
-                "--no-admin" => config.admin_socket = None,
-                "--quota-bytes" => {
-                    if let Some(value) = args.next().and_then(|v| v.parse().ok()) {
-                        config.quota_bytes = value;
-                    }
-                }
-                "--seen-capacity" => {
-                    if let Some(value) = args.next().and_then(|v| v.parse().ok()) {
-                        config.seen_capacity = value;
-                    }
-                }
-                other => {
-                    tracing::warn!(flag = other, "unrecognized flag, ignoring");
-                }
-            }
-        }
-
-        config
+        <Cli as clap::Parser>::parse().into()
     }
 }
 
@@ -513,7 +512,7 @@ async fn main() -> Result<()> {
             move || {
                 let (rt, path) = (rt.clone(), path.clone());
                 async move {
-                    siar_runtime::ipc::serve_unix(rt, &path, Default::default())
+                    siar_runtime::ipc::serve_local(rt, &path, Default::default())
                         .await
                         .map_err(|e| e.to_string())
                 }
@@ -554,7 +553,7 @@ async fn main() -> Result<()> {
             lc.begin_shutdown();
         });
     }
-    siar_runtime::service::sd_notify("READY=1");
+    siar_runtime::service::notify_ready();
 
     loop {
         let frame = tokio::select! {
@@ -1047,7 +1046,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    siar_runtime::service::sd_notify("STOPPING=1");
+    siar_runtime::service::notify_stopping();
     let aborted = runtime.shutdown(std::time::Duration::from_secs(10)).await;
     if aborted > 0 {
         tracing::warn!(aborted, "forced shutdown aborted stragglers (§36)");

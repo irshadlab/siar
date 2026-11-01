@@ -9,6 +9,7 @@ rust-version.workspace = true
 siar-domain.workspace = true
 siar-media-core.workspace = true
 tokio.workspace = true
+tokio-util = { version = "0.7", default-features = false }
 tracing.workspace = true
 thiserror.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

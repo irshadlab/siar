@@ -39,7 +39,7 @@
 //!   crate spawned for that call to stop, closing what was previously an
 //!   open leak-on-hangup gap. Every `spawn_*_pipeline` function in
 //!   [`pipeline`] and [`android`] takes a `subscribe()`d shutdown
-//!   receiver and races it against whatever that loop would otherwise
+//!   token and races it against whatever that loop would otherwise
 //!   block on.
 //!
 //! What's still explicitly NOT here, same boundary `siar-domain`'s

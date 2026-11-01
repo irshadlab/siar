@@ -11,11 +11,24 @@ siar-power = { path = "../siar-power" }
 serde.workspace = true
 postcard.workspace = true
 toml = "1"
+# Shutdown plumbing only (CancellationToken, TaskTracker); restart/backoff/breaker policy stays ours.
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+# Install/uninstall as an OS user service (systemd/launchd/...); our hardened unit text is passed as `contents`.
+service-manager = "0.11"
+# Cross-platform local IPC (Unix socket / Windows named pipe) + peer credentials.
+interprocess = { version = "2.4", features = ["tokio"] }
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-util", "signal"] }
+tokio = { version = "1.54", features = ["rt", "macros", "sync", "time", "net", "io-util", "signal"] }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal"] }
+
+[target.'cfg(unix)'.dependencies]
+sd-notify = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+# U16CStr for the pipe DACL's SDDL string (interprocess's own signature).
+widestring = "1"

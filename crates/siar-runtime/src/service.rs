@@ -1,34 +1,126 @@
 //! §37-§39, §99, §174-§175: service-manager integration.
 //!
-//! * [`sd_notify`] — readiness/stopping notification for `Type=notify`
+//! * [`notify`] (the `sd-notify` crate) — readiness/stopping notification for `Type=notify`
 //!   systemd units (§99). A no-op when `NOTIFY_SOCKET` is unset, so the same
 //!   binary runs fine under a shell.
 //! * [`systemd_user_unit`] / [`desktop_autostart_entry`] — generated unit
 //!   text (§38 "Linux user service", §174 autostart). **User** services:
 //!   no root needed (§39).
 
+use std::io;
 use std::path::Path;
 
-/// Send one `sd_notify` datagram (`READY=1`, `STOPPING=1`, `STATUS=…`).
-/// Returns `true` if a message was actually sent.
+/// What to tell the service manager (re-exported from the maintained
+/// [`sd_notify`] crate so callers need no extra dependency).
 #[cfg(unix)]
-pub fn sd_notify(msg: &str) -> bool {
-    let Some(sock) = std::env::var_os("NOTIFY_SOCKET") else {
-        return false;
-    };
-    let Ok(s) = std::os::unix::net::UnixDatagram::unbound() else {
-        return false;
-    };
-    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(sock.as_os_str());
-    #[cfg(target_os = "linux")]
-    if let Some(name) = bytes.strip_prefix(b"@") {
-        use std::os::linux::net::SocketAddrExt;
-        let Ok(addr) = std::os::unix::net::SocketAddr::from_abstract_name(name) else {
-            return false;
-        };
-        return s.send_to_addr(msg.as_bytes(), &addr).is_ok();
+pub use sd_notify::NotifyState;
+
+/// Send state changes to the service manager. Returns `true` if a datagram
+/// was actually sent; `false` when `NOTIFY_SOCKET` is unset (running under a
+/// shell) or the send failed. Never an error: a daemon must not die because
+/// systemd is not listening.
+#[cfg(unix)]
+pub fn notify(state: &[NotifyState<'_>]) -> bool {
+    std::env::var_os("NOTIFY_SOCKET").is_some() && sd_notify::notify(state).is_ok()
+}
+
+/// `READY=1` (§99). No-op off Unix.
+pub fn notify_ready() -> bool {
+    #[cfg(unix)]
+    {
+        notify(&[NotifyState::Ready])
     }
-    s.send_to(msg.as_bytes(), Path::new(&sock)).is_ok()
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// `STOPPING=1` (§99). No-op off Unix.
+pub fn notify_stopping() -> bool {
+    #[cfg(unix)]
+    {
+        notify(&[NotifyState::Stopping])
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// Reverse-DNS service label used for every service manager.
+pub const SERVICE_LABEL: &str = "org.siar.daemon";
+
+/// The install request for a **per-user** service. On systemd the unit text
+/// is our hardened [`systemd_user_unit`] (the crate's default template has no
+/// `NoNewPrivileges`/sandboxing); on launchd and others the crate's own
+/// template is used.
+///
+/// # Errors
+/// If the label does not parse (cannot happen for [`SERVICE_LABEL`]).
+pub fn user_service_ctx(
+    description: &str,
+    exe: &Path,
+    args: &[&str],
+    systemd: bool,
+) -> io::Result<service_manager::ServiceInstallCtx> {
+    let label: service_manager::ServiceLabel = SERVICE_LABEL
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{e}")))?;
+    Ok(service_manager::ServiceInstallCtx {
+        label,
+        program: exe.to_path_buf(),
+        args: args.iter().map(Into::into).collect(),
+        contents: systemd.then(|| systemd_user_unit(description, exe, args)),
+        username: None,
+        working_directory: None,
+        environment: None,
+        autostart: true,
+        restart_policy: service_manager::RestartPolicy::OnFailure {
+            delay_secs: Some(2),
+            max_retries: None,
+            reset_after_secs: None,
+        },
+    })
+}
+
+fn user_manager() -> io::Result<(Box<dyn service_manager::ServiceManager>, bool)> {
+    use service_manager::{ServiceLevel, ServiceManager, ServiceManagerKind};
+    if cfg!(windows) {
+        // A Windows service must also run the service-control dispatcher
+        // (the `windows-service` crate) inside the binary; installing one
+        // without it would register something that cannot start.
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows service install needs the windows-service entry point (not built yet)",
+        ));
+    }
+    let kind = ServiceManagerKind::native()?;
+    let mut m = <dyn ServiceManager>::target(kind);
+    m.set_level(ServiceLevel::User)?;
+    Ok((m, kind == ServiceManagerKind::Systemd))
+}
+
+/// Install (and enable) the daemon as a per-user service.
+///
+/// # Errors
+/// No supported service manager, or it refused.
+pub fn install_user_service(description: &str, exe: &Path, args: &[&str]) -> io::Result<()> {
+    let (m, systemd) = user_manager()?;
+    m.install(user_service_ctx(description, exe, args, systemd)?)
+}
+
+/// Remove the per-user service installed by [`install_user_service`].
+///
+/// # Errors
+/// No supported service manager, or it refused.
+pub fn uninstall_user_service() -> io::Result<()> {
+    let (m, _) = user_manager()?;
+    m.uninstall(service_manager::ServiceUninstallCtx {
+        label: SERVICE_LABEL
+            .parse()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{e}")))?,
+    })
 }
 
 /// §35: resolves on SIGINT or SIGTERM (Ctrl-C on non-Unix). Install once per
@@ -69,12 +161,21 @@ pub async fn on_hangup(lifecycle: crate::lifecycle::Lifecycle, mut f: impl FnMut
     }
 }
 
-/// §97: the watchdog ping interval systemd expects, from `WATCHDOG_USEC`.
-/// We ping at **half** the deadline. `None` when no watchdog is configured.
+/// §97: the watchdog ping interval systemd expects. We ping at **half** the
+/// deadline. `None` when no watchdog is configured **for this process**
+/// (`sd_notify` also honours `WATCHDOG_PID`, which the hand-rolled version
+/// ignored: a watchdog meant for a parent must not be pinged by a child).
 #[must_use]
 pub fn watchdog_interval() -> Option<std::time::Duration> {
-    let usec: u64 = std::env::var("WATCHDOG_USEC").ok()?.trim().parse().ok()?;
-    (usec >= 2).then(|| std::time::Duration::from_micros(usec / 2))
+    #[cfg(unix)]
+    {
+        let d = sd_notify::watchdog_enabled()?;
+        (d.as_micros() >= 2).then(|| d / 2)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 /// Ping the watchdog while the runtime is *actually* healthy: stop pinging if
@@ -93,7 +194,7 @@ pub async fn watchdog_loop(
             _ = tick.tick() => {
                 if watchdog_should_ping(&lifecycle, &health) {
                     #[cfg(unix)]
-                    sd_notify("WATCHDOG=1");
+                    notify(&[NotifyState::Watchdog]);
                 }
             }
             () = lifecycle.shutdown_requested() => return,
@@ -184,7 +285,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn sd_notify_delivers_to_a_path_socket_and_is_a_noop_without_one() {
+    fn notify_delivers_to_a_path_socket_and_is_a_noop_without_one() {
         // Single test mutating the env var, to avoid races between tests.
         let dir = std::env::temp_dir().join(format!("siar-notify-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -192,12 +293,12 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let rx = std::os::unix::net::UnixDatagram::bind(&p).unwrap();
         std::env::remove_var("NOTIFY_SOCKET");
-        assert!(!sd_notify("READY=1"));
+        assert!(!notify_ready());
         std::env::set_var("NOTIFY_SOCKET", &p);
-        assert!(sd_notify("READY=1"));
+        assert!(notify_ready());
         let mut buf = [0u8; 32];
         let n = rx.recv(&mut buf).unwrap();
-        assert_eq!(&buf[..n], b"READY=1");
+        assert_eq!(&buf[..n], b"READY=1\n");
         std::env::remove_var("NOTIFY_SOCKET");
     }
 
@@ -213,6 +314,10 @@ mod tests {
         );
         std::env::set_var("WATCHDOG_USEC", "garbage");
         assert_eq!(watchdog_interval(), None);
+        std::env::set_var("WATCHDOG_USEC", "60000000");
+        std::env::set_var("WATCHDOG_PID", "1"); // meant for another process
+        assert_eq!(watchdog_interval(), None);
+        std::env::remove_var("WATCHDOG_PID");
         std::env::remove_var("WATCHDOG_USEC");
     }
 
@@ -232,5 +337,20 @@ mod tests {
             watchdog_should_ping(&l, &h),
             "a non-critical failure does not trip the watchdog"
         );
+    }
+
+    #[test]
+    fn install_ctx_carries_our_hardened_unit_only_on_systemd() {
+        let exe = Path::new("/usr/bin/siar-daemon");
+        let sd = user_service_ctx("Siar daemon", exe, &["run"], true).unwrap();
+        let unit = sd.contents.as_deref().unwrap();
+        assert!(
+            unit.contains("NoNewPrivileges=yes") && unit.contains("run"),
+            "{unit}"
+        );
+        assert!(sd.autostart);
+        let other = user_service_ctx("Siar daemon", exe, &["run"], false).unwrap();
+        assert!(other.contents.is_none());
+        assert_eq!(other.args, vec![std::ffi::OsString::from("run")]);
     }
 }

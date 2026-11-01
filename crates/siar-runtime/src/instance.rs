@@ -197,7 +197,7 @@ mod handoff {
         timeout: Duration,
     ) -> Result<Handoff, HandoffError> {
         let deadline = Instant::now() + timeout;
-        let mut c = match IpcClient::connect_unix(socket, Role::Admin, "upgrade").await {
+        let mut c = match IpcClient::connect_local(socket, Role::Admin, "upgrade").await {
             Ok(c) => c,
             Err(ClientError::Io(_)) => return Err(HandoffError::NoDaemon),
             Err(e) => return Err(e.into()),
@@ -321,7 +321,7 @@ mod tests {
     mod handoff_tests {
         use super::super::*;
         use super::tmp;
-        use crate::ipc::{serve_unix, ServerConfig};
+        use crate::ipc::{serve_local, ServerConfig};
         use crate::runtime::Runtime;
 
         async fn running(path: &Path) -> (Runtime, tokio::task::JoinHandle<io::Result<()>>) {
@@ -330,7 +330,8 @@ mod tests {
                 .await
                 .unwrap();
             let (r2, p2) = (rt.clone(), path.to_path_buf());
-            let h = tokio::spawn(async move { serve_unix(r2, &p2, ServerConfig::default()).await });
+            let h =
+                tokio::spawn(async move { serve_local(r2, &p2, ServerConfig::default()).await });
             for _ in 0..200 {
                 if path.exists() {
                     break;

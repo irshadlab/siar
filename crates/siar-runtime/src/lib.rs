@@ -16,12 +16,12 @@
 //! | [`events`] | §23-25, 144-148, 169-171 | bounded bus, coalescing, gaps |
 //! | [`protocol`] | §14-16, 19-22, 102-105 | framing, roles, versions |
 //! | [`runtime`] | §51-54, 204 | `Runtime`, builder, `AppService` |
-//! | `ipc` (unix) | §13-18, 144-146, 179 | socket server + client |
-//! | [`service`] | §37-39, 99, 174 | `sd_notify`, unit generation |
+//! | [`ipc`] | §13-18, 144-146, 179-180 | local socket (Unix socket / Windows pipe) server + client |
+//! | [`service`] | §37-39, 99, 174 | `sd-notify`, unit generation |
 //!
 //! ## Not done (named, not hidden)
 //!
-//! Windows named-pipe transport (§180); Android service hosting and iOS
+//! Android service hosting and iOS
 //! execution windows (§42-46); remote admin over Iroh (§66-70, 159-162);
 //! multi-account/tenant namespaces (§80-84); plugin-host isolation (§120);
 //! graceful *upgrade* handoff (§100-101, 106-107); Unix FD passing (§63);
@@ -35,13 +35,11 @@
 pub mod audit;
 pub mod config;
 pub mod dedup;
-#[cfg(unix)]
 pub mod ensure;
 pub mod error;
 pub mod events;
 pub mod health;
 pub mod instance;
-#[cfg(unix)]
 pub mod ipc;
 pub mod lifecycle;
 pub mod metrics;

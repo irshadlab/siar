@@ -1,29 +1,43 @@
-//! §13-§20, §144-§146, §179: local IPC over a Unix domain socket.
+//! §13-§20, §144-§146, §179-§180: local IPC over an OS-native local socket.
 //!
-//! Security model (§17, §179): the socket lives in a `0700` directory and is
-//! itself `0600`; on top of that every connection's peer uid (`SO_PEERCRED`)
-//! must equal the socket owner's uid (or be explicitly allow-listed). There
-//! is no password to leak and no TCP port to scan. Roles (§19) are granted as
-//! `min(requested, configured max)` and every command is checked against its
-//! required role (§20).
+//! The transport is the maintained [`interprocess`] crate's `local_socket`
+//! (Unix domain socket on Unix, named pipe on Windows) — one code path, not a
+//! `cfg(unix)` server plus a missing Windows one.
+//!
+//! Security model (§17, §179):
+//!
+//! * **Unix** — the socket lives in a `0700` directory and is itself `0600`
+//!   (set with `fchmod` *before* `bind`, so there is no umask window). Every
+//!   connection's peer euid (`SO_PEERCRED`, read through `interprocess`'s
+//!   `peer_creds()`) must equal the socket owner's uid or be explicitly
+//!   allow-listed.
+//! * **Windows** — a named pipe has no peer-uid; the guarantee comes from the
+//!   pipe's **DACL** instead: only the pipe's owner may open it, and remote
+//!   (SMB) clients are rejected by `interprocess` unless asked for. See
+//!   [`owner_only_security_descriptor`]. `allowed_uids` has no meaning there.
+//!
+//! There is no password to leak and no TCP port to scan. Roles (§19) are
+//! granted as `min(requested, configured max)` and every command is checked
+//! against its required role (§20).
 //!
 //! Backpressure (§144-§146): bounded connections, a per-connection request
 //! rate limit, a bounded request queue, a write timeout (a client that does
 //! not read is disconnected, never buffered without limit), and bounded
 //! event subscriptions with gap reporting (see [`crate::events`]).
-//!
-//! Windows named-pipe transport (§206) is **not implemented** in this crate
-//! yet; the protocol layer is transport-agnostic, so it is a new `serve_*`
-//! function, not a protocol change.
 
 use std::collections::VecDeque;
 use std::io;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use tokio::net::{UnixListener, UnixStream};
+use interprocess::local_socket::tokio::{Listener, Stream};
+use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
+use interprocess::local_socket::traits::StreamCommon as _;
+use interprocess::local_socket::{ListenerOptions, Name, ToFsName as _};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, Semaphore};
 
 use crate::audit::{action_label, AuditEntry, Outcome};
@@ -37,13 +51,19 @@ use crate::protocol::{
 };
 use crate::runtime::Runtime;
 
+/// Audit principal for the owning user on platforms where the peer has no
+/// numeric uid (Windows). The DACL already restricts the pipe to that user,
+/// so every connection that gets this far *is* the owner.
+pub const OWNER_PRINCIPAL_NO_UID: u64 = 0x5749_4e00;
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub max_connections: usize,
     pub requests_per_sec: u32,
     pub hello_timeout: Duration,
     pub write_timeout: Duration,
-    /// Extra uids allowed besides the socket owner.
+    /// Extra uids allowed besides the socket owner (Unix only; ignored where
+    /// the peer has no uid — access there is the pipe's DACL).
     pub allowed_uids: Vec<u32>,
     /// Highest role this server will ever grant.
     pub max_role: Role,
@@ -62,14 +82,102 @@ impl Default for ServerConfig {
     }
 }
 
-/// Bind `path` safely and serve until the runtime begins shutting down.
-pub async fn serve_unix(rt: Runtime, path: &Path, cfg: ServerConfig) -> io::Result<()> {
-    let listener = bind_secure(path).await?;
-    // Removes the socket file however this future ends — including being
-    // aborted by the supervisor at shutdown, which never reaches the tail of
-    // the function.
-    let _cleanup = SocketFile(path.to_path_buf());
-    let owner = std::fs::metadata(path)?.uid();
+/// The §179 same-user rule as a pure function: the peer must be the socket
+/// owner or on the allow-list.
+#[must_use]
+pub fn uid_allowed(peer: u32, owner: u32, allowed: &[u32]) -> bool {
+    peer == owner || allowed.contains(&peer)
+}
+
+/// Decide whether `stream`'s peer may talk to us, returning its audit
+/// principal.
+fn authenticate_peer(stream: &Stream, owner: Owner, cfg: &ServerConfig) -> Option<u64> {
+    let creds = stream.peer_creds().ok()?;
+    #[cfg(unix)]
+    {
+        let uid = creds.euid()?;
+        if !uid_allowed(uid, owner, &cfg.allowed_uids) {
+            tracing::warn!(uid, "rejected ipc peer: uid not allowed");
+            return None;
+        }
+        Some(u64::from(uid))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (owner, cfg);
+        tracing::debug!(pid = ?creds.pid(), "ipc peer accepted (pipe DACL is the access check)");
+        Some(OWNER_PRINCIPAL_NO_UID)
+    }
+}
+
+#[cfg(unix)]
+type Owner = u32;
+#[cfg(not(unix))]
+type Owner = ();
+
+#[cfg(unix)]
+fn socket_owner(path: &Path) -> io::Result<Owner> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(std::fs::metadata(path)?.uid())
+}
+#[cfg(not(unix))]
+fn socket_owner(_: &Path) -> io::Result<Owner> {
+    Ok(())
+}
+
+/// The local-socket name for `path`: the path itself on Unix; on Windows a
+/// namespaced pipe name derived from the file stem plus a stable hash of the
+/// full path, so two data folders never share a pipe.
+fn local_name(path: &Path) -> io::Result<Name<'static>> {
+    #[cfg(unix)]
+    {
+        use interprocess::local_socket::GenericFilePath;
+        path.to_path_buf().to_fs_name::<GenericFilePath>()
+    }
+    #[cfg(not(unix))]
+    {
+        use interprocess::local_socket::{GenericNamespaced, ToNsName as _};
+        pipe_name_for(path).to_ns_name::<GenericNamespaced>()
+    }
+}
+
+/// Stable (not `DefaultHasher`, which may change between toolchains) pipe
+/// name, so a CLI and a daemon built by different compilers still agree.
+#[cfg_attr(unix, allow(dead_code))]
+fn pipe_name_for(path: &Path) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in path.to_string_lossy().to_lowercase().bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let stem = path
+        .file_stem()
+        .map_or_else(|| "ipc".into(), |s| s.to_string_lossy().into_owned());
+    format!("siar-{stem}-{h:016x}")
+}
+
+/// §180: the Windows pipe ACL — **only the pipe's owner** gets access (no
+/// Everyone, no Users, no Administrators-by-group), the Windows counterpart
+/// of the Unix `0600` + peer-uid check.
+///
+/// Not compiled or exercised in this repository's Linux CI: it is the one
+/// piece of this module that needs a real Windows machine to verify.
+#[cfg(windows)]
+pub fn owner_only_security_descriptor(
+) -> io::Result<interprocess::os::windows::security_descriptor::SecurityDescriptor> {
+    use interprocess::os::windows::security_descriptor::SecurityDescriptor;
+    // D:P = protected DACL (no inheritance); one ACE: Allow, Generic-All, to Owner-Rights.
+    SecurityDescriptor::deserialize(widestring::u16cstr!("D:P(A;;GA;;;OW)"))
+}
+
+/// Bind the local socket safely and serve until the runtime begins shutting
+/// down.
+pub async fn serve_local(rt: Runtime, path: &Path, cfg: ServerConfig) -> io::Result<()> {
+    // `listener`'s drop unlinks the socket file (interprocess "name
+    // reclamation"), however this future ends — including being aborted by the
+    // supervisor at shutdown, which never reaches the tail of the function.
+    let listener = bind_local(path).await?;
+    let owner = socket_owner(path)?;
     let slots = Arc::new(Semaphore::new(cfg.max_connections));
     let cfg = Arc::new(cfg);
     tracing::info!(socket = %path.display(), "ipc listening");
@@ -78,15 +186,10 @@ pub async fn serve_unix(rt: Runtime, path: &Path, cfg: ServerConfig) -> io::Resu
         tokio::select! {
             () = rt.lifecycle.shutdown_requested() => break,
             accepted = listener.accept() => {
-                let Ok((stream, _)) = accepted else { continue };
-                let uid = match stream.peer_cred() {
-                    Ok(c) => c.uid(),
-                    Err(_) => continue,
-                };
-                if uid != owner && !cfg.allowed_uids.contains(&uid) {
-                    tracing::warn!(uid, "rejected ipc peer: uid not allowed");
+                let Ok(stream) = accepted else { continue };
+                let Some(principal) = authenticate_peer(&stream, owner, &cfg) else {
                     continue;
-                }
+                };
                 let Ok(permit) = slots.clone().try_acquire_owned() else {
                     tracing::warn!("ipc connection limit reached; dropping");
                     continue;
@@ -94,7 +197,7 @@ pub async fn serve_unix(rt: Runtime, path: &Path, cfg: ServerConfig) -> io::Resu
                 let (rt, cfg) = (rt.clone(), cfg.clone());
                 tokio::spawn(async move {
                     let _permit = permit;
-                    if let Err(e) = handle_connection(rt, stream, uid, &cfg).await {
+                    if let Err(e) = handle_connection(rt, stream, principal, &cfg).await {
                         tracing::debug!(error = %e, "ipc connection ended");
                     }
                 });
@@ -104,36 +207,91 @@ pub async fn serve_unix(rt: Runtime, path: &Path, cfg: ServerConfig) -> io::Resu
     Ok(())
 }
 
-struct SocketFile(PathBuf);
-
-impl Drop for SocketFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
 /// §109 stale-socket recovery + §179 permissions.
-async fn bind_secure(path: &Path) -> io::Result<UnixListener> {
-    if let Some(dir) = path.parent() {
-        if !dir.exists() {
-            std::fs::create_dir_all(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+async fn bind_local(path: &Path) -> io::Result<Listener> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(dir) = path.parent() {
+            if !dir.exists() {
+                std::fs::create_dir_all(dir)?;
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            }
         }
-    }
-    if path.exists() {
-        match UnixStream::connect(path).await {
-            Ok(_) => {
+        if path.exists() {
+            // Never displace a live daemon: only a file nobody answers on is stale.
+            if Stream::connect(local_name(path)?).await.is_ok() {
                 return Err(io::Error::new(
                     io::ErrorKind::AddrInUse,
                     "another instance is serving this socket",
-                ))
+                ));
             }
-            Err(_) => std::fs::remove_file(path)?, // nobody home: stale file from a crash
+            std::fs::remove_file(path)?; // stale file from a crash
         }
     }
-    let listener = UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
+    let make = |private_mode: bool| -> io::Result<ListenerOptions<'static>> {
+        let opts = ListenerOptions::new().name(local_name(path)?);
+        #[cfg(unix)]
+        let opts = if private_mode {
+            use interprocess::os::unix::local_socket::ListenerOptionsExt as _;
+            opts.mode(0o600)
+        } else {
+            opts
+        };
+        #[cfg(windows)]
+        let opts = {
+            use interprocess::os::windows::local_socket::ListenerOptionsExt as _;
+            let _ = private_mode;
+            opts.security_descriptor(owner_only_security_descriptor()?)
+        };
+        #[cfg(not(any(unix, windows)))]
+        let _ = private_mode;
+        Ok(opts)
+    };
+    match make(true)?.create_tokio() {
+        Ok(l) => Ok(l),
+        // A platform that cannot choose the file mode at bind time: bind, then
+        // tighten. The 0700 parent directory still covers the gap.
+        #[cfg(unix)]
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => {
+            use std::os::unix::fs::PermissionsExt;
+            let l = make(false)?.create_tokio()?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            Ok(l)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// One half of a shared [`Stream`]. `interprocess` deprecated `split()`
+/// because `&Stream` is itself `AsyncRead + AsyncWrite`; an `Arc` gives each
+/// of the reader task and the writer its own handle with no lock.
+struct Half(Arc<Stream>);
+
+impl AsyncRead for Half {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut &*self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Half {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &*self.0).poll_write(cx, buf)
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut &*self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut &*self.0).poll_shutdown(cx)
+    }
 }
 
 struct RateLimit {
@@ -156,12 +314,13 @@ impl RateLimit {
 
 async fn handle_connection(
     rt: Runtime,
-    stream: UnixStream,
-    uid: u32,
+    stream: Stream,
+    principal: u64,
     cfg: &ServerConfig,
 ) -> Result<(), FrameError> {
     Metrics::inc(&rt.metrics.ipc_connections);
-    let (mut rd, mut wr) = stream.into_split();
+    let stream = Arc::new(stream);
+    let (mut rd, mut wr) = (Half(stream.clone()), Half(stream));
 
     // §16 handshake.
     let hello = tokio::time::timeout(cfg.hello_timeout, read_frame::<_, ClientMsg>(&mut rd))
@@ -231,7 +390,7 @@ async fn handle_connection(
                 Some(ClientMsg::Request { req_id, body }) => {
                     Metrics::inc(&rt.metrics.ipc_requests);
                     let result = if limit.allow() {
-                        dispatch(&rt, uid, granted, body, &mut sub).await
+                        dispatch(&rt, principal, granted, body, &mut sub).await
                     } else {
                         Metrics::inc(&rt.metrics.ipc_rate_limited);
                         Err(RuntimeError::Busy) // §144 IPC flood
@@ -253,7 +412,7 @@ async fn handle_connection(
 
 async fn dispatch(
     rt: &Runtime,
-    uid: u32,
+    principal: u64,
     role: Role,
     body: Request,
     sub: &mut Option<Subscription>,
@@ -286,7 +445,7 @@ async fn dispatch(
             let label = action_label(&cmd);
             let entry = |outcome| AuditEntry {
                 at_ms: unix_ms(),
-                principal: u64::from(uid),
+                principal,
                 role,
                 action: label.clone(),
                 outcome,
@@ -296,7 +455,7 @@ async fn dispatch(
                 rt.audit.record(entry(Outcome::Denied));
                 return Err(RuntimeError::Unauthorized);
             }
-            match rt.command(u64::from(uid), id, cmd).await {
+            match rt.command(principal, id, cmd).await {
                 Ok(bytes) => {
                     rt.audit.record(entry(Outcome::Ok));
                     Ok(if bytes.is_empty() {
@@ -335,7 +494,7 @@ pub enum ClientError {
 }
 
 pub struct IpcClient {
-    stream: UnixStream,
+    stream: Stream,
     next_req: u64,
     pending: VecDeque<Delivery>,
     pub instance_id: u128,
@@ -344,12 +503,12 @@ pub struct IpcClient {
 }
 
 impl IpcClient {
-    pub async fn connect_unix(
+    pub async fn connect_local(
         path: &Path,
         role: Role,
         client_name: &str,
     ) -> Result<Self, ClientError> {
-        let mut stream = UnixStream::connect(path).await?;
+        let mut stream = Stream::connect(local_name(path)?).await?;
         write_frame(
             &mut stream,
             &ClientMsg::Hello {
@@ -439,17 +598,31 @@ impl IpcClient {
     }
 }
 
-/// Default per-user socket path: `$XDG_RUNTIME_DIR/siar/<name>.sock` (§78),
-/// falling back to `/tmp/siar-<uid>/<name>.sock` which `bind_secure` creates
-/// `0700`.
+/// Default per-user socket path (§78).
+///
+/// Unix: `$XDG_RUNTIME_DIR/siar/<name>.sock`, falling back to
+/// `/tmp/siar-<uid>/<name>.sock` which `bind_local` creates `0700`.
+/// Windows: `%LOCALAPPDATA%\siar\<name>.sock` — the file is never created;
+/// it only identifies the per-user pipe (see [`pipe_name_for`]).
 #[must_use]
 pub fn default_socket_path(name: &str) -> PathBuf {
-    match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(d) if !d.is_empty() => PathBuf::from(d).join("siar").join(format!("{name}.sock")),
-        _ => {
-            let uid = std::fs::metadata("/proc/self").map_or(0, |m| m.uid());
-            PathBuf::from(format!("/tmp/siar-{uid}")).join(format!("{name}.sock"))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match std::env::var_os("XDG_RUNTIME_DIR") {
+            Some(d) if !d.is_empty() => PathBuf::from(d).join("siar").join(format!("{name}.sock")),
+            _ => {
+                let uid = std::fs::metadata("/proc/self").map_or(0, |m| m.uid());
+                PathBuf::from(format!("/tmp/siar-{uid}")).join(format!("{name}.sock"))
+            }
         }
+    }
+    #[cfg(not(unix))]
+    {
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        base.join("siar").join(format!("{name}.sock"))
     }
 }
 
@@ -489,6 +662,14 @@ mod tests {
             .join("d.sock")
     }
 
+    /// Cross-platform "is the server up": on Windows there is no file to look for.
+    async fn reachable(path: &Path) -> bool {
+        match local_name(path) {
+            Ok(n) => Stream::connect(n).await.is_ok(),
+            Err(_) => false,
+        }
+    }
+
     async fn start(
         tag: &str,
         cfg: ServerConfig,
@@ -506,9 +687,9 @@ mod tests {
         let path = tmp_sock(tag);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
         let (rt2, p2) = (rt.clone(), path.clone());
-        let h = tokio::spawn(async move { serve_unix(rt2, &p2, cfg).await });
-        for _ in 0..200 {
-            if path.exists() {
+        let h = tokio::spawn(async move { serve_local(rt2, &p2, cfg).await });
+        for _ in 0..400 {
+            if reachable(&path).await {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -519,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn status_and_app_command_over_a_real_socket() {
         let (rt, path, n, _h) = start("basic", ServerConfig::default()).await;
-        let mut c = IpcClient::connect_unix(&path, Role::Operator, "test")
+        let mut c = IpcClient::connect_local(&path, Role::Operator, "test")
             .await
             .unwrap();
         assert_eq!(c.role, Role::Operator);
@@ -540,7 +721,7 @@ mod tests {
             .unwrap();
         assert_eq!(r, Reply::Bytes(vec![1, 2, 3]));
         // Retry with the same id (as after a dropped connection): applied once.
-        let mut c2 = IpcClient::connect_unix(&path, Role::Operator, "retry")
+        let mut c2 = IpcClient::connect_local(&path, Role::Operator, "retry")
             .await
             .unwrap();
         c2.command(
@@ -556,8 +737,10 @@ mod tests {
         rt.shutdown(Duration::from_secs(1)).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn socket_and_dir_permissions_are_private() {
+        use std::os::unix::fs::PermissionsExt;
         let (rt, path, _n, _h) = start("perm", ServerConfig::default()).await;
         let f = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         let d = std::fs::metadata(path.parent().unwrap())
@@ -570,6 +753,66 @@ mod tests {
         rt.shutdown(Duration::from_secs(1)).await;
     }
 
+    #[test]
+    fn uid_rule_is_owner_or_allow_listed_only() {
+        assert!(uid_allowed(1000, 1000, &[]));
+        assert!(!uid_allowed(1001, 1000, &[]));
+        assert!(uid_allowed(1001, 1000, &[1001]));
+        assert!(
+            !uid_allowed(0, 1000, &[1001]),
+            "root is not implicitly trusted"
+        );
+    }
+
+    /// The principal in the audit log is the peer's *kernel-reported* euid
+    /// (`SO_PEERCRED` via `interprocess`), not anything the client claims.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_principal_is_the_peers_kernel_reported_uid() {
+        let (rt, path, _n, _h) = start("principal", ServerConfig::default()).await;
+        let me = socket_owner(&path).unwrap();
+        let mut admin = IpcClient::connect_local(&path, Role::Admin, "who")
+            .await
+            .unwrap();
+        admin
+            .command(
+                CommandId(1),
+                Command::App {
+                    name: "e".into(),
+                    data: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        let Reply::Bytes(b) = admin.query(Query::Audit).await.unwrap() else {
+            panic!()
+        };
+        let text = String::from_utf8(b).unwrap();
+        assert!(text.contains(&format!("uid={me}\t")), "{text}");
+        rt.shutdown(Duration::from_secs(1)).await;
+    }
+
+    /// `interprocess` exposes the connecting process on both platforms.
+    #[tokio::test]
+    async fn peer_creds_report_this_process_as_the_peer() {
+        use interprocess::local_socket::traits::tokio::Listener as _;
+        let path = tmp_sock("creds");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        #[cfg(unix)]
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let l = bind_local(&path).await.unwrap();
+        let client = tokio::spawn({
+            let p = path.clone();
+            async move { Stream::connect(local_name(&p).unwrap()).await.unwrap() }
+        });
+        let server_side = l.accept().await.unwrap();
+        let _client = client.await.unwrap();
+        let creds = server_side.peer_creds().unwrap();
+        assert_eq!(creds.pid(), Some(std::process::id() as _));
+        #[cfg(unix)]
+        assert_eq!(creds.euid(), Some(socket_owner(&path).unwrap()));
+    }
+
     #[tokio::test]
     async fn roles_are_enforced_and_capped_by_the_server() {
         let (rt, path, _n, _h) = start(
@@ -580,7 +823,7 @@ mod tests {
             },
         )
         .await;
-        let mut c = IpcClient::connect_unix(&path, Role::Admin, "greedy")
+        let mut c = IpcClient::connect_local(&path, Role::Admin, "greedy")
             .await
             .unwrap();
         assert_eq!(c.role, Role::Operator, "granted = min(requested, max)");
@@ -592,7 +835,7 @@ mod tests {
             e,
             ClientError::Runtime(RuntimeError::Unauthorized)
         ));
-        let mut obs = IpcClient::connect_unix(&path, Role::Observer, "obs")
+        let mut obs = IpcClient::connect_local(&path, Role::Observer, "obs")
             .await
             .unwrap();
         let e = obs
@@ -611,7 +854,7 @@ mod tests {
     #[tokio::test]
     async fn admin_shutdown_stops_the_server_and_removes_the_socket() {
         let (rt, path, _n, h) = start("stop", ServerConfig::default()).await;
-        let mut c = IpcClient::connect_unix(&path, Role::Admin, "admin")
+        let mut c = IpcClient::connect_local(&path, Role::Admin, "admin")
             .await
             .unwrap();
         c.command(CommandId(1), Command::Shutdown).await.unwrap();
@@ -620,14 +863,14 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert!(!path.exists());
+        assert!(!reachable(&path).await);
         rt.shutdown(Duration::from_secs(1)).await;
     }
 
     #[tokio::test]
     async fn subscribers_get_events_and_a_snapshot_cursor() {
         let (rt, path, _n, _h) = start("sub", ServerConfig::default()).await;
-        let mut c = IpcClient::connect_unix(&path, Role::Observer, "ui")
+        let mut c = IpcClient::connect_local(&path, Role::Observer, "ui")
             .await
             .unwrap();
         let next = c
@@ -649,22 +892,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_second_daemon_on_the_same_socket_is_refused_but_a_stale_file_is_reclaimed() {
+    async fn a_second_daemon_on_the_same_socket_is_refused() {
         let (rt, path, _n, _h) = start("dup", ServerConfig::default()).await;
         let rt2 = Runtime::builder().build();
-        let e = serve_unix(rt2, &path, ServerConfig::default())
+        let e = serve_local(rt2, &path, ServerConfig::default())
             .await
             .unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::AddrInUse);
         rt.shutdown(Duration::from_secs(1)).await;
+    }
 
-        // A crash leaves a dead socket file behind (§109): next start reclaims it.
+    // A crash leaves a dead socket file behind (§109): next start reclaims it.
+    // (Unix only: a Windows pipe vanishes with its last handle.)
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stale_socket_file_is_reclaimed() {
         let stale = tmp_sock("stale");
         let _ = std::fs::remove_dir_all(stale.parent().unwrap());
         std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
         drop(std::os::unix::net::UnixListener::bind(&stale).unwrap()); // file stays, nobody listening
         assert!(stale.exists());
-        let l = bind_secure(&stale).await;
+        let l = bind_local(&stale).await;
         assert!(l.is_ok());
     }
 
@@ -674,6 +922,11 @@ mod tests {
         assert!(path.exists());
         h.abort();
         let _ = h.await;
+        assert!(
+            !reachable(&path).await,
+            "supervisor aborts at shutdown; the listener must not outlive it"
+        );
+        #[cfg(unix)]
         assert!(
             !path.exists(),
             "supervisor aborts at shutdown; the file must not outlive it"
@@ -691,7 +944,7 @@ mod tests {
             },
         )
         .await;
-        let mut c = IpcClient::connect_unix(&path, Role::Observer, "flood")
+        let mut c = IpcClient::connect_local(&path, Role::Observer, "flood")
             .await
             .unwrap();
         let mut busy = 0;
@@ -711,10 +964,10 @@ mod tests {
     async fn garbage_and_oversize_frames_close_only_that_connection() {
         use tokio::io::AsyncWriteExt;
         let (rt, path, _n, _h) = start("garbage", ServerConfig::default()).await;
-        let mut raw = UnixStream::connect(&path).await.unwrap();
+        let mut raw = Stream::connect(local_name(&path).unwrap()).await.unwrap();
         raw.write_all(&u32::MAX.to_le_bytes()).await.unwrap();
         raw.write_all(&[0xde, 0xad]).await.unwrap();
-        let mut ok = IpcClient::connect_unix(&path, Role::Observer, "good")
+        let mut ok = IpcClient::connect_local(&path, Role::Observer, "good")
             .await
             .unwrap();
         assert!(
@@ -734,15 +987,15 @@ mod tests {
             },
         )
         .await;
-        let a = IpcClient::connect_unix(&path, Role::Observer, "a")
+        let a = IpcClient::connect_local(&path, Role::Observer, "a")
             .await
             .unwrap();
-        let b = IpcClient::connect_unix(&path, Role::Observer, "b")
+        let b = IpcClient::connect_local(&path, Role::Observer, "b")
             .await
             .unwrap();
         let third = tokio::time::timeout(
             Duration::from_millis(500),
-            IpcClient::connect_unix(&path, Role::Observer, "c"),
+            IpcClient::connect_local(&path, Role::Observer, "c"),
         )
         .await;
         assert!(
@@ -756,7 +1009,7 @@ mod tests {
     #[tokio::test]
     async fn audit_records_actions_never_payloads_and_is_admin_only() {
         let (rt, path, _n, _h) = start("audit", ServerConfig::default()).await;
-        let mut op = IpcClient::connect_unix(&path, Role::Operator, "op")
+        let mut op = IpcClient::connect_local(&path, Role::Operator, "op")
             .await
             .unwrap();
         // `max_role` defaults to Admin, so request Operator explicitly above.
@@ -785,7 +1038,7 @@ mod tests {
             "Operator cannot read the audit log"
         );
 
-        let mut admin = IpcClient::connect_unix(&path, Role::Admin, "admin")
+        let mut admin = IpcClient::connect_local(&path, Role::Admin, "admin")
             .await
             .unwrap();
         let Reply::Bytes(b) = admin.query(Query::Audit).await.unwrap() else {

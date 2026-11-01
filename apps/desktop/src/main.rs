@@ -136,7 +136,7 @@ fn run_app(connect: Option<std::path::PathBuf>) -> Result<()> {
 
     let result = ui.run().map_err(|e| anyhow!("UI event loop failed: {e}"));
     if let Some(stop) = stop_remote {
-        let _ = stop.send(true);
+        stop.cancel();
     }
     runtime.shutdown_timeout(Duration::from_secs(2));
     result
@@ -147,9 +147,14 @@ fn spawn_remote(
     hub: std::sync::Arc<siar_ui_slint::StateHub>,
     command_rx: mpsc::Receiver<AppCommand>,
     socket: std::path::PathBuf,
-) -> tokio::sync::watch::Sender<bool> {
-    let (stop, stop_rx) = tokio::sync::watch::channel(false);
-    runtime.spawn(siar_ui_sync::run_remote(socket, hub, command_rx, stop_rx));
+) -> tokio_util::sync::CancellationToken {
+    let stop = tokio_util::sync::CancellationToken::new();
+    runtime.spawn(siar_ui_sync::run_remote(
+        socket,
+        hub,
+        command_rx,
+        stop.clone(),
+    ));
     stop
 }
 

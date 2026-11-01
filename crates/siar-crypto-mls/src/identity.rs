@@ -59,6 +59,17 @@ pub fn generate_identity<P: OpenMlsProvider>(
     device: DeviceId,
     provider: &P,
 ) -> Result<MlsIdentity, MlsIdentityError> {
+    generate_identity_with_suite(device, provider, CIPHERSUITE)
+}
+
+/// [`generate_identity`] for an explicit ciphersuite — the key package is
+/// only usable in groups of that suite (1:1 sessions use the post-quantum
+/// hybrid [`crate::PQ_CIPHERSUITE`]).
+pub fn generate_identity_with_suite<P: OpenMlsProvider>(
+    device: DeviceId,
+    provider: &P,
+    suite: openmls_traits::types::Ciphersuite,
+) -> Result<MlsIdentity, MlsIdentityError> {
     // `DeviceId` has no direct byte-conversion method of its own
     // (`crates/siar-domain/src/ids.rs`'s `newtype_id!` macro exposes
     // `as_uuid()` -> `Uuid`, not raw bytes) — go through the `uuid`
@@ -71,7 +82,7 @@ pub fn generate_identity<P: OpenMlsProvider>(
     let credential = BasicCredential::new(identity_bytes);
 
     // book_code.rs anchor `create_credential_keys`.
-    let signature_keys = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+    let signature_keys = SignatureKeyPair::new(suite.signature_algorithm())
         .map_err(|e| MlsIdentityError::SignatureKeyGeneration(format!("{e:?}")))?;
     signature_keys
         .store(provider.storage())
@@ -92,7 +103,7 @@ pub fn generate_identity<P: OpenMlsProvider>(
     // honest default, not a stand-in for something unimplemented.
     let key_package = KeyPackage::builder()
         .build(
-            CIPHERSUITE,
+            suite,
             provider,
             &signature_keys,
             credential_with_key.clone(),

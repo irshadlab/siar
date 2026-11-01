@@ -4,7 +4,8 @@
 //!   supervised admin socket, signals, `sd_notify`). Messages keep arriving
 //!   and are stored while no UI is open.
 //! * `siar-daemon ctl <cmd>` — talk to a running daemon over its local socket.
-//! * `siar-daemon unit` — print a hardened `systemd --user` unit.
+//! * `siar-daemon unit` — print a hardened `systemd --user` unit;
+//!   `install` / `uninstall` manage it through the `service-manager` crate.
 //!
 //! One process per data folder: the same lock the desktop app takes, so a
 //! daemon and a window can never write the same database. (Making the window
@@ -21,22 +22,51 @@ use siar_runtime::ipc::{default_socket_path, IpcClient};
 use siar_runtime::protocol::{Command, Query, Reply, Request, Role};
 use siar_runtime::{CommandId, RestartPolicy, Runtime};
 
-const USAGE: &str = "\
-usage:
-  siar-daemon run [--socket PATH] [--no-socket] [--config PATH] [--replace]
-  siar-daemon ctl [--socket PATH] <command>
-      status | health | power | metrics | summary | ticket | conversations
-      audit                   recent admin actions (kinds only), Admin
-      ui-state                what a window would see (via the sync protocol)
-      messages <conversation-id>
-      pair <ticket>
-      send <conversation-id> <text...>
-      shutdown
-  siar-daemon unit            print a systemd --user unit
+const CTL_COMMANDS: &str = "\
+ctl commands:
+  status | health | power | metrics | summary | ticket | conversations
+  audit                   recent admin actions (kinds only), Admin
+  ui-state                what a window would see (via the sync protocol)
+  messages <conversation-id>
+  pair <ticket>
+  send <conversation-id> <text...>
+  shutdown";
 
---replace asks a running daemon to stop gracefully first (upgrade handoff).
-SIGHUP re-reads the config file; changes that need a restart are reported.
-";
+/// The command line, parsed by `clap` (derive). `--replace` asks a running
+/// daemon to stop gracefully first (upgrade handoff); SIGHUP re-reads the
+/// config file and reports changes that need a restart.
+#[derive(Debug, clap::Parser)]
+#[command(name = "siar-daemon", version, about, after_help = CTL_COMMANDS)]
+enum Args {
+    /// Host the core under siar-runtime (lifecycle, supervised admin socket, signals).
+    Run {
+        /// Control socket path (default: per-user runtime dir).
+        #[arg(long, conflicts_with = "no_socket")]
+        socket: Option<PathBuf>,
+        /// Do not open a control socket.
+        #[arg(long)]
+        no_socket: bool,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Stop a running daemon gracefully, then take over.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Talk to a running daemon over its local socket.
+    Ctl {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// The ctl command (see below); options go before it.
+        #[arg(required = true, trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    /// Print a hardened systemd --user unit.
+    Unit,
+    /// Install and enable the per-user service.
+    Install,
+    /// Remove the per-user service.
+    Uninstall,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Cli {
@@ -50,51 +80,61 @@ enum Cli {
         args: Vec<String>,
     },
     Unit,
+    Install,
+    Uninstall,
 }
 
+impl From<Args> for Cli {
+    fn from(a: Args) -> Self {
+        match a {
+            Args::Run {
+                socket,
+                no_socket,
+                config,
+                replace,
+            } => Cli::Run {
+                socket: (!no_socket)
+                    .then(|| socket.unwrap_or_else(|| default_socket_path("daemon"))),
+                config,
+                replace,
+            },
+            Args::Ctl { socket, args } => Cli::Ctl {
+                socket: socket.unwrap_or_else(|| default_socket_path("daemon")),
+                args,
+            },
+            Args::Unit => Cli::Unit,
+            Args::Install => Cli::Install,
+            Args::Uninstall => Cli::Uninstall,
+        }
+    }
+}
+
+/// Test seam: parse an argv (without argv[0]) the way `main` does.
+#[cfg(test)]
 fn parse(args: &[String]) -> Result<Cli, String> {
-    let mut it = args.iter().cloned();
-    let sub = it.next().ok_or("missing subcommand")?;
-    let mut socket = Some(default_socket_path("daemon"));
-    let mut config = None;
-    let mut replace = false;
-    let mut rest = Vec::new();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--socket" => socket = Some(PathBuf::from(it.next().ok_or("--socket needs a path")?)),
-            "--no-socket" => socket = None,
-            "--config" => config = Some(PathBuf::from(it.next().ok_or("--config needs a path")?)),
-            "--replace" => replace = true,
-            _ => rest.push(a),
-        }
-    }
-    match sub.as_str() {
-        "run" => Ok(Cli::Run {
-            socket,
-            config,
-            replace,
-        }),
-        "ctl" => {
-            if rest.is_empty() {
-                return Err("ctl needs a command".into());
-            }
-            Ok(Cli::Ctl {
-                socket: socket.ok_or("--no-socket makes no sense for ctl")?,
-                args: rest,
-            })
-        }
-        "unit" => Ok(Cli::Unit),
-        other => Err(format!("unknown subcommand {other:?}")),
-    }
+    use clap::Parser as _;
+    Args::try_parse_from(std::iter::once("siar-daemon".to_owned()).chain(args.iter().cloned()))
+        .map(Cli::from)
+        .map_err(|e| e.to_string())
 }
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let cli = parse(&args).map_err(|e| anyhow!("{e}\n\n{USAGE}"))?;
+    let cli = Cli::from(<Args as clap::Parser>::parse());
     match cli {
+        Cli::Install => {
+            let exe = std::env::current_exe()?;
+            siar_runtime::service::install_user_service("Siar daemon", &exe, &["run"])
+                .context("installing the service")?;
+            println!("installed {}", siar_runtime::service::SERVICE_LABEL);
+            Ok(())
+        }
+        Cli::Uninstall => {
+            siar_runtime::service::uninstall_user_service().context("removing the service")?;
+            Ok(())
+        }
         Cli::Unit => {
             let exe = std::env::current_exe()?;
             print!(
@@ -243,7 +283,7 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
             move || {
                 let (rt2, path, cfg) = (rt2.clone(), path.clone(), server_cfg.clone());
                 async move {
-                    siar_runtime::ipc::serve_unix(rt2, &path, cfg)
+                    siar_runtime::ipc::serve_local(rt2, &path, cfg)
                         .await
                         .map_err(|e| e.to_string())
                 }
@@ -290,11 +330,11 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
             },
         ));
     }
-    siar_runtime::service::sd_notify("READY=1");
+    siar_runtime::service::notify_ready();
     tracing::info!("siar-daemon ready");
 
     runtime.lifecycle.shutdown_requested().await;
-    siar_runtime::service::sd_notify("STOPPING=1");
+    siar_runtime::service::notify_stopping();
     drop(cmd_tx); // lets the core's command loop finish
     let aborted = runtime.shutdown(runtime.shutdown_grace()).await;
     if let Some(live) = app.live.get() {
@@ -361,7 +401,7 @@ macro_rules! outln {
 }
 
 async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
-    let mut c = IpcClient::connect_unix(socket, Role::Admin, "siar-daemon ctl")
+    let mut c = IpcClient::connect_local(socket, Role::Admin, "siar-daemon ctl")
         .await
         .with_context(|| {
             format!(
@@ -411,7 +451,7 @@ async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
             id: CommandId(uuid::Uuid::new_v4().as_u128()),
             cmd: Command::Shutdown,
         },
-        other => bail!("unknown command {other:?}\n\n{USAGE}"),
+        other => bail!("unknown command {other:?}\n\n{CTL_COMMANDS}"),
     };
     match c.request(req).await? {
         Reply::Ok => outln!("ok"),
@@ -481,5 +521,15 @@ mod tests {
         assert!(parse(&v(&["ctl"])).is_err());
         assert!(parse(&v(&["ctl", "--no-socket", "status"])).is_err());
         assert!(parse(&v(&["run", "--socket"])).is_err());
+    }
+
+    #[test]
+    fn hyphens_after_the_command_are_message_text_not_flags() {
+        match parse(&v(&["ctl", "send", "c1", "-x", "--not-a-flag"])).unwrap() {
+            Cli::Ctl { args, .. } => assert_eq!(args, v(&["send", "c1", "-x", "--not-a-flag"])),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(parse(&v(&["install"])), Ok(Cli::Install));
+        assert!(parse(&v(&["run", "--socket", "/a", "--no-socket"])).is_err());
     }
 }

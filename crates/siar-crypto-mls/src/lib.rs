@@ -85,12 +85,15 @@
 
 pub mod group;
 pub mod identity;
+pub mod pairwise;
 pub mod persistent;
 
-pub use group::{IncomingMlsMessage, MlsGroupError, MlsGroupSession};
+pub use group::{GroupParams, IncomingMlsMessage, MlsGroupError, MlsGroupSession};
 pub use identity::{
-    decode_key_package, encode_key_package, generate_identity, MlsIdentity, MlsIdentityError,
+    decode_key_package, encode_key_package, generate_identity, generate_identity_with_suite,
+    MlsIdentity, MlsIdentityError,
 };
+pub use pairwise::{PairwiseError, PairwiseEvent, PairwisePolicy, PairwiseSession};
 pub use persistent::{JsonCodec, PersistentProviderError, SqlitePersistentProvider};
 // Re-exported so callers (e.g. `siar-messaging::group_service`) don't
 // need their own direct dependency on `openmls_rust_crypto` just to
@@ -111,4 +114,20 @@ pub use openmls_rust_crypto::OpenMlsRustCrypto;
 /// README lists first under "Supported ciphersuites" and marks
 /// "(MTI)".
 pub use openmls_traits::types::Ciphersuite;
+/// The post-quantum suite used for every 1:1 session:
+/// `MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44`
+/// (draft-ietf-mls-pq-ciphersuites).
+///
+/// * **Key exchange: hybrid** ML-KEM-768 + X25519 — an attacker must break
+///   *both*, so a flaw in the young ML-KEM does not undo X25519 and a quantum
+///   computer does not undo ML-KEM (defeats harvest-now-decrypt-later).
+/// * **Signatures: ML-DSA-44** — authentication is post-quantum too. Cost:
+///   ML-DSA public keys (≈1.3 KB) and signatures (≈2.4 KB) are far larger
+///   than Ed25519's, which matters for key packages and commits on small-MTU
+///   links (BLE); expect fragmentation there.
+///
+/// Both pieces are IETF *drafts* with draft code points: fine for a closed
+/// ecosystem like Siar's own clients, not interoperable with other MLS stacks.
+pub const PQ_CIPHERSUITE: Ciphersuite =
+    Ciphersuite::MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44;
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;

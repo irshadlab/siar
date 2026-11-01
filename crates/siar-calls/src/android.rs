@@ -27,7 +27,8 @@ use siar_media_android::{
     drain_output, output_ready_notifier, push_input, MediaSession, SessionOutput,
 };
 use siar_media_core::{DecodedVideoFrame, EncodedVideoFrame, RawVideoFrame};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::pipeline::{select_shutdown, LatestFrameSlot, VideoDecodePipeline, VideoEncodePipeline};
 
@@ -45,18 +46,18 @@ use crate::pipeline::{select_shutdown, LatestFrameSlot, VideoDecodePipeline, Vid
 pub fn spawn_android_hardware_encode_pipeline(
     session: Arc<Mutex<MediaSession>>,
     output_capacity: usize,
-    shutdown: watch::Receiver<bool>,
+    shutdown: CancellationToken,
 ) -> VideoEncodePipeline {
     let input = LatestFrameSlot::new();
     let (tx, rx) = mpsc::channel(output_capacity);
 
     let feeder_input = Arc::clone(&input);
     let feeder_session = Arc::clone(&session);
-    let mut feeder_shutdown = shutdown.clone();
+    let feeder_shutdown = shutdown.clone();
     tokio::spawn(async move {
         loop {
             let frame: RawVideoFrame =
-                match select_shutdown(&mut feeder_shutdown, feeder_input.take()).await {
+                match select_shutdown(&feeder_shutdown, feeder_input.take()).await {
                     Some(frame) => frame,
                     None => return, // shutdown signaled — call ended, stop feeding capture
                 };
@@ -74,7 +75,7 @@ pub fn spawn_android_hardware_encode_pipeline(
         }
     });
 
-    let mut drainer_shutdown = shutdown;
+    let drainer_shutdown = shutdown;
     tokio::spawn(async move {
         let notify = output_ready_notifier(&session);
         loop {
@@ -113,10 +114,7 @@ pub fn spawn_android_hardware_encode_pipeline(
                     }
                 }
             }
-            if select_shutdown(&mut drainer_shutdown, notified)
-                .await
-                .is_none()
-            {
+            if select_shutdown(&drainer_shutdown, notified).await.is_none() {
                 return; // shutdown signaled — call ended, stop draining
             }
         }
@@ -133,16 +131,16 @@ pub fn spawn_android_hardware_decode_pipeline(
     session: Arc<Mutex<MediaSession>>,
     input_capacity: usize,
     output_capacity: usize,
-    shutdown: watch::Receiver<bool>,
+    shutdown: CancellationToken,
 ) -> VideoDecodePipeline {
     let (in_tx, mut in_rx) = mpsc::channel::<EncodedVideoFrame>(input_capacity);
     let (out_tx, out_rx) = mpsc::channel(output_capacity);
 
     let feeder_session = Arc::clone(&session);
-    let mut feeder_shutdown = shutdown.clone();
+    let feeder_shutdown = shutdown.clone();
     tokio::spawn(async move {
         loop {
-            let frame = match select_shutdown(&mut feeder_shutdown, in_rx.recv()).await {
+            let frame = match select_shutdown(&feeder_shutdown, in_rx.recv()).await {
                 Some(Some(frame)) => frame,
                 Some(None) => return, // sender dropped — upstream is gone
                 None => return,       // shutdown signaled
@@ -151,7 +149,7 @@ pub fn spawn_android_hardware_decode_pipeline(
         }
     });
 
-    let mut drainer_shutdown = shutdown;
+    let drainer_shutdown = shutdown;
     tokio::spawn(async move {
         let notify = output_ready_notifier(&session);
         loop {
@@ -170,10 +168,7 @@ pub fn spawn_android_hardware_decode_pipeline(
                     }
                 }
             }
-            if select_shutdown(&mut drainer_shutdown, notified)
-                .await
-                .is_none()
-            {
+            if select_shutdown(&drainer_shutdown, notified).await.is_none() {
                 return;
             }
         }

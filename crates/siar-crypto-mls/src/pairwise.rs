@@ -52,9 +52,44 @@ pub enum PairwiseError {
     OutOfTurnCommit(u64),
 }
 
+/// Which post-quantum trade-off a session uses. Fixed when the session is
+/// created (it is the MLS ciphersuite); changing it means a new session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PairwiseProfile {
+    /// Hybrid ML-KEM-768+X25519 key exchange, Ed25519 signatures. Messages
+    /// stay ~250 B; fits BLE/DTN. **Default.**
+    #[default]
+    Compact,
+    /// Adds ML-DSA-44 signatures: post-quantum authentication, ~10x larger
+    /// messages and commits.
+    FullPq,
+}
+
+impl PairwiseProfile {
+    #[must_use]
+    pub fn suite(self) -> openmls_traits::types::Ciphersuite {
+        match self {
+            Self::Compact => crate::PQ_CIPHERSUITE,
+            Self::FullPq => crate::PQ_FULL_CIPHERSUITE,
+        }
+    }
+}
+
+/// Generate the identity (and publishable key package) for a 1:1 profile.
+pub fn pairwise_identity<P: OpenMlsProvider>(
+    device: siar_domain::DeviceId,
+    provider: &P,
+    profile: PairwiseProfile,
+) -> Result<MlsIdentity, crate::MlsIdentityError> {
+    crate::generate_identity_with_suite(device, provider, profile.suite())
+}
+
 /// When this side refreshes its keys.
 #[derive(Debug, Clone, Copy)]
 pub struct PairwisePolicy {
+    /// Suite family; only read by the side that *starts* the session (the
+    /// responder learns it from the Welcome).
+    pub profile: PairwiseProfile,
     /// On its turn, commit before sending once this many messages have been
     /// sent since the last own commit. `1` = every first message of a turn.
     pub update_after_sent: u32,
@@ -63,6 +98,7 @@ pub struct PairwisePolicy {
 impl Default for PairwisePolicy {
     fn default() -> Self {
         Self {
+            profile: PairwiseProfile::Compact,
             update_after_sent: 32,
         }
     }
@@ -101,7 +137,11 @@ impl<P: OpenMlsProvider> PairwiseSession<P> {
     ) -> Result<(Self, Vec<u8>), PairwiseError> {
         let kp = decode_key_package(peer_key_package)
             .map_err(|e| PairwiseError::KeyPackage(e.to_string()))?;
-        let mut inner = MlsGroupSession::create_with(provider, me, GroupParams::pairwise_dtn())?;
+        let mut inner = MlsGroupSession::create_with(
+            provider,
+            me,
+            GroupParams::pairwise_dtn_with(policy.profile.suite()),
+        )?;
         let (_commit, welcome) = inner.add_member(&kp)?;
         Ok((Self::from_session(inner, policy), welcome))
     }
@@ -118,7 +158,7 @@ impl<P: OpenMlsProvider> PairwiseSession<P> {
             provider,
             keys,
             welcome,
-            GroupParams::pairwise_dtn(),
+            GroupParams::pairwise_dtn_with(policy.profile.suite()),
         )?;
         Ok(Self::from_session(inner, policy))
     }
@@ -242,19 +282,17 @@ impl<P: OpenMlsProvider> PairwiseSession<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{generate_identity_with_suite, OpenMlsRustCrypto, PQ_CIPHERSUITE};
+    use crate::{OpenMlsRustCrypto, PQ_CIPHERSUITE, PQ_FULL_CIPHERSUITE};
     use siar_domain::DeviceId;
 
     type S = PairwiseSession<OpenMlsRustCrypto>;
 
     fn pair(policy: PairwisePolicy) -> (S, S) {
         let bob_provider = OpenMlsRustCrypto::default();
-        let bob =
-            generate_identity_with_suite(DeviceId::new(), &bob_provider, PQ_CIPHERSUITE).unwrap();
+        let bob = pairwise_identity(DeviceId::new(), &bob_provider, policy.profile).unwrap();
         let kp = crate::encode_key_package(bob.key_package.key_package()).unwrap();
         let alice_provider = OpenMlsRustCrypto::default();
-        let alice =
-            generate_identity_with_suite(DeviceId::new(), &alice_provider, PQ_CIPHERSUITE).unwrap();
+        let alice = pairwise_identity(DeviceId::new(), &alice_provider, policy.profile).unwrap();
         let (a, welcome) = S::start(alice_provider, &alice, &kp, policy).unwrap();
         let b = S::accept(bob_provider, bob.signature_keys.clone(), &welcome, policy).unwrap();
         (a, b)
@@ -279,11 +317,31 @@ mod tests {
         assert_eq!(a.session().ciphersuite(), PQ_CIPHERSUITE);
         assert_eq!(b.session().ciphersuite(), PQ_CIPHERSUITE);
         assert_eq!(a.session().member_count(), 2);
+    }
+
+    #[test]
+    fn the_full_pq_profile_signs_with_ml_dsa_and_still_works_end_to_end() {
+        let full = PairwisePolicy {
+            profile: PairwiseProfile::FullPq,
+            update_after_sent: 0,
+        };
+        let (mut a, mut b) = pair(full);
+        assert_eq!(a.session().ciphersuite(), PQ_FULL_CIPHERSUITE);
         assert_eq!(
-            PQ_CIPHERSUITE.signature_algorithm(),
-            openmls_traits::types::SignatureScheme::MLDSA44,
-            "authentication is post-quantum too, not just the key exchange"
+            PQ_FULL_CIPHERSUITE.signature_algorithm(),
+            openmls_traits::types::SignatureScheme::MLDSA44
         );
+        let w = a.seal(b"pq-signed").unwrap();
+        assert_eq!(msgs(deliver(&mut b, &w)), vec![b"pq-signed".to_vec()]);
+        let w = b.seal(b"reply").unwrap(); // b's turn: commit + message
+        assert_eq!(msgs(deliver(&mut a, &w)), vec![b"reply".to_vec()]);
+    }
+
+    #[test]
+    fn the_compact_profile_keeps_messages_small() {
+        let (mut a, _b) = pair(PairwisePolicy::default());
+        let w = a.seal(&[0u8; 100]).unwrap();
+        assert!(w[0].len() < 400, "{} bytes", w[0].len());
     }
 
     #[test]
@@ -299,6 +357,7 @@ mod tests {
     fn commits_alternate_and_each_one_moves_both_sides_to_a_fresh_epoch() {
         let (mut a, mut b) = pair(PairwisePolicy {
             update_after_sent: 1,
+            ..PairwisePolicy::default()
         });
         assert!(
             !a.my_turn() && b.my_turn(),
@@ -326,6 +385,7 @@ mod tests {
     fn seal_puts_an_own_commit_first_once_the_policy_says_so() {
         let (mut a, mut b) = pair(PairwisePolicy {
             update_after_sent: 2,
+            ..PairwisePolicy::default()
         });
         assert_eq!(b.seal(b"1").unwrap().len(), 1);
         assert_eq!(b.seal(b"2").unwrap().len(), 1);
@@ -347,6 +407,7 @@ mod tests {
     fn a_message_that_overtakes_its_commit_is_held_then_delivered() {
         let (mut a, mut b) = pair(PairwisePolicy {
             update_after_sent: 0,
+            ..PairwisePolicy::default()
         });
         // b's turn: seal → [commit, message-in-new-epoch]
         let wire = b.seal(b"after-commit").unwrap();
@@ -367,6 +428,7 @@ mod tests {
     fn a_late_message_from_the_previous_epoch_still_decrypts() {
         let (mut a, mut b) = pair(PairwisePolicy {
             update_after_sent: 0,
+            ..PairwisePolicy::default()
         });
         let old = a.seal(b"sent-before-the-commit").unwrap(); // epoch 1
         let new = b.seal(b"b-commit").unwrap(); // commit → epoch 2
@@ -382,6 +444,7 @@ mod tests {
     fn a_replayed_commit_is_a_duplicate_not_an_error() {
         let (mut a, mut b) = pair(PairwisePolicy {
             update_after_sent: 0,
+            ..PairwisePolicy::default()
         });
         let wire = b.seal(b"m").unwrap();
         deliver(&mut a, &wire);
@@ -414,6 +477,7 @@ mod tests {
     fn deferred_messages_are_bounded() {
         let (mut a, mut b) = pair(PairwisePolicy {
             update_after_sent: 0,
+            ..PairwisePolicy::default()
         });
         let wire = b.seal(b"x").unwrap();
         deliver(&mut a, &wire); // a now at epoch 2

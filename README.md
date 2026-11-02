@@ -21,9 +21,12 @@
 > * **Active Foundational Development:** SIAR is currently in pre-alpha foundational systems development.
 > * **AI / LLM Development Transparency Disclosure:** SIAR's extensive architectural specifications (176 specifications across 514k+ lines), wiki documentation, and codebase are **heavily developed with the assistance of Artificial Intelligence / Large Language Models (AI/LLMs)** working under human architectural direction.
 > * **URGENT: Security Researchers, Cryptographers & Protocol Engineers Required:** Because SIAR is designed for post-infrastructure, disaster-recovery, and high-threat environments, **independent third-party security researchers and protocol engineers are urgently needed** to perform formal mathematical verification, cryptographic audits, memory safety inspections, and fuzz testing across the cryptography (`siar-crypto`, `siar-crypto-mls`), wire framing (`siar-protocol`, `siar-protocol-ext`), transport/routing (`siar-transport`, `siar-routing-policy`), storage, and media subsystems to discover and eliminate potential vulnerabilities.
-> * **Currently I'm (Irshad Ali) only one working on SIAR.**
-> 🏛️ **Organization Stewardship & Research Initiative:**  
+> 
+> 🏛️ **Organization Stewardship & Research Initiative:
 > **SIAR** is an open-source systems initiative developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab)) by Irshad Ali — focused on local-first computing, resilient peer-to-peer networking, and sovereign systems engineering.
+> 
+> * **Currently I'm (Irshad Ali) only one working on SIAR.
+> 
 > **Official Showcase, Package Center & Live Architecture Documentation:**
 > - 🌐 **[Official Product Presentation](https://siar.irshadlab.org/)**
 > - 🖼️ **[Desktop UI Reference Gallery](docs/screenshots/README.md)** — Dark/Light themes, Contact Verification, MLS Groups & Settings

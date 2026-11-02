@@ -59,6 +59,8 @@ pub enum MessageServiceError {
     Crypto(#[from] siar_crypto::CryptoError),
     #[error("could not decode a decrypted message body")]
     Malformed,
+    #[error("pairwise (OpenMLS) session: {0}")]
+    Pairwise(String),
     #[error("attachment is too large: {0}")]
     AttachmentTooLarge(#[from] siar_domain::BlobSizeError),
     /// A file-subsystem failure while preparing an imported attachment.
@@ -148,6 +150,7 @@ pub struct MessageService {
     /// initialization in [`Self::with_event_log`] for why it always
     /// travels together with `event_log`.
     correlations: Option<Arc<Mutex<HashMap<MessageId, MessageCorrelation>>>>,
+    pairwise: Option<Arc<crate::PairwiseService>>,
 }
 
 /// §8's own real mechanism: one row per message, tracking the
@@ -200,7 +203,22 @@ impl MessageService {
             conversation_summary: None,
             summary_checkpoints: None,
             correlations: None,
+            pairwise: None,
         }
+    }
+
+    /// Route 1:1 traffic through OpenMLS (forward secrecy, post-compromise
+    /// security, post-quantum key exchange) for every conversation that has a
+    /// pairwise session; conversations without one keep using the static-key
+    /// `Session`. See [`crate::PairwiseService`].
+    pub fn with_pairwise(mut self, pairwise: Arc<crate::PairwiseService>) -> Self {
+        self.pairwise = Some(pairwise);
+        self
+    }
+
+    /// The attached pairwise service, if any.
+    pub fn pairwise(&self) -> Option<&Arc<crate::PairwiseService>> {
+        self.pairwise.as_ref()
     }
 
     /// Makes [`Self::fetch_attachment`] try `fetcher` (normally the
@@ -479,6 +497,15 @@ impl MessageService {
         peer: &PeerTicket,
         text: MessageText,
     ) -> Result<MessageId, MessageServiceError> {
+        if self
+            .pairwise
+            .as_ref()
+            .is_some_and(|p| p.has_session(conversation))
+        {
+            return self
+                .send_pairwise(conversation, peer, MessageContent::Text(text))
+                .await;
+        }
         let message_id = MessageId::new();
         let now = now_millis();
 
@@ -851,6 +878,46 @@ impl MessageService {
                 // ones that decode and process them.
                 Ok(None)
             }
+            EnvelopeKind::PairwiseWelcome => {
+                let Some(pw) = self.pairwise.as_ref() else {
+                    return Ok(None);
+                };
+                if !pw.has_session(envelope.conversation_id) {
+                    pw.accept_welcome(envelope.conversation_id, &envelope.payload)
+                        .map_err(|e| MessageServiceError::Pairwise(e.to_string()))?;
+                }
+                self.send_delivery_ack(peer, envelope.conversation_id, envelope.message_id);
+                Ok(None)
+            }
+            EnvelopeKind::PairwiseMls => {
+                let Some(pw) = self.pairwise.as_ref() else {
+                    return Ok(None);
+                };
+                let plaintexts = pw
+                    .receive(envelope.conversation_id, &envelope.payload)
+                    .map_err(|e| MessageServiceError::Pairwise(e.to_string()))?;
+                let mut last = None;
+                for pt in plaintexts {
+                    let inner: crate::PairwisePlain =
+                        postcard::from_bytes(&pt).map_err(|_| MessageServiceError::Malformed)?;
+                    let content: MessageContent = postcard::from_bytes(&inner.content)
+                        .map_err(|_| MessageServiceError::Malformed)?;
+                    let is_new = self.messages.insert_if_new(&StoredMessage {
+                        message_id: inner.message_id,
+                        conversation_id: envelope.conversation_id,
+                        sender_device: envelope.sender,
+                        sequence: inner.sequence,
+                        timestamp_millis: inner.timestamp_millis,
+                        delivery_state: DeliveryState::Delivered,
+                        payload: inner.content,
+                    })?;
+                    if is_new {
+                        self.send_delivery_ack(peer, envelope.conversation_id, inner.message_id);
+                        last = Some(content);
+                    }
+                }
+                Ok(last.map(IncomingEvent::Content))
+            }
             EnvelopeKind::Text | EnvelopeKind::Attachment => {
                 let session = self.session_for(peer);
                 let plaintext = session.decrypt(&envelope.payload)?;
@@ -933,6 +1000,9 @@ impl MessageService {
                 self.messages
                     .update_delivery_state(acked_message, DeliveryState::Delivered)?;
                 self.outbox.complete(acked_message)?;
+                if let Some(pw) = self.pairwise.as_ref() {
+                    let _ = pw.ack(acked_message);
+                }
                 // §33 `MessageDelivered` — the confirmation that this
                 // message reached the recipient came from them
                 // (`envelope.sender` here is whoever sent the ACK, i.e.
@@ -1052,6 +1122,136 @@ impl MessageService {
         Ok(())
     }
 
+    /// Open a forward-secret 1:1 session with `peer` using a key package
+    /// from `directory`, and send the Welcome. Safe to call again: it does
+    /// nothing if a session already exists. Returns `false` if the peer has
+    /// published no key package yet (keep using the static-key path).
+    pub async fn open_pairwise_session(
+        &self,
+        conversation: ConversationId,
+        peer: &PeerTicket,
+        directory: &dyn crate::KeyPackageDirectory,
+        peer_device: DeviceId,
+        profile: siar_crypto_mls::PairwiseProfile,
+    ) -> Result<bool, MessageServiceError> {
+        let Some(pw) = self.pairwise.as_ref() else {
+            return Ok(false);
+        };
+        if pw.has_session(conversation) {
+            return Ok(true);
+        }
+        let Some(kp) = directory.take(peer_device) else {
+            return Ok(false);
+        };
+        let welcome = pw
+            .start_session(conversation, &kp, profile)
+            .map_err(|e| MessageServiceError::Pairwise(e.to_string()))?;
+        let message_id = MessageId::new();
+        let row = crate::Unacked {
+            message_id,
+            conversation,
+            peer_ticket_hex: peer.encode(),
+            payload: welcome,
+            welcome: true,
+            next_attempt_millis: now_millis() + ACK_TIMEOUT_MILLIS,
+        };
+        pw.remember_unacked(row.clone())
+            .map_err(|e| MessageServiceError::Pairwise(e.to_string()))?;
+        self.send_pairwise_frame(peer, &row).await;
+        Ok(true)
+    }
+
+    async fn send_pairwise_frame(&self, peer: &PeerTicket, row: &crate::Unacked) {
+        let envelope = Envelope {
+            version: CURRENT_VERSION,
+            message_id: row.message_id,
+            conversation_id: row.conversation,
+            sender: self.device_id,
+            timestamp_millis: now_millis(),
+            sequence: 0,
+            kind: if row.welcome {
+                EnvelopeKind::PairwiseWelcome
+            } else {
+                EnvelopeKind::PairwiseMls
+            },
+            payload: row.payload.clone(),
+        };
+        if let Err(e) = self
+            .endpoint
+            .send(peer.endpoint_addr.clone(), &WireMessage::V1(envelope))
+            .await
+        {
+            tracing::warn!(error = %e, "pairwise send failed, kept for retry");
+        }
+    }
+
+    /// Send `content` over the conversation's OpenMLS session. The local row
+    /// stores the **plaintext** (see `PairwiseService`'s docs: a forward-secret
+    /// ciphertext cannot be decrypted again); the sealed bytes are kept in
+    /// the pairwise service's own un-acked store and resent verbatim until the
+    /// peer's `DeliveryAck`.
+    async fn send_pairwise(
+        &self,
+        conversation: ConversationId,
+        peer: &PeerTicket,
+        content: MessageContent,
+    ) -> Result<MessageId, MessageServiceError> {
+        let pw = self.pairwise.as_ref().expect("checked by the caller");
+        let message_id = MessageId::new();
+        let now = now_millis();
+        let sequence = next_sequence(&self.last_sequence, now);
+        let content_bytes =
+            postcard::to_allocvec(&content).expect("MessageContent always serializes");
+        let inner = postcard::to_allocvec(&crate::PairwisePlain {
+            message_id,
+            sequence,
+            timestamp_millis: now,
+            content: content_bytes.clone(),
+        })
+        .expect("PairwisePlain always serializes");
+        let payload = pw
+            .seal(conversation, &inner)
+            .map_err(|e| MessageServiceError::Pairwise(e.to_string()))?;
+
+        self.messages.insert_if_new(&StoredMessage {
+            message_id,
+            conversation_id: conversation,
+            sender_device: self.device_id,
+            sequence,
+            timestamp_millis: now,
+            delivery_state: DeliveryState::Local,
+            payload: content_bytes,
+        })?;
+        let row = crate::Unacked {
+            message_id,
+            conversation,
+            peer_ticket_hex: peer.encode(),
+            payload,
+            welcome: false,
+            next_attempt_millis: now_millis() + ACK_TIMEOUT_MILLIS,
+        };
+        pw.remember_unacked(row.clone())
+            .map_err(|e| MessageServiceError::Pairwise(e.to_string()))?;
+        self.send_pairwise_frame(peer, &row).await;
+        self.messages
+            .update_delivery_state(message_id, DeliveryState::Sent)?;
+        Ok(message_id)
+    }
+
+    /// Plaintext content of a message stored for `conversation`: pairwise
+    /// conversations keep it as plain `MessageContent` bytes, everything else
+    /// is the static-key ciphertext [`Self::open_stored_payload`] opens.
+    pub fn open_stored_pairwise_payload(
+        &self,
+        conversation: ConversationId,
+        payload: &[u8],
+    ) -> Option<MessageContent> {
+        self.pairwise
+            .as_ref()
+            .filter(|p| p.has_session(conversation))
+            .and_then(|_| postcard::from_bytes(payload).ok())
+    }
+
     /// plan.md §33: the retry scheduler's core poll. Call this
     /// periodically (the CLI's background task does, every second or so)
     /// — reconstructs each due message from storage (no second copy of
@@ -1122,6 +1322,18 @@ impl MessageService {
             }
         }
 
+        if let Some(pw) = self.pairwise.as_ref() {
+            for row in pw.due(now_millis()) {
+                let Ok(peer) = PeerTicket::decode(&row.peer_ticket_hex) else {
+                    let _ = pw.ack(row.message_id);
+                    continue;
+                };
+                self.send_pairwise_frame(&peer, &row).await;
+                retried += 1;
+                let _ = pw.reschedule(row.message_id, now_millis() + ACK_TIMEOUT_MILLIS);
+            }
+        }
+
         // plan.md §35: sweep dead pooled connections while we're already
         // on this periodic cadence, rather than adding a second timer.
         self.endpoint.evict_idle_connections();
@@ -1151,6 +1363,28 @@ impl MessageService {
     ) -> Result<MessageContent, MessageServiceError> {
         let plaintext = self.session_for(peer).decrypt(payload)?;
         postcard::from_bytes(&plaintext).map_err(|_| MessageServiceError::Malformed)
+    }
+
+    fn send_delivery_ack(&self, peer: &PeerTicket, conversation: ConversationId, acked: MessageId) {
+        let ack = Envelope {
+            version: CURRENT_VERSION,
+            message_id: MessageId::new(),
+            conversation_id: conversation,
+            sender: self.device_id,
+            timestamp_millis: now_millis(),
+            sequence: 0,
+            kind: EnvelopeKind::DeliveryAck {
+                acked_message: acked,
+            },
+            payload: Vec::new(),
+        };
+        let endpoint = self.endpoint.clone();
+        let addr = peer.endpoint_addr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = endpoint.send(addr, &WireMessage::V1(ack)).await {
+                tracing::debug!(error = %e, "best-effort delivery ACK send failed");
+            }
+        });
     }
 
     fn session_for(&self, peer: &PeerTicket) -> Session {

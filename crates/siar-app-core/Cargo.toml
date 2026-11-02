@@ -15,6 +15,7 @@ siar-crypto.workspace = true
 siar-storage.workspace = true
 siar-transport.workspace = true
 siar-messaging.workspace = true
+siar-crypto-mls.workspace = true
 siar-protocol.workspace = true
 siar-media-image.workspace = true
 siar-identity-multidevice.workspace = true

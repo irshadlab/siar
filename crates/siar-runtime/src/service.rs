@@ -86,18 +86,16 @@ pub fn user_service_ctx(
 
 fn user_manager() -> io::Result<(Box<dyn service_manager::ServiceManager>, bool)> {
     use service_manager::{ServiceLevel, ServiceManager, ServiceManagerKind};
-    if cfg!(windows) {
-        // A Windows service must also run the service-control dispatcher
-        // (the `windows-service` crate) inside the binary; installing one
-        // without it would register something that cannot start.
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows service install needs the windows-service entry point (not built yet)",
-        ));
-    }
     let kind = ServiceManagerKind::native()?;
     let mut m = <dyn ServiceManager>::target(kind);
-    m.set_level(ServiceLevel::User)?;
+    // Windows has no per-user services: the SCM registers machine-wide ones
+    // (needs an elevated prompt). The binary must then be started with the
+    // `service-run` entry point — see `apps/daemon`'s `winservice` module.
+    m.set_level(if cfg!(windows) {
+        ServiceLevel::System
+    } else {
+        ServiceLevel::User
+    })?;
     Ok((m, kind == ServiceManagerKind::Systemd))
 }
 
@@ -123,9 +121,28 @@ pub fn uninstall_user_service() -> io::Result<()> {
     })
 }
 
-/// §35: resolves on SIGINT or SIGTERM (Ctrl-C on non-Unix). Install once per
+static EXTERNAL_STOP: std::sync::OnceLock<tokio_util::sync::CancellationToken> =
+    std::sync::OnceLock::new();
+
+/// A process-wide "please stop" that is not an OS signal. The Windows
+/// service-control handler (which runs on an SCM thread, outside any async
+/// runtime) cancels it on `Stop`/`Shutdown`; [`terminate_signal`] observes it.
+pub fn external_stop() -> tokio_util::sync::CancellationToken {
+    EXTERNAL_STOP.get_or_init(Default::default).clone()
+}
+
+/// §35: resolves on SIGINT or SIGTERM (Ctrl-C on non-Unix), or when
+/// [`external_stop`] is cancelled (a Windows service `Stop`). Install once per
 /// process; the first signal requests a graceful shutdown.
 pub async fn terminate_signal() {
+    let stop = external_stop();
+    tokio::select! {
+        () = os_signal() => {}
+        () = stop.cancelled() => {}
+    }
+}
+
+async fn os_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
@@ -352,5 +369,18 @@ mod tests {
         let other = user_service_ctx("Siar daemon", exe, &["run"], false).unwrap();
         assert!(other.contents.is_none());
         assert_eq!(other.args, vec![std::ffi::OsString::from("run")]);
+    }
+
+    #[tokio::test]
+    async fn an_external_stop_ends_terminate_signal() {
+        // Process-global by design, so this test is the only one that cancels it.
+        let waiter = tokio::spawn(terminate_signal());
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished());
+        external_stop().cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("a service Stop must end the wait")
+            .unwrap();
     }
 }

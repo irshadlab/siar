@@ -93,7 +93,10 @@ pub use identity::{
     decode_key_package, encode_key_package, generate_identity, generate_identity_with_suite,
     MlsIdentity, MlsIdentityError,
 };
-pub use pairwise::{PairwiseError, PairwiseEvent, PairwisePolicy, PairwiseSession};
+pub use pairwise::{
+    pairwise_identity, PairwiseError, PairwiseEvent, PairwisePolicy, PairwiseProfile,
+    PairwiseSession,
+};
 pub use persistent::{JsonCodec, PersistentProviderError, SqlitePersistentProvider};
 // Re-exported so callers (e.g. `siar-messaging::group_service`) don't
 // need their own direct dependency on `openmls_rust_crypto` just to
@@ -114,20 +117,32 @@ pub use openmls_rust_crypto::OpenMlsRustCrypto;
 /// README lists first under "Supported ciphersuites" and marks
 /// "(MTI)".
 pub use openmls_traits::types::Ciphersuite;
-/// The post-quantum suite used for every 1:1 session:
-/// `MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44`
-/// (draft-ietf-mls-pq-ciphersuites).
+/// **Default** 1:1 suite — `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519`:
+/// *hybrid* ML-KEM-768 + X25519 key exchange (an attacker must break both;
+/// defeats harvest-now-decrypt-later) with ordinary Ed25519 signatures.
 ///
-/// * **Key exchange: hybrid** ML-KEM-768 + X25519 — an attacker must break
-///   *both*, so a flaw in the young ML-KEM does not undo X25519 and a quantum
-///   computer does not undo ML-KEM (defeats harvest-now-decrypt-later).
-/// * **Signatures: ML-DSA-44** — authentication is post-quantum too. Cost:
-///   ML-DSA public keys (≈1.3 KB) and signatures (≈2.4 KB) are far larger
-///   than Ed25519's, which matters for key packages and commits on small-MTU
-///   links (BLE); expect fragmentation there.
-///
-/// Both pieces are IETF *drafts* with draft code points: fine for a closed
-/// ecosystem like Siar's own clients, not interoperable with other MLS stacks.
+/// Why not ML-DSA by default: measured on this crate, a 100-byte message is
+/// 246 bytes with Ed25519 but 2602 with ML-DSA-44 (every MLS message carries
+/// a signature), and a self-update commit is 4.0 KB vs 10.0 KB — fatal on
+/// BLE/DTN links. Signatures only matter against an attacker who can forge
+/// *at the moment of attack* (nothing recorded today is retroactively
+/// forgeable), whereas the key exchange protects traffic recorded today; so
+/// the bytes go where the quantum threat actually is. See
+/// [`PQ_FULL_CIPHERSUITE`] for the opt-in that also signs post-quantum.
 pub const PQ_CIPHERSUITE: Ciphersuite =
+    Ciphersuite::MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519;
+
+/// Opt-in "full PQ" suite — hybrid ML-KEM-768 + X25519 *and* ML-DSA-44
+/// signatures (`..._MLDSA44`). Post-quantum authentication, at ~10x the
+/// message size (see [`PQ_CIPHERSUITE`]). Choose it for links without small
+/// MTUs and for high-assurance contacts.
+///
+/// Both PQ suites use IETF *draft* code points (draft-ietf-mls-pq-ciphersuites):
+/// fine between Siar clients, **not** interoperable with other MLS stacks
+/// until the RFC assigns final values. The suite is a per-session policy
+/// recorded in the group, so adopting final code points later means opening
+/// a new session, not changing stored ones.
+pub const PQ_FULL_CIPHERSUITE: Ciphersuite =
     Ciphersuite::MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44;
+
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;

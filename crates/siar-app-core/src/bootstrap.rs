@@ -344,9 +344,21 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
         }
     };
 
-    let service = Arc::new(MessageService::new(
-        device_id, identity, endpoint, messages, outbox, blobs,
-    ));
+    let mut service = MessageService::new(device_id, identity, endpoint, messages, outbox, blobs);
+    // Forward-secret, post-quantum 1:1 sessions (OpenMLS). Attaching the
+    // service changes nothing for a conversation until a pairwise session is
+    // opened for it (`MessageService::open_pairwise_session`); conversations
+    // without one keep using the static-key session. A failure here costs the
+    // upgrade path, never 1:1 messaging itself.
+    match siar_messaging::PairwiseService::new(
+        device_id,
+        paths.data_dir.join("pairwise"),
+        siar_crypto_mls::PairwisePolicy::default(),
+    ) {
+        Ok(pw) => service = service.with_pairwise(Arc::new(pw)),
+        Err(e) => tracing::warn!(error = %e, "pairwise sessions unavailable"),
+    }
+    let service = Arc::new(service);
     Ok(Bootstrapped {
         service,
         group_service,

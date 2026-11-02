@@ -12,6 +12,8 @@
 //! a *client* of this daemon needs domain-level state sync — see ROADMAP.)
 
 mod app;
+#[cfg(windows)]
+mod winservice;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -66,6 +68,10 @@ enum Args {
     Install,
     /// Remove the per-user service.
     Uninstall,
+    /// Entry point the Windows Service Control Manager launches (not for
+    /// interactive use; `install` registers it).
+    #[command(hide = true)]
+    ServiceRun,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -82,6 +88,7 @@ enum Cli {
     Unit,
     Install,
     Uninstall,
+    ServiceRun,
 }
 
 impl From<Args> for Cli {
@@ -105,6 +112,7 @@ impl From<Args> for Cli {
             Args::Unit => Cli::Unit,
             Args::Install => Cli::Install,
             Args::Uninstall => Cli::Uninstall,
+            Args::ServiceRun => Cli::ServiceRun,
         }
     }
 }
@@ -126,7 +134,9 @@ fn main() -> Result<()> {
     match cli {
         Cli::Install => {
             let exe = std::env::current_exe()?;
-            siar_runtime::service::install_user_service("Siar daemon", &exe, &["run"])
+            // Windows: the SCM must launch the service-control entry point.
+            let entry = if cfg!(windows) { "service-run" } else { "run" };
+            siar_runtime::service::install_user_service("Siar daemon", &exe, &[entry])
                 .context("installing the service")?;
             println!("installed {}", siar_runtime::service::SERVICE_LABEL);
             Ok(())
@@ -135,6 +145,7 @@ fn main() -> Result<()> {
             siar_runtime::service::uninstall_user_service().context("removing the service")?;
             Ok(())
         }
+        Cli::ServiceRun => service_run(),
         Cli::Unit => {
             let exe = std::env::current_exe()?;
             print!(
@@ -159,6 +170,16 @@ fn main() -> Result<()> {
             rt.block_on(run(socket, config, replace))
         }
     }
+}
+
+#[cfg(windows)]
+fn service_run() -> Result<()> {
+    winservice::run().context("starting under the Windows Service Control Manager")
+}
+
+#[cfg(not(windows))]
+fn service_run() -> Result<()> {
+    bail!("service-run is the Windows Service Control Manager entry point; use `run` here")
 }
 
 async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: bool) -> Result<()> {

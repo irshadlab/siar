@@ -84,4 +84,17 @@ pub enum EnvelopeKind {
     ReadReceipt {
         through_sequence: u64,
     },
+    /// The Welcome that opens a 1:1 OpenMLS session
+    /// (`siar_crypto_mls::PairwiseSession`), sent once by the initiator.
+    /// `payload` is the raw MLS Welcome — no outer `Session` wrapping, for
+    /// the same reason as `GroupMlsWelcome`. **Appended last on purpose**:
+    /// postcard encodes enum variants by index, so inserting earlier would
+    /// change the wire form of every variant after it.
+    PairwiseWelcome,
+    /// A 1:1 OpenMLS batch (own commit if due, then the message), see
+    /// `siar-messaging::PairwiseService`. `payload` is the postcard batch of
+    /// raw MLS wire messages; the message id/sequence/timestamp live
+    /// *inside* the encrypted plaintext, so a message that was deferred
+    /// behind a late commit still arrives with its own identity.
+    PairwiseMls,
 }

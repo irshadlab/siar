@@ -18,15 +18,12 @@
 > [!CAUTION]
 > ### ⚠️ FOUNDATIONAL DEVELOPMENT NOTICE — NOT CURRENTLY USABLE ON ANY DEVICE
 >
-> * **Active Foundational Development:** SIAR is currently in pre-alpha foundational systems development. **It is NOT YET USABLE on any daily-driver mobile phone, desktop, or operational device.** End-user applications and installable packages will become operational upon the completion of the first formal milestone release (Milestone 1 / v0.1.0+).
-> * **AI / LLM Development Transparency Disclosure:** SIAR's extensive architectural specifications (176 specifications across 514k+ lines), wiki documentation, and codebase are **heavily developed with the assistance of advanced Artificial Intelligence / Large Language Models (AI/LLMs)** working under human architectural direction and verification.
-> * **URGENT: Security Researchers, Cryptographers & Protocol Engineers Required:** Because SIAR is designed for post-infrastructure, disaster-recovery, and high-threat environments, **independent third-party security researchers and protocol engineers are urgently needed** to perform formal mathematical verification, cryptographic audits, memory safety inspections, and fuzz testing across the cryptography (`siar-crypto`, `siar-crypto-mls`), wire framing (`siar-protocol`, `siar-protocol-ext`), transport/routing (`siar-transport`, `siar-routing-policy`), storage, and media subsystems to discover and eliminate potential vulnerabilities before real-world deployment.
->
-> **DO NOT deploy SIAR in production, life-safety, high-threat, or operational environments until formal independent audits and the v0.1.0 milestone release are complete.**
-
+> * **Active Foundational Development:** SIAR is currently in pre-alpha foundational systems development.
+> * **AI / LLM Development Transparency Disclosure:** SIAR's extensive architectural specifications (176 specifications across 514k+ lines), wiki documentation, and codebase are **heavily developed with the assistance of Artificial Intelligence / Large Language Models (AI/LLMs)** working under human architectural direction.
+> * **URGENT: Security Researchers, Cryptographers & Protocol Engineers Required:** Because SIAR is designed for post-infrastructure, disaster-recovery, and high-threat environments, **independent third-party security researchers and protocol engineers are urgently needed** to perform formal mathematical verification, cryptographic audits, memory safety inspections, and fuzz testing across the cryptography (`siar-crypto`, `siar-crypto-mls`), wire framing (`siar-protocol`, `siar-protocol-ext`), transport/routing (`siar-transport`, `siar-routing-policy`), storage, and media subsystems to discover and eliminate potential vulnerabilities.
+> * **Currently I'm (Irshad Ali) only one working on SIAR.**
 > 🏛️ **Organization Stewardship & Research Initiative:**  
-> **SIAR** is an open-source systems initiative developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab)) — focused on local-first computing, resilient peer-to-peer networking, and sovereign systems engineering.
->
+> **SIAR** is an open-source systems initiative developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab)) by Irshad Ali — focused on local-first computing, resilient peer-to-peer networking, and sovereign systems engineering.
 > **Official Showcase, Package Center & Live Architecture Documentation:**
 > - 🌐 **[Official Product Presentation](https://siar.irshadlab.org/)**
 > - 🖼️ **[Desktop UI Reference Gallery](docs/screenshots/README.md)** — Dark/Light themes, Contact Verification, MLS Groups & Settings
@@ -1251,4 +1248,4 @@ All contributions to SIAR are governed by **[CONTRIBUTING.md](CONTRIBUTING.md)**
 
 ---
 
-*Built with Rust, slint, kotlin on desktop and android for UI respectively and OpenMLS by [Irshad Lab](https://irshadlab.org) and the SIAR Open Source Engineering Team.*
+*Built with Rust for core, slint and kotlin on desktop and android for UI respectively by [Irshad Lab](https://irshadlab.org) Irshad Ali.*

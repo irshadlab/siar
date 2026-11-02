@@ -161,12 +161,19 @@ impl Default for GroupParams {
 }
 
 impl GroupParams {
-    /// Post-quantum hybrid suite, with windows sized for store-carry-forward
+    /// Post-quantum hybrid suite (default profile), with windows sized for store-carry-forward
     /// delivery (hours of reordering, long gaps) instead of a live socket.
     #[must_use]
     pub fn pairwise_dtn() -> Self {
+        Self::pairwise_dtn_with(crate::PQ_CIPHERSUITE)
+    }
+
+    /// [`Self::pairwise_dtn`] with an explicit suite (see
+    /// [`crate::PairwiseProfile`]).
+    #[must_use]
+    pub fn pairwise_dtn_with(ciphersuite: openmls_traits::types::Ciphersuite) -> Self {
         Self {
-            ciphersuite: crate::PQ_CIPHERSUITE,
+            ciphersuite,
             out_of_order_tolerance: 512,
             maximum_forward_distance: 4096,
             max_past_epochs: 4,

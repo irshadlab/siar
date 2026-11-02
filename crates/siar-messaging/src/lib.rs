@@ -15,6 +15,7 @@ pub mod events;
 mod files_transport;
 mod group_service;
 mod key_package_directory;
+mod pairwise_service;
 pub mod projections;
 mod service;
 pub mod stoolap_projections;
@@ -53,5 +54,6 @@ pub use group_service::{
     InMemoryDeviceDirectory, MemberDevice, WelcomeBundle,
 };
 pub use key_package_directory::{InMemoryKeyPackageDirectory, KeyPackageDirectory};
+pub use pairwise_service::{PairwisePlain, PairwiseService, PairwiseServiceError, Unacked};
 
 pub mod mls_store;

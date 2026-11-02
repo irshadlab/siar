@@ -52,7 +52,11 @@
 //! this hand-pairing is Phase-1-only (real contact discovery is
 //! plan.md §41–42, a later phase).
 
-use anyhow::{bail, Context, Result};
+mod args;
+
+use anyhow::{Context, Result};
+use args::{Args, Command};
+use clap::Parser as _;
 use siar_crypto::DeviceIdentity;
 use siar_domain::{AccountId, ConversationId, DeviceId, MessageContent, MessageText};
 use siar_messaging::{
@@ -70,119 +74,52 @@ use tokio::sync::mpsc;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-
-    let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(String::as_str) {
-        Some("listen") => {
-            // `--publish-key-package` can appear anywhere after
-            // `listen`; whatever's left is the peer ticket, same as
-            // before. Simple flag scan rather than a real argument
-            // parser — consistent with this harness's existing
-            // positional-args style (plan.md §98's "acceptance
-            // harness", not a production CLI).
-            let rest: Vec<&String> = args.iter().skip(2).collect();
-            let publish_key_package = rest.iter().any(|a| a.as_str() == "--publish-key-package");
-            let peer_arg = rest
-                .into_iter()
-                .find(|a| a.as_str() != "--publish-key-package");
-            listen(peer_arg, publish_key_package).await
-        }
-        Some("send") => {
-            let ticket = args
-                .get(2)
-                .context("usage: siar send <their-ticket> <text>")?;
-            let text = args
-                .get(3)
-                .context("usage: siar send <their-ticket> <text>")?;
-            send(ticket, text).await
-        }
-        Some("send-file") => {
-            let ticket = args
-                .get(2)
-                .context("usage: siar send-file <their-ticket> <path>")?;
-            let path = args
-                .get(3)
-                .context("usage: siar send-file <their-ticket> <path>")?;
-            send_file(ticket, path).await
-        }
-        Some("publish-key-package") => publish_key_package().await,
-        Some("check-mailbox") => {
-            let relay_ticket = args
-                .get(2)
-                .context("usage: siar check-mailbox <relay-ticket>")?;
-            check_mailbox(relay_ticket).await
-        }
-        Some("send-anon") => {
-            let peer_ticket = args.get(2).context(SEND_ANON_USAGE)?;
-            let relay_ticket = args.get(3).context(SEND_ANON_USAGE)?;
-            let text = args.get(4).context(SEND_ANON_USAGE)?;
-            send_anon(peer_ticket, relay_ticket, text).await
-        }
-        Some("check-mailbox-anon") => {
-            let peer_ticket = args.get(2).context(CHECK_MAILBOX_ANON_USAGE)?;
-            let relay_ticket = args.get(3).context(CHECK_MAILBOX_ANON_USAGE)?;
-            check_mailbox_anon(peer_ticket, relay_ticket).await
-        }
-        Some("group-create") => group_create().await,
-        Some("group-add-member") => {
-            let conversation = args.get(2).context(GROUP_ADD_MEMBER_USAGE)?;
-            let peer_ticket = args.get(3).context(GROUP_ADD_MEMBER_USAGE)?;
-            let peer_device_id = args.get(4).context(GROUP_ADD_MEMBER_USAGE)?;
-            let peer_account_id = args.get(5).context(GROUP_ADD_MEMBER_USAGE)?;
-            let key_package_b64 = args.get(6).context(GROUP_ADD_MEMBER_USAGE)?;
+    match Args::parse().command {
+        Command::Listen {
+            publish_key_package,
+            their_ticket,
+        } => listen(their_ticket.as_ref(), publish_key_package).await,
+        Command::Send { their_ticket, text } => send(&their_ticket, &text).await,
+        Command::SendFile { their_ticket, path } => send_file(&their_ticket, &path).await,
+        Command::PublishKeyPackage => publish_key_package().await,
+        Command::CheckMailbox { relay_ticket } => check_mailbox(&relay_ticket).await,
+        Command::SendAnon {
+            their_ticket,
+            relay_ticket,
+            text,
+        } => send_anon(&their_ticket, &relay_ticket, &text).await,
+        Command::CheckMailboxAnon {
+            their_ticket,
+            relay_ticket,
+        } => check_mailbox_anon(&their_ticket, &relay_ticket).await,
+        Command::GroupCreate => group_create().await,
+        Command::GroupAddMember {
+            conversation_id,
+            peer_ticket,
+            peer_device_id,
+            peer_account_id,
+            base64_key_package,
+        } => {
             group_add_member(
-                conversation,
-                peer_ticket,
-                peer_device_id,
-                peer_account_id,
-                key_package_b64,
+                &conversation_id,
+                &peer_ticket,
+                &peer_device_id,
+                &peer_account_id,
+                &base64_key_package,
             )
             .await
         }
-        Some("group-send") => {
-            let conversation = args
-                .get(2)
-                .context("usage: siar group-send <conversation-id> <text>")?;
-            let text = args
-                .get(3)
-                .context("usage: siar group-send <conversation-id> <text>")?;
-            group_send(conversation, text).await
-        }
-        Some("join-group") => {
-            let conversation = args.get(2).context(JOIN_GROUP_USAGE)?;
-            let welcome_b64 = args.get(3).context(JOIN_GROUP_USAGE)?;
-            let state_b64 = args.get(4).context(JOIN_GROUP_USAGE)?;
-            join_group(conversation, welcome_b64, state_b64).await
-        }
-        _ => bail!(
-            "usage:\n  \
-             siar listen [their-ticket]\n  \
-             siar send <their-ticket> <text>\n  \
-             siar send-file <their-ticket> <path>\n  \
-             siar publish-key-package\n  \
-             siar check-mailbox <relay-ticket>\n  \
-             siar {SEND_ANON_USAGE_BARE}\n  \
-             siar {CHECK_MAILBOX_ANON_USAGE_BARE}\n  \
-             siar group-create\n  \
-             siar {GROUP_ADD_MEMBER_USAGE_BARE}\n  \
-             siar group-send <conversation-id> <text>\n  \
-             siar {JOIN_GROUP_USAGE_BARE}"
-        ),
+        Command::GroupSend {
+            conversation_id,
+            text,
+        } => group_send(&conversation_id, &text).await,
+        Command::JoinGroup {
+            conversation_id,
+            base64_welcome_bytes,
+            base64_group_state,
+        } => join_group(&conversation_id, &base64_welcome_bytes, &base64_group_state).await,
     }
 }
-
-const SEND_ANON_USAGE_BARE: &str = "send-anon <their-ticket> <relay-ticket> <text>";
-const SEND_ANON_USAGE: &str = "usage: siar send-anon <their-ticket> <relay-ticket> <text> (delivers via the unlinkable token-mailbox path — see send_text_anon's own doc comment for what this does and doesn't guarantee)";
-const CHECK_MAILBOX_ANON_USAGE_BARE: &str = "check-mailbox-anon <their-ticket> <relay-ticket>";
-const CHECK_MAILBOX_ANON_USAGE: &str = "usage: siar check-mailbox-anon <their-ticket> <relay-ticket> (checks for messages sent via send-anon from this specific peer — an anonymous check-in has no sender field, so you have to already know who you're checking mail from)";
-
-const GROUP_ADD_MEMBER_USAGE_BARE: &str =
-    "group-add-member <conversation-id> <peer-ticket> <peer-device-id> <peer-account-id> <base64-key-package>";
-const GROUP_ADD_MEMBER_USAGE: &str = "usage: siar group-add-member <conversation-id> <peer-ticket> <peer-device-id> <peer-account-id> <base64-key-package> (run publish-key-package in the peer's process first to get the last three)";
-const JOIN_GROUP_USAGE_BARE: &str =
-    "join-group <conversation-id> <base64-welcome-bytes> <base64-group-state>";
-const JOIN_GROUP_USAGE: &str =
-    "usage: siar join-group <conversation-id> <base64-welcome-bytes> <base64-group-state> (both printed by the member who ran group-add-member — see this file's module doc comment for why this command can't actually succeed run as its own separate process today)";
 
 /// Everything `bootstrap()` assembles for one process — a small struct
 /// instead of an ever-growing tuple now that group commands need

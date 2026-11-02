@@ -1251,4 +1251,4 @@ All contributions to SIAR are governed by **[CONTRIBUTING.md](CONTRIBUTING.md)**
 
 ---
 
-*Built with Rust, Kotlin, and OpenMLS by [Irshad Lab](https://irshadlab.org) and the SIAR Open Source Engineering Team.*
+*Built with Rust, slint, kotlin on desktop and android for UI respectively and OpenMLS by [Irshad Lab](https://irshadlab.org) and the SIAR Open Source Engineering Team.*

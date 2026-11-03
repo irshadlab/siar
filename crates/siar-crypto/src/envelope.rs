@@ -5,12 +5,13 @@
 //! type. `Session` is Phase-1, static-ECDH-key AEAD with no per-message
 //! counter state (see its own module doc) — there is nowhere in it to
 //! hang a replay-safe counter or a deterministic nonce. Rather than bolt
-//! that state onto a type this crate's own docs already say is getting
-//! replaced by a real ratchet (§12/§13, still unbuilt), this module's
+//! that state onto a type this crate's own docs already say is the
+//! no-forward-secrecy fallback (forward-secret 1:1 sessions are OpenMLS
+//! two-member groups in `siar-crypto-mls::pairwise`), this module's
 //! `encrypt_envelope`/`decrypt_envelope` take a raw per-message AEAD key
-//! and an explicit `(epoch, counter)` directly — infrastructure a future
-//! ratchet session can call into once it exists, without this envelope
-//! layer needing to change shape.
+//! and an explicit `(epoch, counter)` directly — infrastructure any
+//! session layer can call into without this envelope layer needing to
+//! change shape.
 //!
 //! Nonce safety (§17: "do not create ad-hoc nonce schemes... use...
 //! protocol state that guarantees safe nonce use") is met here by

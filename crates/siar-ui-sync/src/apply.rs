@@ -216,6 +216,13 @@ fn apply_update(s: &mut Slices, u: &SectionUpdate) {
                 waiting: d.waiting,
             });
         }
+        (SectionKey::SecurityEvents, Section::SecurityEvents(list)) => {
+            s.security_events.restore(
+                list.iter()
+                    .map(siar_ui_state::SecurityEvent::from)
+                    .collect(),
+            );
+        }
         (SectionKey::Timeline(c), Section::Timeline(d)) => {
             let entries = d
                 .entries

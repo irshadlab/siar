@@ -235,6 +235,58 @@ impl Core {
 
     /// Leave the network politely (idempotent). Hosts that keep command
     /// senders alive past shutdown — a daemon — call this directly.
+    /// Generate and persist a post-quantum key package so a peer can open a
+    /// forward-secret 1:1 session with this device while it is offline.
+    /// Returns `(this device's id, base64 key package)` — both are needed by
+    /// the peer's [`Self::pairwise_open`].
+    pub fn pairwise_publish(
+        &self,
+        profile: siar_crypto_mls::PairwiseProfile,
+    ) -> Result<(DeviceId, String), String> {
+        use base64::Engine as _;
+        use siar_messaging::KeyPackageDirectory as _;
+        let pw = self
+            .service
+            .pairwise()
+            .ok_or("pairwise sessions are unavailable on this device")?;
+        let dir = siar_messaging::InMemoryKeyPackageDirectory::new();
+        pw.publish_key_package(profile, &dir)
+            .map_err(|e| e.to_string())?;
+        let kp = dir
+            .take(self.my_device)
+            .ok_or("key package was not produced")?;
+        Ok((
+            self.my_device,
+            base64::engine::general_purpose::STANDARD.encode(kp),
+        ))
+    }
+
+    /// Open a forward-secret 1:1 session for `conversation` with a peer, from
+    /// the key package they gave us ([`Self::pairwise_publish`] on their side).
+    /// `Ok(false)` means "no usable key package": the conversation keeps the
+    /// static-key path. Safe to repeat.
+    pub async fn pairwise_open(
+        &self,
+        conversation: ConversationId,
+        peer_ticket: &str,
+        peer_device: DeviceId,
+        key_package_b64: &str,
+        profile: siar_crypto_mls::PairwiseProfile,
+    ) -> Result<bool, String> {
+        use base64::Engine as _;
+        use siar_messaging::KeyPackageDirectory as _;
+        let kp = base64::engine::general_purpose::STANDARD
+            .decode(key_package_b64.trim())
+            .map_err(|e| format!("key package is not base64: {e}"))?;
+        let peer = PeerTicket::decode(peer_ticket).map_err(|e| format!("bad ticket: {e}"))?;
+        let dir = siar_messaging::InMemoryKeyPackageDirectory::new();
+        dir.publish(peer_device, kp);
+        self.service
+            .open_pairwise_session(conversation, &peer, &dir, peer_device, profile)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     pub async fn shutdown_transport(&self) {
         if tokio::time::timeout(Duration::from_secs(5), self.service.shutdown())
             .await
@@ -581,8 +633,16 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                 Err(e) => core.fail("That ticket couldn’t be read", e),
             },
             AppCommand::ResolveSecurityEvent { event_id } => {
-                if let Err(e) = core.security_repo.set_resolved(event_id) {
-                    core.fail("That change couldn’t be saved", e);
+                match core.security_repo.set_resolved(event_id) {
+                    // The daemon owns this state: mark it in the hub too, so a
+                    // window that sent the command (rather than resolving its
+                    // own copy) sees the change come back as a sync delta.
+                    // Idempotent for a local UI that already did it.
+                    Ok(()) => core.hub.update(|s| {
+                        s.security_events
+                            .resolve(siar_ui_state::SecurityEventId::from_raw(event_id));
+                    }),
+                    Err(e) => core.fail("That change couldn’t be saved", e),
                 }
             }
             AppCommand::SetContactVerified {

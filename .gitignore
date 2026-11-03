@@ -23,4 +23,3 @@ result-*
 .containers-storage/*
 containers.conf
 deploy/*
-crates/siar-app-core/examples/*

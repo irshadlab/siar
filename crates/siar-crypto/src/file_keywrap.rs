@@ -11,7 +11,7 @@
 //! Like [`crate::session::Session`], this is a *static* secret: it has the
 //! same forward-secrecy limit (a later compromise of either device's
 //! long-term key exposes keys wrapped earlier). That is inherited, not
-//! introduced, and is the Phase-2 ratchet's problem (see `lib.rs`).
+//! introduced, and is solved by OpenMLS pairwise sessions, not here (see `lib.rs`).
 
 use x25519_dalek::PublicKey as X25519PublicKey;
 use zeroize::{Zeroize, ZeroizeOnDrop};

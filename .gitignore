@@ -19,3 +19,6 @@ result-*
 #agents
 .agents/*.md
 .agents/*.json
+
+.containers-storage/
+containers.conf

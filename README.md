@@ -21,11 +21,11 @@
 > * **Active Foundational Development:** SIAR is currently in pre-alpha foundational systems development.
 > * **AI / LLM Development Transparency Disclosure:** SIAR's extensive architectural specifications (176 specifications across 514k+ lines), wiki documentation, and codebase are **heavily developed with the assistance of Artificial Intelligence / Large Language Models (AI/LLMs)** working under human architectural direction.
 > * **URGENT: Security Researchers, Cryptographers & Protocol Engineers Required:** Because SIAR is designed for post-infrastructure, disaster-recovery, and high-threat environments, **independent third-party security researchers and protocol engineers are urgently needed** to perform formal mathematical verification, cryptographic audits, memory safety inspections, and fuzz testing across the cryptography (`siar-crypto`, `siar-crypto-mls`), wire framing (`siar-protocol`, `siar-protocol-ext`), transport/routing (`siar-transport`, `siar-routing-policy`), storage, and media subsystems to discover and eliminate potential vulnerabilities.
-> 
+
 > 🏛️ **Organization Stewardship & Research Initiative:
 > **SIAR** is an open-source systems initiative developed and stewarded under **[Irshad Lab](https://irshadlab.org)** ([`@irshadlab`](https://github.com/irshadlab)) by Irshad Ali — focused on local-first computing, resilient peer-to-peer networking, and sovereign systems engineering.
 > 
-> * **Currently I'm (Irshad Ali) only one working on SIAR.
+> Currently I'm (Irshad Ali) only one working on SIAR.**
 > 
 > **Official Showcase, Package Center & Live Architecture Documentation:**
 > - 🌐 **[Official Product Presentation](https://siar.irshadlab.org/)**
@@ -33,7 +33,6 @@
 > - 📚 **[Comprehensive Technical Wiki (50 Chapters)](wiki/Home.md)** — System Stack, Multi-Device Trust, Routing, DTN, Security Center, Calls, Testing & Operations
 > - 📘 **[End-to-End User & Operations Manual](https://siar.irshadlab.org/guide.html)** — Zero-Knowledge Setup, QR/NFC Pairing, Vault Export/Import & Anti-Forensics
 > - 📑 **[System Architecture & Protocol Specs (mdBook)](https://siar.irshadlab.org/sys-arch/)** — 33+ numbered core specs + 27 UI/UX specs
-> - 📦 **[Universal Package Center](https://siar.irshadlab.org/packages.html)** — .deb, .rpm, .apk, .dmg, brew, winget
 > - 🔬 **[Interactive WASM Mesh Simulator Lab](https://siar.irshadlab.org/simulator.html)**
 > - 🛡️ **[SLSA Level 3+ Supply Chain Cryptographic Verifier](https://siar.irshadlab.org/verify.html)**
 

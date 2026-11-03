@@ -18,11 +18,16 @@ siar-ui-sync.workspace = true
 siar-ui-state.workspace = true
 siar-domain.workspace = true
 siar-power.workspace = true
+siar-crypto-mls.workspace = true
 siar-backup.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+ron = "0.12.3"
+# Desktop notifications: zbus (pure Rust) on Linux, toasts on Windows/macOS.
+notify-rust = "4.18"
+serde.workspace = true
 clap = { version = "4", features = ["derive"] }
 uuid.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

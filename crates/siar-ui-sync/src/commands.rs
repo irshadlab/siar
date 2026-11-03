@@ -55,6 +55,11 @@ pub enum WireCommand {
         message_id: MessageId,
         reference: AttachmentReference,
     },
+    /// Mark a synced security event resolved. The id is the one the window
+    /// received in the `SecurityEvents` section; an unknown id is a no-op.
+    ResolveSecurityEvent {
+        event_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -127,8 +132,11 @@ impl TryFrom<&AppCommand> for WireCommand {
                 message_id: *message_id,
                 reference: reference.clone(),
             },
-            // Group management, invites and security-event resolution need
-            // their own synced state first (see ROADMAP).
+            A::ResolveSecurityEvent { event_id } => Self::ResolveSecurityEvent {
+                event_id: *event_id,
+            },
+            // Group management and invites need their own synced state first
+            // (see ROADMAP).
             _ => return Err(WireCommandError::Unsupported),
         })
     }
@@ -210,6 +218,9 @@ impl WireCommand {
                 verified,
             },
             Self::UseContact { device_id } => AppCommand::UseContact { device_id },
+            Self::ResolveSecurityEvent { event_id } => {
+                AppCommand::ResolveSecurityEvent { event_id }
+            }
             Self::LoadAttachmentPreview {
                 message_id,
                 reference,

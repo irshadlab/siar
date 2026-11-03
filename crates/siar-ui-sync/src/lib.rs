@@ -13,6 +13,7 @@ pub mod apply;
 pub mod client;
 pub mod commands;
 pub mod engine;
+pub mod security;
 pub mod server;
 pub mod wire;
 

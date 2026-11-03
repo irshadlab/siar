@@ -41,6 +41,43 @@ impl DaemonApp {
         self.live.get().ok_or(RuntimeError::NotReady)
     }
 
+    /// `<conversation-id> <peer-ticket> <peer-device-id> <base64-key-package>`
+    async fn pairwise_open(&self, data: Vec<u8>) -> Result<Vec<u8>, RuntimeError> {
+        let live = self.live()?;
+        let text = utf8(data)?;
+        let mut parts = text.split_whitespace();
+        let (Some(conv), Some(ticket), Some(device), Some(kp), None) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
+            return Err(RuntimeError::InvalidCommand(
+                "expected: <conversation-id> <peer-ticket> <peer-device-id> <key-package>".into(),
+            ));
+        };
+        let device = uuid::Uuid::parse_str(device)
+            .map(siar_domain::DeviceId::from_uuid)
+            .map_err(|_| RuntimeError::InvalidCommand("not a device id".into()))?;
+        let opened = live
+            .core
+            .pairwise_open(
+                conversation(conv)?,
+                ticket,
+                device,
+                kp,
+                siar_crypto_mls::PairwiseProfile::default(),
+            )
+            .await
+            .map_err(RuntimeError::InvalidCommand)?;
+        Ok(if opened {
+            b"opened".to_vec()
+        } else {
+            b"no usable key package; conversation keeps the static-key path".to_vec()
+        })
+    }
+
     async fn run_query(&self, name: &str, data: Vec<u8>) -> Result<Vec<u8>, RuntimeError> {
         let live = self.live()?;
         if name == "ui-snapshot" {
@@ -49,6 +86,14 @@ impl DaemonApp {
         let hub = live.core.state();
         let out = match name {
             "ticket" => hub.read(|s| s.identity.ticket.clone()),
+            // `<device-id> <base64 key package>` — hand both to the peer.
+            "pairwise-publish" => {
+                let (device, kp) = live
+                    .core
+                    .pairwise_publish(siar_crypto_mls::PairwiseProfile::default())
+                    .map_err(RuntimeError::InvalidCommand)?;
+                format!("{device} {kp}")
+            }
             "summary" => {
                 let (ready, convs, unread) = hub.read(|s| {
                     let c = s.conversations.ordered();
@@ -148,7 +193,12 @@ impl AppService for DaemonApp {
         name: &'a str,
         data: Vec<u8>,
     ) -> BoxFuture<'a, Result<Vec<u8>, RuntimeError>> {
-        Box::pin(async move { self.run_command(name, data) })
+        Box::pin(async move {
+            if name == "pairwise-open" {
+                return self.pairwise_open(data).await;
+            }
+            self.run_command(name, data)
+        })
     }
 
     fn query<'a>(

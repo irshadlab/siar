@@ -20,5 +20,7 @@ result-*
 .agents/*.md
 .agents/*.json
 
-.containers-storage/
+.containers-storage/*
 containers.conf
+deploy/*
+crates/siar-app-core/*

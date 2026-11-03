@@ -711,15 +711,20 @@ async fn the_security_log_survives_restarts_and_a_resolved_warning_stays_resolve
         1
     );
 
-    // The user resolves it (what the UI does: update memory, then persist).
+    // A window resolves it the way a *remote* window must: it sends only the
+    // command (it has no say over the daemon's state). The core has to update
+    // its own state and persist, or the change would never sync back.
     let event_id = a2.hub.read(|s| s.security_events.events()[0].id);
-    a2.hub.update(|s| s.security_events.resolve(event_id));
     a2.tx
         .send(AppCommand::ResolveSecurityEvent {
             event_id: event_id.get(),
         })
         .await
         .unwrap();
+    wait_until("the core marks it resolved in its own state", || {
+        a2.hub.read(|s| s.security_events.events()[0].resolved)
+    })
+    .await;
     // give the core a moment to persist it
     tokio::time::sleep(Duration::from_millis(300)).await;
 

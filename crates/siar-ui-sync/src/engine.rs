@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use siar_ui_model::Slices;
 use siar_ui_state::{ConversationKind, NetworkState, PeerReachability};
 
+use crate::security::SecurityEventDto;
 use crate::wire::*;
 
 /// Bounds on list-shaped sections (a hostile or buggy store can't make one
@@ -123,6 +124,20 @@ pub fn capture(s: &Slices) -> Vec<(SectionKey, Section)> {
             waiting: p.waiting,
         })),
     ));
+
+    // Newest events win the bound (a flood of old ones can't push out a fresh
+    // Critical); sent in id order so equal state captures equally.
+    let mut events: Vec<SecurityEventDto> = s
+        .security_events
+        .events()
+        .into_iter()
+        .map(SecurityEventDto::from)
+        .collect();
+    events.sort_by_key(|e| e.id);
+    if events.len() > MAX_LISTED {
+        events.drain(..events.len() - MAX_LISTED);
+    }
+    out.push((SectionKey::SecurityEvents, Section::SecurityEvents(events)));
 
     let mut convs: Vec<_> = s
         .timelines

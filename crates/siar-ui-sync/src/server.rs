@@ -49,7 +49,12 @@ pub struct UiSyncService {
     bell: Arc<Notify>,
     cache: Mutex<VecDeque<(u64, Vec<SyncFrame>)>>,
     next_id: AtomicU64,
+    observer: Mutex<Option<Observer>>,
 }
+
+/// Called (outside every lock) after each publish pass, with the hub, so a
+/// host can react to state changes without a second wake callback.
+pub type Observer = Arc<dyn Fn(&StateHub) + Send + Sync>;
 
 impl UiSyncService {
     /// Takes over `hub`'s wake callback (this must be a daemon-owned hub, not
@@ -66,12 +71,30 @@ impl UiSyncService {
             bell,
             cache: Mutex::new(VecDeque::new()),
             next_id: AtomicU64::new(1),
+            observer: Mutex::new(None),
         })
+    }
+
+    /// Register the (single) observer; replaces any previous one.
+    pub fn set_observer(&self, f: Observer) {
+        *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(f);
+    }
+
+    fn observe(&self) {
+        let f = self
+            .observer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(f) = f {
+            f(&self.hub);
+        }
     }
 
     /// Publish deltas until the runtime shuts down.
     pub async fn run(self: Arc<Self>, lifecycle: Lifecycle) {
         self.publish_changes(); // baseline
+        self.observe();
         loop {
             tokio::select! {
                 () = self.bell.notified() => {}
@@ -79,6 +102,7 @@ impl UiSyncService {
             }
             tokio::time::sleep(DEBOUNCE).await; // coalesce a burst into one diff
             self.publish_changes();
+            self.observe();
         }
     }
 

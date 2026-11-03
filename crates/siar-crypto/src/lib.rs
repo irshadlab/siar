@@ -6,12 +6,12 @@
 //! has confidentiality/integrity but **not** forward secrecy or
 //! break-in recovery yet.
 //!
-//! plan.md §13 is explicit that a proven ratchet should be used rather
-//! than inventing one — so the Phase-2 reliability pass should replace
-//! `Session` with a real Double Ratchet implementation rather than
-//! extending this one. `vodozemac` (Matrix's pure-Rust, audited-lineage
-//! Olm/Megolm + Double Ratchet implementation) is the strongest
-//! zero-C-dependency fit for that and is the recommended swap-in.
+//! Decision (2026-11): `Session` is **not** being replaced by a hand-built or
+//! Matrix-style Double Ratchet. Forward-secret, post-compromise-secure,
+//! post-quantum 1:1 sessions are two-member OpenMLS groups
+//! (`siar-crypto-mls::pairwise`, wired through `siar-messaging`'s
+//! `PairwiseService`). `Session` stays only as the static-key path for
+//! conversations that have no pairwise session yet.
 //!
 //! `mailbox_token` (this pass) reuses this same identity/ECDH layer
 //! for a different purpose: deriving rotating, unlinkable mailbox
@@ -21,7 +21,7 @@
 //!
 //! This crate is now also the home for several sections of Part 28
 //! (Production Security / E2EE / Key Management / Privacy Architecture)
-//! that don't depend on the still-unbuilt ratchet: `keystore` (§9-10,
+//! that don't depend on a session ratchet: `keystore` (§9-10,
 //! opaque key handles + memory hygiene), `epoch` (§22, security epoch),
 //! `envelope`/`replay` (§14-17, secure message envelope + associated
 //! data + replay protection + deterministic nonce derivation),

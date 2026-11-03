@@ -355,3 +355,91 @@ fn a_mismatched_key_and_section_is_ignored() {
     apply_snapshot(&mut s, &mut ClientCursor::default(), &[bad]).unwrap();
     assert!(!s.ready);
 }
+
+#[test]
+fn security_events_sync_with_severity_derived_by_the_receiver() {
+    use siar_ui_state::{SecurityEventAction, SecurityEventKind, SecurityEventSeverity};
+    let mut w = world();
+    let contact = AccountId::new();
+    let id = w.s.security_events.push(
+        SecurityEventKind::IdentityChanged,
+        1_700_000_000_000,
+        Some(w.dev),
+        Some(contact),
+        vec![SecurityEventAction::Review, SecurityEventAction::Dismiss],
+    );
+    w.s.security_events
+        .push(SecurityEventKind::KeyRotation, 5, None, None, vec![]);
+
+    let mut server = SyncServer::new(1);
+    let _ = server.diff(&w.s); // baseline first, as the other delta tests do
+    let (mut client, mut cur) = mirror(&server, &w.s);
+    assert!(same(&w.s, &client));
+    let got: Vec<_> = client
+        .security_events
+        .events()
+        .into_iter()
+        .cloned()
+        .collect();
+    assert_eq!(got.len(), 2);
+    let first = got.iter().find(|e| e.id == id).unwrap();
+    assert_eq!(first.kind, SecurityEventKind::IdentityChanged);
+    assert_eq!(first.severity, SecurityEventSeverity::Critical);
+    assert_eq!(first.related_contact, Some(contact));
+    assert!(!first.resolved);
+
+    // Resolving on the daemon reaches the window as a delta touching only
+    // the security section.
+    w.s.security_events.resolve(id);
+    let frames = server.diff(&w.s);
+    let keys: Vec<_> = frames
+        .iter()
+        .flat_map(|f| f.updates.iter().map(|u| u.key))
+        .collect();
+    assert_eq!(keys, vec![SectionKey::SecurityEvents]);
+    for f in &frames {
+        assert_eq!(apply_delta(&mut client, &mut cur, f), Verdict::Apply);
+    }
+    assert!(client
+        .security_events
+        .events()
+        .iter()
+        .any(|e| e.id == id && e.resolved));
+    assert!(same(&w.s, &client));
+}
+
+#[test]
+fn a_flood_of_old_events_cannot_push_out_the_newest() {
+    use siar_ui_state::SecurityEventKind;
+    let mut w = world();
+    for i in 0..(crate::engine::MAX_LISTED as u64 + 50) {
+        w.s.security_events
+            .push(SecurityEventKind::KeyRotation, i, None, None, vec![]);
+    }
+    let Some((_, Section::SecurityEvents(list))) = capture(&w.s)
+        .into_iter()
+        .find(|(k, _)| *k == SectionKey::SecurityEvents)
+    else {
+        panic!("section missing")
+    };
+    assert_eq!(list.len(), crate::engine::MAX_LISTED);
+    assert_eq!(
+        list.last().unwrap().occurred_at_millis,
+        crate::engine::MAX_LISTED as u64 + 49
+    );
+    assert!(encode(&Section::SecurityEvents(list)).len() <= MAX_SECTION_BYTES);
+}
+
+#[test]
+fn resolving_a_security_event_is_a_wire_command_that_round_trips() {
+    use crate::commands::WireCommand;
+    use siar_ui_state::AppCommand;
+    let app = AppCommand::ResolveSecurityEvent { event_id: 7 };
+    let wire = WireCommand::try_from(&app).expect("no longer Unsupported");
+    assert_eq!(wire, WireCommand::ResolveSecurityEvent { event_id: 7 });
+    let decoded: WireCommand = decode(&encode(&wire)).unwrap();
+    assert!(matches!(
+        decoded.validate().unwrap().into_app(),
+        AppCommand::ResolveSecurityEvent { event_id: 7 }
+    ));
+}

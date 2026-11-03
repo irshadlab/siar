@@ -12,6 +12,7 @@
 //! a *client* of this daemon needs domain-level state sync — see ROADMAP.)
 
 mod app;
+mod notify;
 #[cfg(windows)]
 mod winservice;
 
@@ -31,6 +32,8 @@ ctl commands:
   ui-state                what a window would see (via the sync protocol)
   messages <conversation-id>
   pair <ticket>
+  pairwise-publish        this device's post-quantum key package: <device-id> <base64>
+  pairwise-open <conversation-id> <peer-ticket> <peer-device-id> <key-package>
   send <conversation-id> <text...>
   shutdown";
 
@@ -58,6 +61,11 @@ enum Args {
     Ctl {
         #[arg(long)]
         socket: Option<PathBuf>,
+        /// Print the reply as one RON value (Rust Object Notation: lossless
+        /// for every reply type, parseable with `ron::from_str::<Reply>`)
+        /// instead of text.
+        #[arg(long)]
+        ron: bool,
         /// The ctl command (see below); options go before it.
         #[arg(required = true, trailing_var_arg = true)]
         args: Vec<String>,
@@ -83,6 +91,7 @@ enum Cli {
     },
     Ctl {
         socket: PathBuf,
+        ron: bool,
         args: Vec<String>,
     },
     Unit,
@@ -105,8 +114,9 @@ impl From<Args> for Cli {
                 config,
                 replace,
             },
-            Args::Ctl { socket, args } => Cli::Ctl {
+            Args::Ctl { socket, ron, args } => Cli::Ctl {
                 socket: socket.unwrap_or_else(|| default_socket_path("daemon")),
+                ron,
                 args,
             },
             Args::Unit => Cli::Unit,
@@ -154,10 +164,10 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Cli::Ctl { socket, args } => tokio::runtime::Builder::new_current_thread()
+        Cli::Ctl { socket, ron, args } => tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
-            .block_on(ctl(&socket, &args)),
+            .block_on(ctl(&socket, ron, &args)),
         Cli::Run {
             socket,
             config,
@@ -180,6 +190,37 @@ fn service_run() -> Result<()> {
 #[cfg(not(windows))]
 fn service_run() -> Result<()> {
     bail!("service-run is the Windows Service Control Manager entry point; use `run` here")
+}
+
+/// §151-§158: announce new messages and security alerts on the desktop while
+/// nobody is looking. `SIAR_NOTIFICATIONS=off|private|preview` (default
+/// `private`: no sender, no text).
+fn install_notifications(sync: &siar_ui_sync::UiSyncService, bus: &siar_runtime::EventBus) {
+    use notify::{DesktopSink, NotificationEngine, NotifyPolicy, Sink as _};
+    let policy = NotifyPolicy::from_env_value(std::env::var("SIAR_NOTIFICATIONS").ok().as_deref());
+    if !policy.enabled {
+        return;
+    }
+    let engine = std::sync::Mutex::new(NotificationEngine::new(policy));
+    let sink = std::sync::Arc::new(DesktopSink::default());
+    let bus = bus.clone();
+    sync.set_observer(std::sync::Arc::new(move |hub| {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        // Decide under the state lock; show (D-Bus round trip) outside it.
+        let attached = bus.subscriber_count();
+        let due = hub.read(|s| {
+            engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .observe(s, attached, now_ms)
+        });
+        for n in due {
+            let sink = sink.clone();
+            tokio::task::spawn_blocking(move || sink.show(&n));
+        }
+    }));
 }
 
 async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: bool) -> Result<()> {
@@ -272,6 +313,7 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
                 // Part 16 §25: a window attaches to this — domain-level
                 // snapshot + deltas, never UI structs.
                 let sync = siar_ui_sync::UiSyncService::new(core.state(), bus.clone());
+                install_notifications(&sync, &bus);
                 {
                     let (svc, lc) = (sync.clone(), lifecycle.clone());
                     supervisor.spawn("ui-sync", false, RestartPolicy::default(), move || {
@@ -421,7 +463,7 @@ macro_rules! outln {
     }};
 }
 
-async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
+async fn ctl(socket: &std::path::Path, ron: bool, args: &[String]) -> Result<()> {
     let mut c = IpcClient::connect_local(socket, Role::Admin, "siar-daemon ctl")
         .await
         .with_context(|| {
@@ -443,7 +485,14 @@ async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
         "power" => Request::Query(Query::Power),
         "metrics" => Request::Query(Query::Metrics),
         "audit" => Request::Query(Query::Audit),
-        "summary" | "ticket" | "conversations" => app_query(&args[0], ""),
+        "summary" | "ticket" | "conversations" | "pairwise-publish" => app_query(&args[0], ""),
+        "pairwise-open" => Request::Command {
+            id: CommandId(uuid::Uuid::new_v4().as_u128()),
+            cmd: Command::App {
+                name: "pairwise-open".into(),
+                data: rest.into_bytes(),
+            },
+        },
         "messages" => app_query("messages", &rest),
         "ui-state" => {
             outln!(
@@ -474,25 +523,56 @@ async fn ctl(socket: &std::path::Path, args: &[String]) -> Result<()> {
         },
         other => bail!("unknown command {other:?}\n\n{CTL_COMMANDS}"),
     };
-    match c.request(req).await? {
-        Reply::Ok => outln!("ok"),
-        Reply::Bytes(b) => outln!("{}", String::from_utf8_lossy(&b)),
-        Reply::Status(s) => outln!(
+    let text = render_reply(&c.request(req).await?, ron);
+    if !text.is_empty() {
+        outln!("{text}");
+    }
+    Ok(())
+}
+
+fn to_ron<T: serde::Serialize>(v: &T) -> String {
+    ron::ser::to_string_pretty(v, ron::ser::PrettyConfig::default())
+        .unwrap_or_else(|e| format!("/* unrepresentable: {e} */"))
+}
+
+fn ron_str(t: &str) -> String {
+    ron::ser::to_string(t).unwrap_or_default()
+}
+
+/// How `ctl` prints a reply. `ron` yields exactly one RON value — enums,
+/// options and unit variants come through losslessly (TOML could not: its
+/// root must be a table, and it has no null), and it round-trips through
+/// `ron::from_str::<Reply>`. A `Bytes` reply that is UTF-8 (every app query)
+/// is shown as a string, not as a list of numbers.
+fn render_reply(reply: &Reply, ron: bool) -> String {
+    if ron {
+        return match reply {
+            Reply::Bytes(b) => match std::str::from_utf8(b) {
+                Ok(t) => format!("Bytes({})", ron_str(t)),
+                Err(_) => to_ron(reply),
+            },
+            other => to_ron(other),
+        };
+    }
+    match reply {
+        Reply::Ok => "ok".into(),
+        Reply::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
+        Reply::Status(s) => format!(
             "state: {:?}\nuptime: {} s\nsubscribers: {}",
             s.state,
             s.uptime_ms / 1000,
             s.subscribers
         ),
         Reply::Health(h) => {
-            outln!("overall: {:?}", h.overall);
-            for s in h.subsystems {
-                outln!("  {}: {:?} {}", s.name, s.state, s.detail);
+            let mut out = format!("overall: {:?}", h.overall);
+            for s in &h.subsystems {
+                out.push_str(&format!("\n  {}: {:?} {}", s.name, s.state, s.detail));
             }
+            out
         }
-        Reply::Power(p) => outln!("profile: {:?}\nwaiting: {}", p.profile, p.deferred.total()),
-        Reply::Subscribed { .. } => {}
+        Reply::Power(p) => format!("profile: {:?}\nwaiting: {}", p.profile, p.deferred.total()),
+        Reply::Subscribed { .. } => String::new(),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -526,7 +606,8 @@ mod tests {
         ]))
         .unwrap()
         {
-            Cli::Ctl { socket, args } => {
+            Cli::Ctl { socket, args, ron } => {
+                assert!(!ron);
                 assert_eq!(socket, PathBuf::from("/x/s"));
                 assert_eq!(args, v(&["send", "abc", "hi", "there"]));
             }
@@ -552,5 +633,32 @@ mod tests {
         }
         assert_eq!(parse(&v(&["install"])), Ok(Cli::Install));
         assert!(parse(&v(&["run", "--socket", "/a", "--no-socket"])).is_err());
+    }
+
+    #[test]
+    fn ron_output_is_lossless_and_shows_utf8_bytes_as_text() {
+        assert_eq!(render_reply(&Reply::Ok, false), "ok");
+        assert_eq!(render_reply(&Reply::Ok, true), "Ok");
+        assert_eq!(
+            render_reply(&Reply::Bytes(b"plain".to_vec()), true),
+            r#"Bytes("plain")"#
+        );
+        for r in [
+            Reply::Ok,
+            Reply::Subscribed { next_seq: 3 },
+            Reply::Bytes(vec![0xff, 0xfe, 1]), // not UTF-8: stays a byte list
+        ] {
+            let text = render_reply(&r, true);
+            assert_eq!(ron::from_str::<Reply>(&text).unwrap(), r, "{text}");
+        }
+        assert_eq!(render_reply(&Reply::Subscribed { next_seq: 3 }, false), "");
+    }
+
+    #[test]
+    fn ctl_ron_flag_parses_before_the_command() {
+        let c = parse(&["ctl".into(), "--ron".into(), "status".into()]).unwrap();
+        assert!(matches!(c, Cli::Ctl { ron: true, .. }));
+        let c = parse(&["ctl".into(), "status".into()]).unwrap();
+        assert!(matches!(c, Cli::Ctl { ron: false, .. }));
     }
 }

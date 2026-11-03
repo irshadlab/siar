@@ -30,6 +30,7 @@ pub enum SectionKey {
     Contacts,
     Network,
     Power,
+    SecurityEvents,
     Timeline(ConversationId),
 }
 
@@ -44,6 +45,7 @@ impl SectionKey {
             Self::Contacts => (3, 0),
             Self::Network => (4, 0),
             Self::Power => (5, 0),
+            Self::SecurityEvents => (5, 1),
             Self::Timeline(id) => (6, id.as_uuid().as_u128()),
         }
     }
@@ -159,6 +161,7 @@ pub enum Section {
     Contacts(ContactsDto),
     Network(NetworkDto),
     Power(Option<PowerDto>),
+    SecurityEvents(Vec<crate::security::SecurityEventDto>),
     Timeline(TimelineDto),
 }
 

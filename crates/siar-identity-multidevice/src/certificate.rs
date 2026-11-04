@@ -156,6 +156,24 @@ impl DeviceCertificate {
         root_public_key.verify(&payload, &signature)
     }
 
+    /// The exact bytes the root signed over — the same payload
+    /// [`verify_signature`](Self::verify_signature) checks. Exposed so an
+    /// *additional* signature (e.g. a post-quantum countersignature from
+    /// `siar-crypto-advanced`) can bind to the identical bytes without any
+    /// change to this struct or its shipped wire encoding.
+    #[must_use]
+    pub fn canonical_signing_bytes(&self) -> Vec<u8> {
+        Self::signing_payload(
+            self.account_id,
+            self.device_id,
+            &self.device_public_key,
+            self.issued_at_millis,
+            self.expires_at_millis,
+            self.capabilities,
+            self.generation,
+        )
+    }
+
     pub fn is_expired(&self, now_millis: u64) -> bool {
         self.expires_at_millis
             .map(|exp| now_millis >= exp)

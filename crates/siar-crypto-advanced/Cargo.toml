@@ -1,0 +1,22 @@
+[package]
+name = "siar-crypto-advanced"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "FROST root key, hybrid ML-DSA+Ed25519, BLS audit aggregation, BBS relay passes — all on maintained upstream crates"
+
+[dependencies]
+frost-ed25519 = "3.0.0"
+ml-dsa = "0.1.2"
+blst = "0.3.17"
+zkryptium = { version = "0.8.1", default-features = false, features = ["bbsplus"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
+sha2 = "0.10"
+getrandom = { version = "0.4", features = ["sys_rng"] }
+thiserror = "2"
+zeroize = "1"
+rand_core = { version = "0.6", features = ["std"] }
+
+[dev-dependencies]
+siar-identity-multidevice = { path = "../siar-identity-multidevice" }
+siar-domain = { path = "../siar-domain" }

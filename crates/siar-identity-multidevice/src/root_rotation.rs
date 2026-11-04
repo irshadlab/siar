@@ -56,6 +56,22 @@ fn rotation_payload(
     .expect("postcard serialization of fixed-size fields never fails")
 }
 
+/// The exact bytes both roots sign for a rotation. Public so a root whose
+/// key is not a single local `RootIdentityKey` — notably a FROST threshold
+/// group, whose signature is produced by several parties — can still
+/// produce a [`RootRotation`] that [`verify_root_rotation`] accepts.
+/// Assembling one by hand does **not** bypass §33: `verify_root_rotation`
+/// still demands a valid signature from the OLD root.
+#[must_use]
+pub fn rotation_signing_payload(
+    account_id: AccountId,
+    old_root: &RootPublicKey,
+    new_root: &RootPublicKey,
+    generation: u64,
+) -> Vec<u8> {
+    rotation_payload(account_id, old_root, new_root, generation)
+}
+
 /// §33's flow: "requires possession of the current root private key."
 /// This is enforced structurally, not just by the spec's own words —
 /// there is no parameter here, and no other function anywhere in this

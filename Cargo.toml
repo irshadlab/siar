@@ -27,6 +27,7 @@ members = [
     "crates/siar-protocol-ext",
     "crates/siar-crypto",
     "crates/siar-crypto-mls",
+    "crates/siar-crypto-advanced",
     "crates/siar-storage",
     "crates/siar-remote-ingestion",
     "crates/siar-startup-recovery",
@@ -104,6 +105,7 @@ siar-protocol = { path = "crates/siar-protocol" }
 siar-protocol-ext = { path = "crates/siar-protocol-ext" }
 siar-crypto = { path = "crates/siar-crypto" }
 siar-crypto-mls = { path = "crates/siar-crypto-mls" }
+siar-crypto-advanced = { path = "crates/siar-crypto-advanced" }
 siar-storage = { path = "crates/siar-storage" }
 siar-remote-ingestion = { path = "crates/siar-remote-ingestion" }
 siar-startup-recovery = { path = "crates/siar-startup-recovery" }

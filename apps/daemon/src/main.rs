@@ -11,8 +11,11 @@
 //! daemon and a window can never write the same database. (Making the window
 //! a *client* of this daemon needs domain-level state sync — see ROADMAP.)
 
+mod admin;
 mod app;
+mod backup;
 mod notify;
+mod roles;
 #[cfg(windows)]
 mod winservice;
 
@@ -29,6 +32,13 @@ const CTL_COMMANDS: &str = "\
 ctl commands:
   status | health | power | metrics | summary | ticket | conversations
   audit                   recent admin actions (kinds only), Admin
+  maintenance <on|off>    quiesce / reopen the daemon (needed before `restore`), Admin
+  read-only <on|off>      refuse / allow mutations, Admin
+  provision-status        provisioning state; the challenge while unprovisioned, Admin
+  provision <file> <sig>  enrol this node with a signed payload (see `siar-root payload`), Admin
+  diagnostics             redacted diagnostic bundle (versions, health, config, metrics, errors), Admin
+  backup <abs-dir>        consistent backup into <abs-dir> (quiesces the daemon meanwhile), Admin
+  restore <abs-dir>       restore from <abs-dir>; daemon must be in maintenance first, Admin
   ui-state                what a window would see (via the sync protocol)
   messages <conversation-id>
   pair <ticket>
@@ -70,6 +80,39 @@ enum Args {
         #[arg(required = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// Create an operator key for remote administration; prints its public
+    /// id (put that in the node's `[admin]` config).
+    AdminKeygen {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Administer a node remotely over `comm-admin/1` (Iroh). One of: health,
+    /// status, metrics, diagnostics, power, provision-status, audit,
+    /// maintenance on|off, read-only on|off, backup <dir>, restore <dir>,
+    /// shutdown. There is no remote shell.
+    Admin {
+        /// Your operator key file (see `admin-keygen`).
+        #[arg(long)]
+        key_file: PathBuf,
+        /// The node's direct address (repeatable). Needed unless --discovery.
+        #[arg(long = "addr")]
+        addrs: Vec<std::net::SocketAddr>,
+        /// Look the node up through Iroh discovery instead of --addr.
+        #[arg(long)]
+        discovery: bool,
+        /// The node's admin endpoint id (64 hex chars; the node logs it and
+        /// writes it to `<data>/admin/endpoint.id`).
+        node: String,
+        #[arg(required = true, trailing_var_arg = true)]
+        op: Vec<String>,
+    },
+    /// Verify the durable audit log in a folder (the node's `<data>/audit`):
+    /// every line's hash chain and the sequence numbers. Exits non-zero if it
+    /// does not verify. Prints the chain head to record off-box.
+    AuditVerify {
+        /// The audit folder (contains `audit.log`, `audit.log.1`, …).
+        dir: PathBuf,
+    },
     /// Print a hardened systemd --user unit.
     Unit,
     /// Install and enable the per-user service.
@@ -93,6 +136,19 @@ enum Cli {
         socket: PathBuf,
         ron: bool,
         args: Vec<String>,
+    },
+    AuditVerify {
+        dir: PathBuf,
+    },
+    AdminKeygen {
+        out: PathBuf,
+    },
+    Admin {
+        key_file: PathBuf,
+        addrs: Vec<std::net::SocketAddr>,
+        discovery: bool,
+        node: String,
+        op: Vec<String>,
     },
     Unit,
     Install,
@@ -119,6 +175,21 @@ impl From<Args> for Cli {
                 ron,
                 args,
             },
+            Args::AuditVerify { dir } => Cli::AuditVerify { dir },
+            Args::AdminKeygen { out } => Cli::AdminKeygen { out },
+            Args::Admin {
+                key_file,
+                addrs,
+                discovery,
+                node,
+                op,
+            } => Cli::Admin {
+                key_file,
+                addrs,
+                discovery,
+                node,
+                op,
+            },
             Args::Unit => Cli::Unit,
             Args::Install => Cli::Install,
             Args::Uninstall => Cli::Uninstall,
@@ -137,10 +208,18 @@ fn parse(args: &[String]) -> Result<Cli, String> {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::from(<Args as clap::Parser>::parse());
+    // One-shot operator commands (ctl, admin, admin-keygen, unit, …) print
+    // their answer, not the transport library's connection chatter.
+    let serving = matches!(cli, Cli::Run { .. } | Cli::ServiceRun);
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_max_level(if serving {
+            tracing::Level::INFO
+        } else {
+            tracing::Level::WARN
+        })
         .init();
-    let cli = Cli::from(<Args as clap::Parser>::parse());
     match cli {
         Cli::Install => {
             let exe = std::env::current_exe()?;
@@ -162,6 +241,57 @@ fn main() -> Result<()> {
                 "{}",
                 siar_runtime::service::systemd_user_unit("Siar daemon", &exe, &["run"])
             );
+            Ok(())
+        }
+        Cli::AuditVerify { dir } => {
+            let rep = siar_runtime::audit_file::FileSink::verify_dir(
+                &dir,
+                siar_runtime::audit_file::FileLimits::default().keep,
+            )
+            .with_context(|| format!("reading {}", dir.display()))?;
+            match &rep.problem {
+                None => {
+                    println!(
+                        "OK: {} entries, seq {}..{}",
+                        rep.entries,
+                        rep.first_seq.map_or("-".into(), |v| v.to_string()),
+                        rep.last_seq.map_or("-".into(), |v| v.to_string())
+                    );
+                    if let (Some(seq), Some(head)) = (rep.last_seq, &rep.head) {
+                        println!(
+                            "head seq={seq} chain={head}  (record this off-box to detect tail truncation)"
+                        );
+                    }
+                    Ok(())
+                }
+                Some((seg, line, why)) => bail!(
+                    "audit log does NOT verify: {seg} line {line}: {why} ({} entries were fine before that)",
+                    rep.entries
+                ),
+            }
+        }
+        Cli::AdminKeygen { out } => {
+            println!("{}", admin::keygen(&out)?);
+            eprintln!(
+                "key written to {} (mode 600). Put the id above in the node's daemon.toml:\n\
+                 [[admin.operators]]\nkey = \"<id>\"\nrole = \"viewer|operator|security-admin|owner\"\nlabel = \"<name>\"",
+                out.display()
+            );
+            Ok(())
+        }
+        Cli::Admin {
+            key_file,
+            addrs,
+            discovery,
+            node,
+            op,
+        } => {
+            let op = admin::parse_op(&op)?;
+            let out = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(admin::remote(&key_file, &node, &addrs, discovery, op))?;
+            println!("{out}");
             Ok(())
         }
         Cli::Ctl { socket, ron, args } => tokio::runtime::Builder::new_current_thread()
@@ -227,7 +357,7 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     // §85-§88: config first — a bad file stops us before anything is touched,
     // and says everything that is wrong at once.
     let config_path = config_path.or_else(default_config_path);
-    let config = load_config(config_path.as_deref())?;
+    let local_config = load_config(config_path.as_deref())?;
 
     // §100-§101, §107: take over from a running daemon gracefully. The upgrade
     // lock stops two upgraders deciding to replace the same daemon at once.
@@ -262,8 +392,8 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     // After a handoff, give the old process a moment to release the lock
     // (it has already stopped serving; this covers platforms where we can't
     // check its pid).
-    let _lock = match acquire_lock(&data_dir, replace).await {
-        Ok(l) => Some(l),
+    let lock = match acquire_lock(&data_dir, replace).await {
+        Ok(l) => Some(Arc::new(l)),
         Err(siar_backup::LockError::Held) => {
             bail!("Siar is already running with this data folder (the window or another daemon). Use --replace to take over from a daemon.")
         }
@@ -273,16 +403,199 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
         }
     };
 
+    // §115: a restore staged by `ctl restore` is applied now — after the lock,
+    // before the database is opened. A failure refuses to start: carrying on
+    // could create a fresh identity next to the data that is still there.
+    if let Some(l) = &lock {
+        match backup::apply_pending_restore(&data_dir, l) {
+            Ok(Some(previous)) => tracing::warn!(
+                previous = %previous.display(),
+                "restore applied; the previous data was kept in that folder"
+            ),
+            Ok(None) => {}
+            Err(e) => bail!(
+                "a staged restore could not be applied: {e:#}. Nothing was lost. \
+                 Fix the cause, or remove the *.restore-pending marker next to the data folder to start without it."
+            ),
+        }
+    }
+
+    // §72-§73: with `node.require_provisioning` the daemon starts enrolment-only
+    // (IPC + the provisioning command; no core, no network) until an admin
+    // key signs a payload for this node.
+    let provisioner = if local_config.node.require_provisioning {
+        let verifier =
+            siar_runtime::node::Ed25519AdminVerifier::from_hex_keys(&local_config.node.admin_keys)
+                .map_err(|e| anyhow!("node.admin_keys: {e}"))?;
+        let (p, warning) = siar_runtime::node::Provisioner::open(&data_dir.join("node"), verifier)
+            .context("opening the node provisioning state")?;
+        if let Some(w) = warning {
+            tracing::warn!("{w}");
+        }
+        Some(Arc::new(p))
+    } else {
+        None
+    };
+    // What this run is: enrolment-only (unprovisioned), a node whose role
+    // runs no chat core, or a full node. The role decides — a relay or DTN
+    // node must not create a chat identity or open a chat database.
+    let started_unprovisioned = provisioner
+        .as_ref()
+        .is_some_and(|p| matches!(p.state(), siar_runtime::node::Provisioning::Unprovisioned));
+    let boot_core = match &provisioner {
+        None => true,
+        Some(p) => p.allows(siar_runtime::node::Feature::Messaging),
+    };
+    // The admin's config (if the payload carried one) laid over the local
+    // file, minus [node] and [secrets], which stay local.
+    let config = siar_runtime::node::overlay_config(
+        &local_config,
+        provisioner.as_ref().and_then(|p| p.applied_config()),
+    );
+    if let Some(p) = &provisioner {
+        if started_unprovisioned {
+            let status = siar_runtime::node::ProvisioningService::status(p.as_ref());
+            tracing::warn!(
+                challenge = status.challenge_hex.as_deref().unwrap_or(""),
+                "node is UNPROVISIONED: running the enrolment listener only. Show this challenge to the admin."
+            );
+        } else if let siar_runtime::node::Provisioning::Provisioned(done) = p.state() {
+            let plan = roles::plan_for(done.role, &data_dir);
+            match (boot_core, &plan) {
+                (true, roles::RolePlan::CoreOnly) => {
+                    tracing::info!(role = %done.role, "provisioned; starting the messaging core");
+                }
+                (true, roles::RolePlan::Child(_)) => tracing::info!(
+                    role = %done.role,
+                    "provisioned; starting the messaging core and the relay engine"
+                ),
+                (false, roles::RolePlan::Child(_)) => tracing::info!(
+                    role = %done.role,
+                    "provisioned; this role runs no messaging (no chat identity, no chat database) — starting the relay engine only"
+                ),
+                (_, roles::RolePlan::Unavailable(why)) => tracing::warn!(
+                    role = %done.role,
+                    "provisioned, but {why}: nothing is started for this role"
+                ),
+                (false, roles::RolePlan::CoreOnly) => tracing::warn!(
+                    role = %done.role,
+                    "provisioned, but this role runs nothing in this binary"
+                ),
+            }
+        }
+    }
+
+    let backup_svc = backup::DaemonBackup::new(
+        data_dir.clone(),
+        lock.clone(),
+        config.secrets.backup_passphrase.clone(),
+    );
+    let backup_db_slot = backup_svc.db_slot();
+
     let app = app::DaemonApp::default();
-    let runtime = Runtime::builder()
+    let mut builder = Runtime::builder()
         .app(app.clone())
+        .backup(backup_svc)
         .build_id(concat!("siar-daemon ", env!("CARGO_PKG_VERSION")))
         .config(config.clone())
         .power_policy(siar_power::PowerPolicyConfig {
             deployment: siar_power::Deployment::AlwaysOn,
             ..Default::default()
-        })
-        .build();
+        });
+    if let Some(p) = &provisioner {
+        builder = builder.provisioning(p.clone());
+    }
+    let runtime = builder.build();
+
+    // §161-§162, §70: the audit log is also written to a durable, hash-chained
+    // file (never rewound by a restore, never archived). A failure here must
+    // not stop the node: it keeps auditing in memory and says so loudly.
+    match runtime.audit.attach_file(
+        &data_dir.join("audit"),
+        siar_runtime::audit_file::FileLimits::default(),
+    ) {
+        Ok(None) => {}
+        Ok(Some(warning)) => tracing::error!("{warning}"),
+        Err(e) => tracing::error!("durable audit log unavailable ({e}); auditing in memory only"),
+    }
+
+    // §66-§71, §159: remote administration over its own Iroh endpoint, its own
+    // key, its own protocol. Off unless `[admin] enabled`.
+    let admin_server = if config.admin.enabled {
+        let table = admin::operator_table(&config.admin)?;
+        let key = siar_admin::keys::load_or_create(&data_dir.join("admin").join("endpoint.key"))
+            .context("loading the admin endpoint key")?;
+        let id_hex = siar_admin::keys::public_hex(&key);
+        let cfg = siar_admin::AdminServerConfig {
+            discovery: config.admin.discovery,
+            bind_addr: config
+                .admin
+                .bind
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .context("admin.bind")?,
+            ..siar_admin::AdminServerConfig::default()
+        };
+        let server = siar_admin::AdminServer::spawn(
+            cfg,
+            key,
+            table,
+            admin::DaemonAdmin::new(runtime.clone()),
+        )
+        .await
+        .map_err(|e| anyhow!("starting the admin endpoint: {e}"))?;
+        std::fs::write(data_dir.join("admin").join("endpoint.id"), &id_hex)
+            .context("writing admin/endpoint.id")?;
+        let addrs: Vec<String> = server
+            .addr()
+            .addrs
+            .iter()
+            .filter_map(|a| match a {
+                iroh::TransportAddr::Ip(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .collect();
+        std::fs::write(
+            data_dir.join("admin").join("endpoint.addrs"),
+            addrs.join("\n"),
+        )
+        .context("writing admin/endpoint.addrs")?;
+        tracing::info!(
+            endpoint = %id_hex,
+            addrs = %addrs.join(","),
+            operators = config.admin.operators.len(),
+            discovery = config.admin.discovery,
+            "remote admin (comm-admin/1) listening"
+        );
+        Some(server)
+    } else {
+        None
+    };
+
+    // §96: a panic leaves a redacted crash report (location + backtrace,
+    // never the panic message) next to the data, newest five kept. The
+    // health read must not block inside a panic, hence `try_report`.
+    {
+        let health = runtime.health.clone();
+        siar_runtime::diag::install_panic_hook(
+            data_dir.join("crash"),
+            concat!("siar-daemon ", env!("CARGO_PKG_VERSION")).to_owned(),
+            move || {
+                health
+                    .try_report()
+                    .unwrap_or_else(|| siar_runtime::health::HealthReport {
+                        overall: siar_runtime::health::HealthState::Unavailable,
+                        subsystems: Vec::new(),
+                    })
+            },
+            || {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            },
+        );
+    }
 
     // Recovery = opening storage, identity and the transport endpoint. Only
     // after it succeeds do we start the core and open the control socket
@@ -300,13 +613,21 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     runtime
         .start(
             async move {
+                if !boot_core {
+                    return Ok::<(), String>(()); // enrolment-only: nothing to recover
+                }
                 let boot = siar_app_core::bootstrap::bootstrap_messaging()
                     .await
                     .map_err(|e| format!("{e:#}"))?;
+                // §113: the backup service snapshots this very handle.
+                let _ = backup_db_slot.set(boot.db.clone());
                 *b1.lock().unwrap() = Some(boot);
                 Ok::<(), String>(())
             },
             async move {
+                if !boot_core {
+                    return Ok::<(), String>(());
+                }
                 let boot = b2.lock().unwrap().take().ok_or("no bootstrap")?;
                 let hub = Arc::new(siar_ui_model::StateHub::new(hub_tx.clone()));
                 let core = siar_app_core::core::start(boot, hub).await;
@@ -379,9 +700,16 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     // §87: SIGHUP re-reads the config; cold changes are reported, not faked.
     {
         let (rt, path) = (runtime.clone(), config_path.clone());
+        let reload_prov = provisioner.clone();
         tokio::spawn(siar_runtime::service::on_hangup(
             runtime.lifecycle.clone(),
             move || match load_config(path.as_deref())
+                .map(|local| {
+                    siar_runtime::node::overlay_config(
+                        &local,
+                        reload_prov.as_ref().and_then(|p| p.applied_config()),
+                    )
+                })
                 .and_then(|c| rt.reload(c).map_err(Into::into))
             {
                 Ok(plan) => {
@@ -396,7 +724,21 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     siar_runtime::service::notify_ready();
     tracing::info!("siar-daemon ready");
 
+    // What the role runs beyond the chat core (e.g. the relay engine). Only on
+    // a normal start: an enrolment run exits 75 and restarts into the role.
+    if !started_unprovisioned {
+        if let Some(siar_runtime::node::Provisioning::Provisioned(done)) =
+            provisioner.as_ref().map(|p| p.state())
+        {
+            if let roles::RolePlan::Child(launch) = roles::plan_for(done.role, &data_dir) {
+                roles::supervise(&runtime, launch);
+            }
+        }
+    }
     runtime.lifecycle.shutdown_requested().await;
+    if let Some(server) = admin_server {
+        server.shutdown().await;
+    }
     siar_runtime::service::notify_stopping();
     drop(cmd_tx); // lets the core's command loop finish
     let aborted = runtime.shutdown(runtime.shutdown_grace()).await;
@@ -409,7 +751,28 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     if aborted > 0 {
         tracing::warn!(aborted, "forced shutdown aborted stragglers");
     }
+    // Enrolment succeeded: the role's features are fixed at startup, so exit
+    // non-zero (75, EX_TEMPFAIL) — the generated unit has `Restart=on-failure`,
+    // so the service manager brings the node back up provisioned.
+    if started_unprovisioned
+        && provisioner
+            .as_ref()
+            .is_some_and(|p| matches!(p.state(), siar_runtime::node::Provisioning::Provisioned(_)))
+    {
+        tracing::info!("provisioned; exiting 75 so the service manager restarts into the new role");
+        std::process::exit(75);
+    }
     Ok(())
+}
+
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok())
+        .collect()
 }
 
 async fn acquire_lock(
@@ -485,6 +848,51 @@ async fn ctl(socket: &std::path::Path, ron: bool, args: &[String]) -> Result<()>
         "power" => Request::Query(Query::Power),
         "metrics" => Request::Query(Query::Metrics),
         "audit" => Request::Query(Query::Audit),
+        "diagnostics" => Request::Query(Query::Diagnostics),
+        "maintenance" | "read-only" => {
+            let on = match args.get(1).map(String::as_str) {
+                Some("on") if args.len() == 2 => true,
+                Some("off") if args.len() == 2 => false,
+                _ => bail!("usage: ctl {} <on|off>", args[0]),
+            };
+            Request::Command {
+                id: CommandId(uuid::Uuid::new_v4().as_u128()),
+                cmd: if args[0] == "maintenance" {
+                    Command::SetMaintenance(on)
+                } else {
+                    Command::SetReadOnly(on)
+                },
+            }
+        }
+        "provision-status" => Request::Query(Query::ProvisionStatus),
+        "provision" => {
+            if args.len() != 3 {
+                bail!("usage: ctl provision <payload-file> <signature-hex>");
+            }
+            let payload =
+                std::fs::read(&args[1]).with_context(|| format!("reading {}", args[1]))?;
+            let signature = decode_hex(&args[2]).ok_or_else(|| anyhow!("signature is not hex"))?;
+            Request::Command {
+                id: CommandId(uuid::Uuid::new_v4().as_u128()),
+                cmd: Command::Provision { payload, signature },
+            }
+        }
+        "backup" | "restore" => {
+            if args.len() != 2 {
+                bail!("usage: ctl {} <absolute-directory>", args[0]);
+            }
+            let id = CommandId(uuid::Uuid::new_v4().as_u128());
+            let cmd = if args[0] == "backup" {
+                Command::CreateBackup {
+                    target: args[1].clone(),
+                }
+            } else {
+                Command::RestoreBackup {
+                    source: args[1].clone(),
+                }
+            };
+            Request::Command { id, cmd }
+        }
         "summary" | "ticket" | "conversations" | "pairwise-publish" => app_query(&args[0], ""),
         "pairwise-open" => Request::Command {
             id: CommandId(uuid::Uuid::new_v4().as_u128()),

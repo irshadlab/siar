@@ -94,7 +94,61 @@ pub enum SecretRef {
 #[serde(deny_unknown_fields, default)]
 pub struct SecretsConfig {
     pub identity_key: Option<SecretRef>,
+    /// Passphrase for encrypted backups (`ctl backup`). A headless daemon
+    /// cannot prompt, so it reads this from a 0600 file or an environment
+    /// variable — never from the config text itself.
+    pub backup_passphrase: Option<SecretRef>,
 }
+
+/// §72-§73: whether this node must be enrolled before it does anything, and
+/// who may enrol it. **Local file only**: a provisioning payload may not
+/// carry this section (see `node::Provisioner::apply`), otherwise an admin's
+/// payload could change who the admins are.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct NodeSection {
+    /// Start unprovisioned (bootstrap listener only) until a signed payload
+    /// arrives.
+    pub require_provisioning: bool,
+    /// Ed25519 public keys (64 lowercase hex chars) allowed to provision.
+    /// A FROST group's root key is an ordinary Ed25519 key and works here.
+    pub admin_keys: Vec<String>,
+}
+
+pub const MAX_ADMIN_KEYS: usize = 16;
+
+/// Remote administration (`comm-admin/1`, spec 16 §66-§71). **Local file
+/// only**, like `[node]`: a provisioning payload may not set it, otherwise a
+/// payload could appoint its own operators.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AdminSection {
+    /// Run the remote-admin endpoint at all. Off by default.
+    pub enabled: bool,
+    /// Publish the endpoint through Iroh's public discovery (§160: off by
+    /// default — without it only someone holding the id and an address can
+    /// reach the node).
+    pub discovery: bool,
+    /// Fixed address to listen on, e.g. `"0.0.0.0:7447"`, so operators have a
+    /// stable address to connect to. Unset = a random port each start.
+    pub bind: Option<String>,
+    pub operators: Vec<AdminOperatorEntry>,
+}
+
+/// One allowed remote operator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminOperatorEntry {
+    /// The operator's Iroh public key: 64 lowercase hex characters.
+    pub key: String,
+    /// `viewer`, `operator`, `security-admin` or `owner`.
+    pub role: String,
+    /// A short name for logs and the audit trail.
+    pub label: String,
+}
+
+pub const MAX_ADMIN_OPERATORS: usize = 64;
+pub const ADMIN_ROLES: [&str; 4] = ["viewer", "operator", "security-admin", "owner"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -104,6 +158,8 @@ pub struct RuntimeConfig {
     pub power: PowerSection,
     pub logging: LoggingConfig,
     pub secrets: SecretsConfig,
+    pub node: NodeSection,
+    pub admin: AdminSection,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -132,6 +188,67 @@ impl RuntimeConfig {
     /// Report every problem, not just the first.
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut p = Vec::new();
+        if self.node.admin_keys.len() > MAX_ADMIN_KEYS {
+            p.push(format!(
+                "node.admin_keys has more than {MAX_ADMIN_KEYS} keys"
+            ));
+        }
+        for k in &self.node.admin_keys {
+            let ok = k.len() == 64 && k.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            if !ok {
+                p.push("node.admin_keys entries must be 64 lowercase hex characters".to_owned());
+                break;
+            }
+        }
+        if self.admin.operators.len() > MAX_ADMIN_OPERATORS {
+            p.push(format!(
+                "admin.operators has more than {MAX_ADMIN_OPERATORS} entries"
+            ));
+        }
+        let mut seen_keys = std::collections::HashSet::new();
+        let mut seen_labels = std::collections::HashSet::new();
+        for o in &self.admin.operators {
+            let key_ok = o.key.len() == 64
+                && o.key
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            let label_ok = !o.label.is_empty()
+                && o.label.len() <= 32
+                && o.label
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'));
+            if !key_ok {
+                p.push("admin.operators[].key must be 64 lowercase hex characters".to_owned());
+            }
+            if !ADMIN_ROLES.contains(&o.role.as_str()) {
+                p.push(format!(
+                    "admin.operators[].role must be one of {ADMIN_ROLES:?}"
+                ));
+            }
+            if !label_ok {
+                p.push(
+                    "admin.operators[].label must be 1-32 characters of a-z, 0-9, '.', '_', '-'"
+                        .to_owned(),
+                );
+            }
+            if !seen_keys.insert(o.key.clone()) {
+                p.push("admin.operators has a duplicate key".to_owned());
+            }
+            if !seen_labels.insert(o.label.clone()) {
+                p.push("admin.operators has a duplicate label".to_owned());
+            }
+        }
+        if let Some(b) = &self.admin.bind {
+            if b.parse::<std::net::SocketAddr>().is_err() {
+                p.push("admin.bind must be an address like \"0.0.0.0:7447\"".to_owned());
+            }
+        }
+        if self.admin.enabled && self.admin.operators.is_empty() {
+            p.push("admin.enabled needs at least one admin.operators entry".to_owned());
+        }
+        if self.node.require_provisioning && self.node.admin_keys.is_empty() {
+            p.push("node.require_provisioning needs at least one node.admin_keys entry".to_owned());
+        }
         if !(1..=1024).contains(&self.ipc.max_connections) {
             p.push("ipc.max_connections must be 1..=1024".to_owned());
         }
@@ -232,6 +349,8 @@ pub fn plan_reload(old: &RuntimeConfig, new: &RuntimeConfig) -> ReloadPlan {
     };
     cold(old.ipc != new.ipc, "ipc");
     cold(old.secrets != new.secrets, "secrets");
+    cold(old.node != new.node, "node");
+    cold(old.admin != new.admin, "admin");
     p
 }
 
@@ -376,5 +495,58 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(r.resolve().unwrap().expose(), b"k");
         let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn node_section_is_validated() {
+        let ok = format!(
+            "[node]\nrequire_provisioning = true\nadmin_keys = [\"{}\"]\n",
+            "ab".repeat(32)
+        );
+        assert!(RuntimeConfig::parse(&ok).is_ok());
+        let none = "[node]\nrequire_provisioning = true\n";
+        assert!(RuntimeConfig::parse(none)
+            .unwrap_err()
+            .to_string()
+            .contains("admin_keys"));
+        let bad = "[node]\nadmin_keys = [\"nothex\"]\n";
+        assert!(RuntimeConfig::parse(bad).is_err());
+        let many = format!(
+            "[node]\nadmin_keys = [{}]\n",
+            vec![format!("\"{}\"", "ab".repeat(32)); MAX_ADMIN_KEYS + 1].join(",")
+        );
+        assert!(RuntimeConfig::parse(&many).is_err());
+    }
+
+    #[test]
+    fn admin_section_is_validated_and_changes_need_a_restart() {
+        let key = "ab".repeat(32);
+        let ok = format!(
+            "[admin]\nenabled = true\n[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"laptop\"\n"
+        );
+        let c = RuntimeConfig::parse(&ok).unwrap();
+        assert!(c.admin.enabled && c.admin.operators.len() == 1);
+        // enabled with nobody allowed is a misconfiguration, not "open".
+        assert!(RuntimeConfig::parse("[admin]\nenabled = true\n").is_err());
+        let with_bind =
+            |b: &str| format!("{ok}\n").replace("[admin]\n", &format!("[admin]\nbind = \"{b}\"\n"));
+        assert!(RuntimeConfig::parse(&with_bind("0.0.0.0:7447")).is_ok());
+        assert!(RuntimeConfig::parse(&with_bind("not-an-address")).is_err());
+        for bad in [
+            "[[admin.operators]]\nkey = \"nothex\"\nrole = \"owner\"\nlabel = \"a\"\n".to_string(),
+            format!("[[admin.operators]]\nkey = \"{key}\"\nrole = \"root\"\nlabel = \"a\"\n"),
+            format!("[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"Bad Label\"\n"),
+            format!("[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"a\"\n[[admin.operators]]\nkey = \"{key}\"\nrole = \"viewer\"\nlabel = \"b\"\n"),
+        ] {
+            assert!(RuntimeConfig::parse(&bad).is_err(), "{bad}");
+        }
+        let mut changed = c.clone();
+        changed.admin.discovery = true;
+        changed.node.require_provisioning = false;
+        let plan = plan_reload(&c, &changed);
+        assert_eq!(plan.restart_required, vec!["admin"]);
+        let mut n2 = c.clone();
+        n2.node.admin_keys = vec![key];
+        assert_eq!(plan_reload(&c, &n2).restart_required, vec!["node"]);
     }
 }

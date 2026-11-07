@@ -1,0 +1,15 @@
+--- a/src/bbsplus/proof.rs	2026-11-05 04:01:04.984437727 +0000
++++ b/src/bbsplus/proof.rs	2026-11-05 04:01:04.985634686 +0000
+@@ -86,6 +86,12 @@
+     ///
+     /// * `Result<Self, Error>` - A result containing the deserialized `BBSplusPoKSignature` or an error.
+     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
++        // 3 G1 points (48 B) + 3 scalars (32 B) = 240 B fixed, then one 32 B scalar per
++        // hidden message plus the 32 B challenge. Anything shorter would make the slicing
++        // below panic; a trailing remainder would be silently ignored by `chunks_exact`.
++        if bytes.len() < 240 + 32 || (bytes.len() - 240) % 32 != 0 {
++            return Err(Error::InvalidProofOfKnowledgeSignature);
++        }
+         let Abar = parse_g1_projective(&bytes[0..48])
+             .map_err(|_| Error::InvalidProofOfKnowledgeSignature)?;
+         let Bbar = parse_g1_projective(&bytes[48..96])

@@ -386,3 +386,35 @@ fn restoring_into_a_folder_a_running_app_is_using_is_refused() {
     assert!(matches!(err, BackupError::InstanceRunning));
     assert!(!busy.join("identity.bin").exists());
 }
+
+#[test]
+fn a_running_process_backs_up_with_its_own_lock_and_a_filter() {
+    let d = data_dir("while-locked");
+    fs::create_dir_all(d.join("siar.db/snapshots/t")).unwrap();
+    fs::write(d.join("siar.db/snapshots/t/snapshot-1.bin"), b"snap").unwrap();
+    fs::write(d.join("siar.db/db.lock"), b"x").unwrap();
+    let out = scratch("while-locked-out").join("b.siarbk");
+
+    // The ordinary entry point refuses while the lock is held…
+    let held = InstanceLock::acquire(&d).unwrap();
+    assert!(matches!(
+        create_backup_with(&d, PASS, &out, FAST),
+        Err(BackupError::InstanceRunning)
+    ));
+    // …the lock-holding entry point works, and never reads a rejected file.
+    let only_snapshots =
+        |rel: &str| !rel.starts_with("siar.db/") || rel.starts_with("siar.db/snapshots/");
+    create_backup_while_locked(&d, PASS, &out, FAST, &held, &only_snapshots).unwrap();
+
+    let target = scratch("while-locked-restore").join("restored");
+    restore_backup(&out, PASS, &target).unwrap();
+    let names: Vec<String> = read_tree(&target).into_iter().map(|(n, _)| n).collect();
+    assert!(names.contains(&"identity.bin".to_owned()));
+    assert!(names.contains(&"siar.db/snapshots/t/snapshot-1.bin".to_owned()));
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.starts_with("siar.db/wal") || n == "siar.db/db.lock"),
+        "{names:?}"
+    );
+}

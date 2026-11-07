@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::audit_file::{FileLimits, FileSink};
 use crate::protocol::{Command, Role};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,9 @@ pub fn action_label(c: &Command) -> String {
             format!("set-maintenance:{}", if *on { "on" } else { "off" })
         }
         Command::SetReadOnly(on) => format!("set-read-only:{}", if *on { "on" } else { "off" }),
+        Command::CreateBackup { .. } => "create-backup".into(),
+        Command::RestoreBackup { .. } => "restore-backup".into(),
+        Command::Provision { .. } => "provision".into(),
         Command::App { name, .. } => format!(
             "app:{}",
             name.chars()
@@ -51,6 +55,9 @@ pub fn action_label(c: &Command) -> String {
 pub struct AuditLog {
     cap: usize,
     inner: Arc<Mutex<VecDeque<AuditEntry>>>,
+    /// Optional durable, hash-chained file (see [`crate::audit_file`]).
+    /// Lock order is always `inner` → `sink`.
+    sink: Arc<Mutex<Option<FileSink>>>,
 }
 
 impl AuditLog {
@@ -59,13 +66,56 @@ impl AuditLog {
         Self {
             cap: cap.max(1),
             inner: Arc::default(),
+            sink: Arc::default(),
         }
+    }
+
+    /// Also write every entry to a durable, hash-chained file in `dir`.
+    /// Returns a warning if an existing log failed verification and was set
+    /// aside. Entries recorded before this call stay memory-only.
+    pub fn attach_file(
+        &self,
+        dir: &std::path::Path,
+        limits: FileLimits,
+    ) -> std::io::Result<Option<String>> {
+        let (sink, warning) = FileSink::open(dir, limits)?;
+        *self.sink.lock().unwrap_or_else(PoisonError::into_inner) = Some(sink);
+        Ok(warning)
+    }
+
+    /// `(seq, chain value)` of the last persisted entry — record it somewhere
+    /// the node's own user cannot write, to make tail-truncation visible.
+    #[must_use]
+    pub fn persisted_head(&self) -> Option<(u64, String)> {
+        self.sink
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(FileSink::head)
+    }
+
+    /// How many entries could not be written to disk (0 when healthy).
+    #[must_use]
+    pub fn persist_failures(&self) -> u64 {
+        self.sink
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map_or(0, FileSink::write_failures)
     }
 
     pub fn record(&self, e: AuditEntry) {
         let mut q = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         if q.len() >= self.cap {
             q.pop_front();
+        }
+        if let Some(sink) = self
+            .sink
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+        {
+            sink.append(&e);
         }
         q.push_back(e);
     }
@@ -83,7 +133,8 @@ impl AuditLog {
     /// One line per entry, oldest first.
     #[must_use]
     pub fn render_text(&self) -> String {
-        self.recent()
+        let mut text = self
+            .recent()
             .iter()
             .map(|e| {
                 format!(
@@ -92,7 +143,15 @@ impl AuditLog {
                 )
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        // The chain head, for off-box anchoring (only when persistence is on).
+        if let Some((seq, chain)) = self.persisted_head() {
+            let failures = self.persist_failures();
+            text.push_str(&format!(
+                "\n# persisted head seq={seq} chain={chain} write-failures={failures}"
+            ));
+        }
+        text
     }
 }
 
@@ -139,5 +198,44 @@ mod tests {
         let r = log.recent();
         assert_eq!(r.len(), 3);
         assert_eq!(r[0].at_ms, 7);
+    }
+
+    #[test]
+    fn a_persistent_log_records_to_disk_and_reports_its_head() {
+        let d = std::env::temp_dir().join(format!("siar-auditlog-{}", uuid::Uuid::new_v4()));
+        let log = AuditLog::new(4);
+        assert_eq!(log.persisted_head(), None);
+        assert!(!log.render_text().contains("persisted head"));
+        assert!(log
+            .attach_file(&d, FileLimits::default())
+            .unwrap()
+            .is_none());
+        for i in 0..10 {
+            log.record(AuditEntry {
+                at_ms: i,
+                principal: 7,
+                role: Role::Admin,
+                action: format!("a{i}"),
+                outcome: Outcome::Ok,
+            });
+        }
+        // The ring forgot 6 of them; the file did not.
+        assert_eq!(log.recent().len(), 4);
+        let rep = crate::audit_file::FileSink::verify_dir(&d, 4).unwrap();
+        assert!(rep.is_ok() && rep.entries == 10, "{rep:?}");
+        let (seq, chain) = log.persisted_head().unwrap();
+        assert_eq!(seq, 9);
+        assert!(log.render_text().ends_with(&format!(
+            "# persisted head seq=9 chain={chain} write-failures=0"
+        )));
+        // Clones share the sink.
+        log.clone().record(AuditEntry {
+            at_ms: 11,
+            principal: 7,
+            role: Role::Admin,
+            action: "b".into(),
+            outcome: Outcome::Denied,
+        });
+        assert_eq!(log.persisted_head().unwrap().0, 10);
     }
 }

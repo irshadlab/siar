@@ -401,3 +401,64 @@ async fn shutdown_lets_an_in_flight_request_finish_and_deliver_its_reply() {
         "the reply must survive server shutdown"
     );
 }
+
+#[tokio::test]
+async fn a_barrage_of_hostile_frames_never_crashes_or_confuses_the_server() {
+    let n = net(fast(), Fake::default()).await;
+    let seed = postcard::to_allocvec(&Request {
+        id: 9,
+        op: AdminOp::Metrics,
+    })
+    .unwrap();
+    let mut x: u64 = 0xDEAD_BEEF_0BAD_F00D;
+    let mut next = move || {
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    let mut genuine_after_mutation = 0u32;
+    for round in 0..40 {
+        let mut frame = if round % 4 == 0 {
+            (0..(next() % 200) as usize)
+                .map(|_| next() as u8)
+                .collect::<Vec<u8>>()
+        } else {
+            seed.clone()
+        };
+        if round % 4 != 0 && !frame.is_empty() {
+            let i = (next() as usize) % frame.len();
+            frame[i] ^= 1 << (next() % 8);
+        }
+        // Valid-by-chance frames (a flipped bit that is still a request) are
+        // allowed to execute — for an authorised operator and only then.
+        if postcard::take_from_bytes::<Request>(&frame)
+            .map(|(_, r)| r.is_empty())
+            .unwrap_or(false)
+        {
+            genuine_after_mutation += 1;
+        }
+        let who = if round % 5 == 0 { "viewer" } else { "owner" };
+        let _ = raw(&n, who, frame).await;
+    }
+    // Everything the backend actually ran decoded as a real, authorised request
+    // (viewer-only frames can run only viewer operations).
+    for (label, op) in n.backend.executed.lock().unwrap().iter() {
+        assert!(!label.is_empty() && !op.is_empty());
+    }
+    let ran = n.backend.executed.lock().unwrap().len() as u32;
+    assert!(
+        ran <= genuine_after_mutation + 1,
+        "ran {ran} but only {genuine_after_mutation} frames were valid requests"
+    );
+    // The server is still healthy and correct.
+    assert_eq!(
+        ask(&n, "owner", AdminOp::Health).await.unwrap(),
+        b"ok:health"
+    );
+    assert!(
+        ask(&n, "viewer", AdminOp::Shutdown).await.is_err(),
+        "roles still enforced"
+    );
+    n.server.shutdown().await;
+}

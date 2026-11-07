@@ -549,4 +549,82 @@ mod tests {
         n2.node.admin_keys = vec![key];
         assert_eq!(plan_reload(&c, &n2).restart_required, vec!["node"]);
     }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        fn mutate(&mut self, src: &[u8]) -> Vec<u8> {
+            let mut v = src.to_vec();
+            for _ in 0..=self.below(4) {
+                match self.below(4) {
+                    0 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] ^= 1 << self.below(8);
+                    }
+                    1 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] = self.next() as u8;
+                    }
+                    2 => {
+                        let i = self.below(v.len() + 1);
+                        v.insert(i, self.next() as u8);
+                    }
+                    _ if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            v
+        }
+    }
+
+    #[test]
+    fn mutated_and_random_config_text_never_panics_and_accepted_configs_validate() {
+        let key = "ab".repeat(32);
+        let seed = format!(
+            "[node]\nrequire_provisioning = true\nadmin_keys = [\"{key}\"]\n[admin]\nenabled = true\nbind = \"0.0.0.0:7447\"\n[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"a\"\n[logging]\nlevel = \"debug\"\n"
+        );
+        assert!(RuntimeConfig::parse(&seed).is_ok());
+        let mut rng = Rng(0xC0DE_CAFE);
+        let mut accepted = 0u32;
+        for round in 0..15_000 {
+            let bytes = if round % 5 == 0 {
+                let n = rng.below(400);
+                rng.bytes(n)
+            } else {
+                rng.mutate(seed.as_bytes())
+            };
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let r = std::panic::catch_unwind(|| RuntimeConfig::parse(&text));
+            let r = r.unwrap_or_else(|_| panic!("config parse PANICKED on {text:?}"));
+            if let Ok(c) = r {
+                accepted += 1;
+                // Anything the parser accepts has passed validation: re-validating agrees.
+                assert!(
+                    c.validate().is_ok(),
+                    "accepted a config that does not validate: {text:?}"
+                );
+                // And an accepted admin section is never "enabled with nobody allowed".
+                assert!(!c.admin.enabled || !c.admin.operators.is_empty());
+                assert!(!c.node.require_provisioning || !c.node.admin_keys.is_empty());
+            }
+        }
+        assert!(
+            accepted > 100,
+            "the fuzzer should still reach valid configs: {accepted}"
+        );
+    }
 }

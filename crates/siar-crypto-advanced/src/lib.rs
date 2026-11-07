@@ -9,6 +9,7 @@
 //! | [`frost_root`] | `frost-ed25519` 3.0 (ZF FROST, RFC 9591) | NCC Group audited v0.6.0 of frost-core/frost-ed25519; **not** re-audited at 3.0 |
 //! | [`hybrid`] | `ml-dsa` 0.1 (RustCrypto, FIPS 204) + `ed25519-dalek` 2 | `ml-dsa`: **never independently audited** (its own README says so); dalek: widely reviewed |
 //! | [`bls_audit`] | `blst` 0.3 (supranational) | independent audit commissioned by the Ethereum Foundation / Protocol Labs |
+//! | [`ceremony`] | `argon2` + `chacha20poly1305` (RustCrypto) around the FROST rounds | passphrase-sealed share files; no new primitive |
 //! | [`bbs_relay`] | `zkryptium` 0.8 (IETF BBS draft-14, on `bls12_381_plus`) | **no audit found**; actively maintained |
 //!
 //! The two **unaudited** rows are named here, not hidden: `ml-dsa` and the
@@ -20,6 +21,7 @@
 
 pub mod bbs_relay;
 pub mod bls_audit;
+pub mod ceremony;
 pub mod frost_root;
 pub mod hybrid;
 

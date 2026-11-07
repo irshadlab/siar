@@ -3,19 +3,23 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use siar_power::{PowerPolicyConfig, PowerScheduler, RawPowerReading, SchedulerConfig};
 
 use crate::audit::AuditLog;
+use crate::backup::BackupService;
 use crate::config::{plan_reload, ConfigError, ReloadPlan, RuntimeConfig};
 use crate::dedup::{Begin, CommandId, CommandLedger, CommandOutcome, Principal};
+use crate::diag::{BundleInputs, DiagnosticBundle, RecentErrors};
 use crate::error::RuntimeError;
 use crate::events::{EventBus, EventPriority, Topic};
 use crate::health::HealthRegistry;
 use crate::lifecycle::{Lifecycle, RuntimeState};
 use crate::metrics::Metrics;
+use crate::node::{ProvisionError, ProvisioningService};
 use crate::protocol::{Command, Query, Reply, StatusSnapshot, PROTOCOL_VERSION};
 use crate::supervisor::Supervisor;
 
@@ -68,6 +72,8 @@ pub struct RuntimeBuilder {
     ledger_cap: usize,
     build_id: String,
     config: RuntimeConfig,
+    backup: Option<Arc<dyn BackupService>>,
+    provisioning: Option<Arc<dyn ProvisioningService>>,
 }
 
 impl Default for RuntimeBuilder {
@@ -79,6 +85,8 @@ impl Default for RuntimeBuilder {
             ledger_cap: 4096,
             build_id: concat!("siar-runtime ", env!("CARGO_PKG_VERSION")).to_owned(),
             config: RuntimeConfig::default(),
+            backup: None,
+            provisioning: None,
         }
     }
 }
@@ -87,6 +95,18 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn app(mut self, app: impl AppService) -> Self {
         self.app = Arc::new(app);
+        self
+    }
+    /// §113-§114: the app's backup/restore implementation (it owns the DB).
+    #[must_use]
+    pub fn backup(mut self, svc: impl BackupService) -> Self {
+        self.backup = Some(Arc::new(svc));
+        self
+    }
+    /// §72-§73: the node's provisioning state machine.
+    #[must_use]
+    pub fn provisioning(mut self, svc: Arc<dyn ProvisioningService>) -> Self {
+        self.provisioning = Some(svc);
         self
     }
     #[must_use]
@@ -129,6 +149,11 @@ impl RuntimeBuilder {
                 .with_metrics(metrics.clone()),
             metrics,
             audit: AuditLog::new(512),
+            recent_errors: RecentErrors::default(),
+            holds: Arc::default(),
+            backup_busy: Arc::default(),
+            backup: self.backup,
+            provisioning: self.provisioning,
             config: Arc::new(Mutex::new(self.config)),
             base_power: self.power,
             build: self.build_id,
@@ -152,6 +177,15 @@ pub struct Runtime {
     pub bus: EventBus,
     pub metrics: Arc<Metrics>,
     pub audit: AuditLog,
+    /// §95: bounded ring of recent warnings/errors for the diagnostic bundle.
+    pub recent_errors: RecentErrors,
+    /// §112/§113: >0 while something (a backup) needs the runtime to *stay*
+    /// quiesced; `set-maintenance off` / `set-read-only off` are refused.
+    pub(crate) holds: Arc<AtomicUsize>,
+    /// One backup/restore at a time.
+    pub(crate) backup_busy: Arc<AtomicBool>,
+    pub(crate) backup: Option<Arc<dyn BackupService>>,
+    pub(crate) provisioning: Option<Arc<dyn ProvisioningService>>,
     config: Arc<Mutex<RuntimeConfig>>,
     base_power: PowerPolicyConfig,
     build: String,
@@ -205,7 +239,7 @@ impl Runtime {
         Ok(())
     }
 
-    fn announce_state(&self) {
+    pub(crate) fn announce_state(&self) {
         let payload = postcard::to_allocvec(&self.lifecycle.state()).unwrap_or_default();
         self.bus
             .publish(topics::LIFECYCLE, EventPriority::Critical, None, payload);
@@ -247,6 +281,23 @@ impl Runtime {
         }
     }
 
+    /// §95: versions, health, redacted config, metrics, recent errors.
+    #[must_use]
+    pub fn diagnostics(&self) -> DiagnosticBundle {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        DiagnosticBundle::build(BundleInputs {
+            now_ms,
+            build: &self.build,
+            state: &format!("{:?}", self.state()),
+            health: self.health.report(),
+            config: &self.config(),
+            metrics_text: self.metrics.render_text(),
+            recent_errors: self.recent_errors.snapshot(),
+        })
+    }
+
     #[must_use]
     pub fn status(&self) -> StatusSnapshot {
         StatusSnapshot {
@@ -269,6 +320,11 @@ impl Runtime {
             Query::Power => Ok(Reply::Power(Box::new(self.with_power(|p| p.diagnostics())))),
             Query::Metrics => Ok(Reply::Bytes(self.metrics.render_text().into_bytes())),
             Query::Audit => Ok(Reply::Bytes(self.audit.render_text().into_bytes())),
+            Query::ProvisionStatus => match &self.provisioning {
+                Some(p) => Ok(Reply::Bytes(p.status().render().into_bytes())),
+                None => Err(RuntimeError::Unsupported),
+            },
+            Query::Diagnostics => Ok(Reply::Bytes(self.diagnostics().render_text().into_bytes())),
             Query::App { name, data } => self.app.query(&name, data).await.map(Reply::Bytes),
         }
     }
@@ -331,11 +387,42 @@ impl Runtime {
             }
             Command::SetMaintenance(on) => self.toggle(*on, RuntimeState::Maintenance),
             Command::SetReadOnly(on) => self.toggle(*on, RuntimeState::ReadOnly),
+            Command::CreateBackup { target } => Ok(self
+                .create_backup(target)
+                .await
+                .map_err(RuntimeError::from)?
+                .to_string()
+                .into_bytes()),
+            Command::RestoreBackup { source } => {
+                self.restore_backup(source)
+                    .await
+                    .map_err(RuntimeError::from)?;
+                Ok(Vec::new())
+            }
+            Command::Provision { payload, signature } => {
+                let svc = self.provisioning.clone().ok_or(RuntimeError::Unsupported)?;
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+                let done = svc
+                    .apply_encoded(payload, signature, now_ms)
+                    .map_err(provision_error)?;
+                tracing::info!(role = %done.role, "node provisioned; restart to activate the role");
+                // The role's feature set is fixed at startup, so enrolment
+                // ends this run; the service manager restarts it provisioned.
+                self.lifecycle.begin_shutdown();
+                self.announce_state();
+                Ok(done.role.name().as_bytes().to_vec())
+            }
             Command::App { name, data } => self.app.command(name, data.clone()).await,
         }
     }
 
     fn toggle(&self, on: bool, mode: RuntimeState) -> CommandOutcome {
+        // §113: a backup in progress needs the quiet to hold until it is done.
+        if !on && self.holds.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return Err(RuntimeError::Busy);
+        }
         let target = if on { mode } else { RuntimeState::Ready };
         self.lifecycle
             .transition(target)
@@ -384,6 +471,20 @@ impl Runtime {
     #[must_use]
     pub fn runtime_topics() -> Vec<Topic> {
         vec![topics::LIFECYCLE, topics::POWER, topics::HEALTH]
+    }
+}
+
+/// Map enrolment failures onto the IPC error model without leaking which
+/// check failed beyond what the caller needs.
+fn provision_error(e: ProvisionError) -> RuntimeError {
+    match e {
+        ProvisionError::BadSignature | ProvisionError::WrongChallenge | ProvisionError::Expired => {
+            RuntimeError::Unauthorized
+        }
+        ProvisionError::AlreadyProvisioned => RuntimeError::Busy,
+        ProvisionError::Io(_) => RuntimeError::Storage,
+        ProvisionError::Malformed(m) => RuntimeError::InvalidCommand(m.to_owned()),
+        ProvisionError::BadConfig(m) => RuntimeError::InvalidCommand(m),
     }
 }
 
@@ -602,6 +703,90 @@ mod tests {
         assert!(
             t.contains("siar_commands_total 1") && t.contains("siar_commands_deduplicated_total 1"),
             "{t}"
+        );
+    }
+
+    #[tokio::test]
+    async fn provisioning_over_the_command_path_ends_the_run_and_never_leaks_why() {
+        use crate::node::{
+            signing_message, Ed25519AdminVerifier, NodeRole, ProvisionPayload, Provisioner,
+        };
+        use ed25519_dalek::Signer;
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[3; 32]);
+        let id = hex(sk.verifying_key().as_bytes());
+        let dir = std::env::temp_dir().join(format!("siar-rt-prov-{}", uuid::Uuid::new_v4()));
+        let (prov, _) = Provisioner::open(
+            &dir,
+            Ed25519AdminVerifier::from_hex_keys(std::slice::from_ref(&id)).unwrap(),
+        )
+        .unwrap();
+        let prov = Arc::new(prov);
+        let rt = Runtime::builder().provisioning(prov.clone()).build();
+        ready(&rt).await;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let payload = ProvisionPayload {
+            role: NodeRole::RelayGateway,
+            config_toml: String::new(),
+            issuer: id,
+            issued_at_ms: now - 1_000,
+            valid_for_ms: 60_000,
+            challenge: prov.challenge().unwrap(),
+        };
+        let bytes = postcard::to_allocvec(&payload).unwrap();
+        let sig = sk.sign(&signing_message(&payload)).to_bytes().to_vec();
+
+        // Status is visible and carries the challenge.
+        match rt.query(Query::ProvisionStatus).await.unwrap() {
+            Reply::Bytes(b) => assert!(String::from_utf8(b)
+                .unwrap()
+                .starts_with("unprovisioned challenge=")),
+            other => panic!("{other:?}"),
+        }
+        // A bad signature is just Unauthorized, and changes nothing.
+        let bad = Command::Provision {
+            payload: bytes.clone(),
+            signature: vec![0; 64],
+        };
+        assert_eq!(
+            rt.command(1, CommandId(1), bad).await,
+            Err(RuntimeError::Unauthorized)
+        );
+        assert_eq!(rt.state(), RuntimeState::Ready);
+
+        // The genuine payload provisions the node and ends this run.
+        let ok = Command::Provision {
+            payload: bytes.clone(),
+            signature: sig.clone(),
+        };
+        let out = rt.command(1, CommandId(2), ok.clone()).await.unwrap();
+        assert_eq!(out, b"relay-gateway");
+        assert_eq!(rt.state(), RuntimeState::ShuttingDown);
+        // A retry of the same command id replays the stored outcome, a new id
+        // is refused (already provisioned).
+        assert_eq!(rt.command(1, CommandId(2), ok.clone()).await.unwrap(), out);
+        assert_eq!(
+            rt.command(1, CommandId(3), ok).await,
+            Err(RuntimeError::Busy)
+        );
+
+        // Without a provisioner the surface does not exist.
+        let bare = Runtime::builder().build();
+        assert_eq!(
+            bare.command(
+                1,
+                CommandId(1),
+                Command::Provision {
+                    payload: vec![],
+                    signature: vec![]
+                }
+            )
+            .await,
+            Err(RuntimeError::Unsupported)
         );
     }
 }

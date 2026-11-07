@@ -17,6 +17,8 @@ tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 service-manager = "0.11"
 # Cross-platform local IPC (Unix socket / Windows named pipe) + peer credentials.
 interprocess = { version = "2.4", features = ["tokio"] }
+ed25519-dalek.workspace = true
+blake3.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true

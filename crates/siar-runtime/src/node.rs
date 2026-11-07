@@ -468,8 +468,13 @@ impl<V: ProvisionVerifier> Provisioner<V> {
     /// being silently ignored.
     pub fn open(dir: &Path, verifier: V) -> io::Result<(Self, Option<String>)> {
         fs::create_dir_all(dir)?;
-        let (state, config, warning) = match fs::read_to_string(dir.join(STATE_FILE)) {
-            Ok(text) => match Self::decode(&text) {
+        // Read as bytes: a file that is not even UTF-8 is just another kind of
+        // corruption and must fail closed to unprovisioned, not abort startup.
+        let (state, config, warning) = match fs::read(dir.join(STATE_FILE)) {
+            Ok(raw) => match String::from_utf8(raw)
+                .map_err(|_| "not valid UTF-8".to_owned())
+                .and_then(|text| Self::decode(&text))
+            {
                 Ok((p, c)) => (Provisioning::Provisioned(p), Some(c), None),
                 Err(e) => (
                     Provisioning::Unprovisioned,
@@ -1135,5 +1140,111 @@ mod tests {
         assert_eq!(eff.admin, local.admin, "remote operators stay local");
         assert_eq!(eff.secrets, local.secrets, "key-material paths stay local");
         assert_eq!(overlay_config(&local, None), local);
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        fn mutate(&mut self, src: &[u8]) -> Vec<u8> {
+            let mut v = src.to_vec();
+            for _ in 0..=self.below(4) {
+                match self.below(4) {
+                    0 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] ^= 1 << self.below(8);
+                    }
+                    1 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] = self.next() as u8;
+                    }
+                    2 => {
+                        let i = self.below(v.len() + 1);
+                        v.insert(i, self.next() as u8);
+                    }
+                    _ if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            v
+        }
+    }
+
+    /// Mutated payload bytes / signatures must never panic and never
+    /// provision: the real verifier rejects every change to what was signed.
+    #[test]
+    fn mutated_provisioning_input_never_panics_and_never_provisions() {
+        let (sk, id) = admin(1);
+        let v = Ed25519AdminVerifier::from_hex_keys(std::slice::from_ref(&id)).unwrap();
+        let (p, _) = Provisioner::open(&tmp("fz"), v).unwrap();
+        // A payload bound to THIS node's challenge, correctly signed.
+        let (good, good_sig) = signed(&sk, &id, p.challenge().unwrap(), NodeRole::DtnNode);
+        let good_bytes = postcard::to_allocvec(&good).unwrap();
+        let svc: &dyn ProvisioningService = &p;
+        let mut rng = Rng(0xFEED_FACE);
+        for round in 0..6_000 {
+            let (bytes, s2) = match round % 3 {
+                0 => (rng.mutate(&good_bytes), good_sig.clone()),
+                1 => (good_bytes.clone(), rng.mutate(&good_sig)),
+                _ => {
+                    let n = rng.below(400);
+                    (rng.bytes(n), rng.bytes(64))
+                }
+            };
+            if bytes == good_bytes && s2 == good_sig {
+                continue;
+            }
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                svc.apply_encoded(&bytes, &s2, 2_000)
+            }));
+            let r = r.unwrap_or_else(|_| panic!("apply_encoded PANICKED"));
+            assert!(
+                r.is_err(),
+                "a mutated payload or signature PROVISIONED the node (round {round})"
+            );
+        }
+        assert_eq!(p.state(), Provisioning::Unprovisioned);
+        // …and the untouched pair still works afterwards (nothing was burned).
+        assert!(svc.apply_encoded(&good_bytes, &good_sig, 2_000).is_ok());
+    }
+
+    /// A node state file full of junk — including bytes that are not UTF-8 —
+    /// must fail closed to Unprovisioned with a warning, not abort startup.
+    #[test]
+    fn a_garbage_node_state_file_fails_closed_without_aborting() {
+        let mut rng = Rng(0xBAD_F11E);
+        for round in 0..200 {
+            let d = tmp("fz-state");
+            let n = rng.below(500);
+            let junk = if round % 2 == 0 {
+                rng.bytes(n)
+            } else {
+                rng.mutate(b"version = 1\nrole = \"dtn-node\"\nissuer = \"x\"\nprovisioned_at_ms = 1\nconfig_toml = \"\"\n")
+            };
+            fs::write(d.join(STATE_FILE), &junk).unwrap();
+            let r = std::panic::catch_unwind(|| Provisioner::open(&d, Fake));
+            let r = r.unwrap_or_else(|_| panic!("open PANICKED on {} bytes", junk.len()));
+            let (p, _warning) = r.unwrap_or_else(|e| {
+                panic!("open FAILED instead of failing closed ({e}) on {junk:02x?}")
+            });
+            // Whatever it decided, it never grants more than a valid file would.
+            let f = p.effective_features();
+            assert!(
+                f == UNPROVISIONED_FEATURES || matches!(p.state(), Provisioning::Provisioned(_))
+            );
+        }
     }
 }

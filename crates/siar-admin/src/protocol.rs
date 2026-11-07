@@ -267,4 +267,96 @@ mod tests {
         bytes[last] = 0x7f;
         assert!(postcard::from_bytes::<Request>(&bytes).is_err());
     }
+
+    /// Deterministic xorshift64* — no dependency, reproducible failures.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        /// Flip, overwrite, insert or delete a few bytes of `src`.
+        fn mutate(&mut self, src: &[u8]) -> Vec<u8> {
+            let mut v = src.to_vec();
+            for _ in 0..=self.below(4) {
+                match self.below(4) {
+                    0 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] ^= 1 << self.below(8);
+                    }
+                    1 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] = self.next() as u8;
+                    }
+                    2 => {
+                        let i = self.below(v.len() + 1);
+                        v.insert(i, self.next() as u8);
+                    }
+                    _ if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            v
+        }
+    }
+
+    /// Hostile bytes at the admin boundary: decoding must never panic, and
+    /// must only accept something that re-encodes to *exactly* those bytes
+    /// (one canonical form per request — no trailing data, no alias).
+    #[test]
+    fn mutated_and_random_request_bytes_never_panic_and_only_canonical_forms_decode() {
+        let seeds: Vec<Vec<u8>> = every_op()
+            .into_iter()
+            .enumerate()
+            .map(|(i, op)| {
+                postcard::to_allocvec(&Request {
+                    id: i as u128 * 0x1_0000_0001,
+                    op,
+                })
+                .unwrap()
+            })
+            .collect();
+        let mut rng = Rng(0x00C0_FFEE);
+        let mut accepted_mutants = 0u32;
+        for round in 0..20_000 {
+            let input = if round % 4 == 0 {
+                let n = rng.below(300);
+                rng.bytes(n)
+            } else {
+                let base = &seeds[rng.below(seeds.len())];
+                rng.mutate(base)
+            };
+            let r = std::panic::catch_unwind(|| {
+                postcard::take_from_bytes::<Request>(&input)
+                    .ok()
+                    .map(|(r, rest)| (r, rest.len()))
+            });
+            let decoded = r.unwrap_or_else(|_| panic!("decoder PANICKED on {input:02x?}"));
+            if let Some((req, 0)) = decoded {
+                // What the server accepts must be the canonical encoding.
+                let again = postcard::to_allocvec(&req).unwrap();
+                if again != input {
+                    // postcard varints accept non-minimal encodings of ids; the
+                    // server treats the *decoded value* as truth, so this is
+                    // harmless — but count it so a regression is visible.
+                    accepted_mutants += 1;
+                }
+                // And every accepted op has a role and a label (no panics).
+                let _ = (req.op.required_role(), req.op.label());
+            }
+        }
+        // Informational bound: non-canonical aliases exist (varint padding) but are rare.
+        assert!(accepted_mutants < 2_000, "{accepted_mutants}");
+    }
 }

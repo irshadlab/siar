@@ -621,4 +621,95 @@ mod tests {
         assert!(make_signing_package(b"m", &[]).is_err());
         assert!(make_signing_package(b"m", &["zz".into()]).is_err());
     }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        fn mutate(&mut self, src: &[u8]) -> Vec<u8> {
+            let mut v = src.to_vec();
+            for _ in 0..=self.below(4) {
+                match self.below(4) {
+                    0 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] ^= 1 << self.below(8);
+                    }
+                    1 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] = self.next() as u8;
+                    }
+                    2 => {
+                        let i = self.below(v.len() + 1);
+                        v.insert(i, self.next() as u8);
+                    }
+                    _ if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            v
+        }
+    }
+
+    /// Files come from other people's machines. Whatever bytes arrive, the
+    /// parsers return an error or a value — never a panic, and a sealed blob
+    /// only opens if it is byte-for-byte what `seal` produced.
+    #[test]
+    fn hostile_files_never_panic_and_only_the_exact_sealed_blob_opens() {
+        let p = pw("correct horse battery");
+        let blob = seal(&p, "share", b"the secret share bytes").unwrap();
+        let mut rng = Rng(0x005E_A1ED);
+        for round in 0..1_500 {
+            let input = if round % 3 == 0 {
+                let n = rng.below(200);
+                rng.bytes(n)
+            } else {
+                rng.mutate(&blob)
+            };
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                unseal(&p, "share", &input)
+            }));
+            let r = r.unwrap_or_else(|_| panic!("unseal PANICKED on {} bytes", input.len()));
+            if input == blob {
+                assert_eq!(r.unwrap(), b"the secret share bytes");
+            } else {
+                assert!(r.is_err(), "a MODIFIED sealed file opened (round {round})");
+            }
+        }
+        // Text-side parsers: arbitrary strings.
+        let alphabet = b"0123456789abcdefABCDEF xyz\n\t-";
+        for _ in 0..3_000 {
+            let n = rng.below(120);
+            let s: String = (0..n)
+                .map(|_| alphabet[rng.below(alphabet.len())] as char)
+                .collect();
+            let r = std::panic::catch_unwind(|| {
+                let _ = from_hex(&s);
+                let _ = untag(&s);
+            });
+            assert!(r.is_ok(), "hex/tag parser PANICKED on {s:?}");
+        }
+        // Round-1 / signing inputs: garbage must be rejected, not crash.
+        for _ in 0..300 {
+            let n = rng.below(150);
+            let h = to_hex(&rng.bytes(n));
+            let r = std::panic::catch_unwind(|| {
+                let _ = make_signing_package(b"m", &[h.clone(), h.clone()]);
+                let _ = aggregate_signature(&h, &h, std::slice::from_ref(&h));
+            });
+            assert!(r.is_ok(), "signing-input parser PANICKED on {h}");
+        }
+    }
 }

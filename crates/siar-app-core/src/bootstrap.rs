@@ -143,6 +143,11 @@ pub struct Bootstrapped {
     /// failed; the app still starts (1:1 messaging doesn't depend on
     /// this), just without anything to show for "add me to a group."
     pub key_package_b64: Option<String>,
+    /// The one shared database handle. Held here (not only inside the
+    /// repositories) so a host can ask it to write a consistent snapshot
+    /// before the data directory is copied for a backup
+    /// (`Database::create_snapshot`).
+    pub db: Arc<siar_storage::Database>,
     /// Backs the persistent contact book (`AppCommand::SaveContact`/
     /// `RemoveContact`) — see `contact_repo.rs`'s own doc comment for
     /// exactly what this does and doesn't close.
@@ -368,6 +373,7 @@ pub async fn bootstrap_messaging() -> Result<Bootstrapped> {
         device_id,
         key_package_directory,
         key_package_b64,
+        db,
         device_directory,
         contact_repo,
         security_repo,

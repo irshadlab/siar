@@ -20,7 +20,10 @@ pub enum RuntimeState {
     Degraded,
     /// §111: reads work, mutating commands are refused.
     ReadOnly,
-    /// §112: operator maintenance; mutating commands refused, network quiesced.
+    /// §112: operator maintenance; mutating commands refused and
+    /// [`network_open`](Self::network_open) is false. (The runtime publishes
+    /// that flag; the hosting app must act on it — the daemon's core does
+    /// not yet, see `backup.rs`.)
     Maintenance,
     /// §35: graceful drain in progress.
     ShuttingDown,
@@ -28,7 +31,9 @@ pub enum RuntimeState {
 }
 
 impl RuntimeState {
-    /// Network listeners may accept peers (§34).
+    /// Whether network listeners *should* accept peers (§34). A published
+    /// predicate: nothing here closes a socket, and the app core does not
+    /// currently consult it.
     #[must_use]
     pub const fn network_open(self) -> bool {
         matches!(self, Self::Ready | Self::Degraded)

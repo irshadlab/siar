@@ -467,4 +467,86 @@ mod tests {
         pk.verify(msg, b"ctx", &hybrid).unwrap();
         assert!(pk.verify(b"different", b"ctx", &hybrid).is_err());
     }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        fn mutate(&mut self, src: &[u8]) -> Vec<u8> {
+            let mut v = src.to_vec();
+            for _ in 0..=self.below(4) {
+                match self.below(4) {
+                    0 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] ^= 1 << self.below(8);
+                    }
+                    1 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] = self.next() as u8;
+                    }
+                    2 => {
+                        let i = self.below(v.len() + 1);
+                        v.insert(i, self.next() as u8);
+                    }
+                    _ if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            v
+        }
+    }
+
+    #[test]
+    fn hostile_hybrid_keys_and_signatures_never_panic_and_only_the_genuine_one_verifies() {
+        let k = HybridSecretKey::from_seeds(&[3; 32], &[4; 32]);
+        let pk = k.public_key();
+        let sig = k.sign(b"msg", b"ctx").unwrap();
+        pk.verify(b"msg", b"ctx", &sig).unwrap();
+        let pk_bytes = pk.to_bytes();
+        let mut rng = Rng(0x41B1D);
+        for round in 0..120 {
+            let bytes = if round % 2 == 0 {
+                rng.mutate(sig.as_bytes())
+            } else {
+                rng.bytes(SIG_LEN)
+            };
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                HybridSignature::from_bytes(&bytes).and_then(|s| pk.verify(b"msg", b"ctx", &s))
+            }));
+            let r = r.unwrap_or_else(|_| panic!("hybrid verify PANICKED (round {round})"));
+            if bytes != sig.as_bytes() {
+                assert!(
+                    r.is_err(),
+                    "a modified hybrid signature verified (round {round})"
+                );
+            }
+        }
+        for _ in 0..60 {
+            let bytes = if rng.below(2) == 0 {
+                rng.mutate(&pk_bytes)
+            } else {
+                rng.bytes(PK_LEN)
+            };
+            let r = std::panic::catch_unwind(|| {
+                HybridPublicKey::from_bytes(&bytes).map(|p| p.to_bytes().len())
+            });
+            let r = r.unwrap_or_else(|_| panic!("hybrid key decode PANICKED"));
+            if let Ok(len) = r {
+                assert_eq!(len, PK_LEN);
+            }
+        }
+    }
 }

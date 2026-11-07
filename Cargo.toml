@@ -65,6 +65,8 @@ members = [
     "apps/android/rust-jni-glue",
     "apps/android/messaging-jni",
     "workspace-hack",
+    "apps/root-ceremony",
+    "crates/siar-admin",
 ]
 
 [workspace.package]
@@ -120,6 +122,7 @@ siar-transport-ble = { path = "crates/siar-transport-ble" }
 siar-media-image = { path = "crates/siar-media-image" }
 siar-emergency = { path = "crates/siar-emergency" }
 siar-emergency-service = { path = "crates/siar-emergency-service" }
+siar-admin = { path = "crates/siar-admin" }
 
 # --- dev/analysis tooling ---
 # Cargo dependency graph analysis — tracks/queries workspace dependency

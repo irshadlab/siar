@@ -133,7 +133,13 @@ pub fn verify(files: &[PathBuf]) -> io::Result<Report> {
         let name = f
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let text = fs::read_to_string(f)?;
+        // Bytes that are not UTF-8 are corruption like any other (reported as
+        // a problem so `open` quarantines the file), not an I/O failure.
+        let raw = fs::read(f)?;
+        let Ok(text) = String::from_utf8(raw) else {
+            rep.problem = Some((name, 1, "not valid UTF-8".to_owned()));
+            return Ok(rep);
+        };
         for (i, line) in text.lines().enumerate() {
             let fail = |why: &str, mut rep: Report| {
                 rep.problem = Some((name.clone(), i + 1, why.to_owned()));
@@ -665,5 +671,102 @@ mod tests {
         let one = fs::read_to_string(d2.join(ACTIVE)).unwrap();
         fs::write(d2.join(ACTIVE), one.replacen("Ok", "Denied", 1)).unwrap();
         assert!(!FileSink::verify_dir(&d2, 4).unwrap().is_ok());
+    }
+
+    /// EVERY single-byte change to a valid log — flip, overwrite, delete,
+    /// insert — at EVERY position must be detected, unless it leaves the
+    /// parsed lines identical (a missing final newline).
+    #[test]
+    fn every_single_byte_mutation_of_a_valid_log_is_detected() {
+        let d = tmp("exhaustive");
+        let (mut s, _) = FileSink::open(&d, FileLimits::default()).unwrap();
+        for i in 0..5 {
+            s.append(&entry(
+                i,
+                if i % 2 == 0 {
+                    "set-maintenance:on"
+                } else {
+                    "remote:ci:health"
+                },
+            ));
+        }
+        drop(s);
+        let path = d.join(ACTIVE);
+        let original = fs::read(&path).unwrap();
+        assert!(FileSink::verify_dir(&d, 4).unwrap().is_ok());
+        let lines_of = |b: &[u8]| {
+            String::from_utf8_lossy(b)
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let orig_lines = lines_of(&original);
+
+        let mut checked = 0u32;
+        let mut check = |mutant: Vec<u8>, what: String| {
+            if lines_of(&mutant) == orig_lines && std::str::from_utf8(&mutant).is_ok() {
+                return; // semantically identical (e.g. trailing newline removed)
+            }
+            fs::write(&path, &mutant).unwrap();
+            let r = FileSink::verify_dir(&d, 4);
+            // Non-UTF-8 is an I/O-level rejection; anything else must report a problem.
+            let detected = match r {
+                Err(_) => true,
+                Ok(rep) => !rep.is_ok(),
+            };
+            assert!(detected, "UNDETECTED mutation: {what}");
+            checked += 1;
+        };
+        for pos in 0..original.len() {
+            let mut flip = original.clone();
+            flip[pos] ^= 0x01;
+            check(flip, format!("flip bit 0 at {pos}"));
+            let mut over = original.clone();
+            over[pos] = if over[pos] == b'x' { b'y' } else { b'x' };
+            check(over, format!("overwrite at {pos}"));
+            let mut del = original.clone();
+            del.remove(pos);
+            check(del, format!("delete at {pos}"));
+            let mut ins = original.clone();
+            ins.insert(pos, b'7');
+            check(ins, format!("insert at {pos}"));
+        }
+        assert!(checked > 1_000, "the sweep must be substantial: {checked}");
+    }
+
+    #[test]
+    fn random_garbage_files_never_panic_the_verifier() {
+        let d = tmp("garbage");
+        fs::create_dir_all(&d).unwrap();
+        let path = d.join(ACTIVE);
+        let mut x: u64 = 0x1234_5678_9ABC_DEF1;
+        for round in 0..400 {
+            let len = (round * 7) % 600;
+            let bytes: Vec<u8> = (0..len)
+                .map(|_| {
+                    x ^= x >> 12;
+                    x ^= x << 25;
+                    x ^= x >> 27;
+                    let b = (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u8;
+                    // Bias toward the characters that matter to the parser.
+                    match b % 9 {
+                        0 => b'\t',
+                        1 => b'\n',
+                        2 => b'0',
+                        _ => b,
+                    }
+                })
+                .collect();
+            fs::write(&path, &bytes).unwrap();
+            let r = std::panic::catch_unwind(|| FileSink::verify_dir(&d, 4));
+            assert!(r.is_ok(), "verify PANICKED on garbage of length {len}");
+            // Opening a sink over garbage must also be safe (and quarantine it).
+            let o =
+                std::panic::catch_unwind(|| FileSink::open(&d, FileLimits::default()).map(|_| ()));
+            let o = o.unwrap_or_else(|_| panic!("open PANICKED on garbage of length {len}"));
+            assert!(o.is_ok(), "open FAILED on garbage of length {len}: {o:?}");
+            let _ = fs::remove_dir_all(&d);
+            fs::create_dir_all(&d).unwrap();
+        }
     }
 }

@@ -7930,6 +7930,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-admin"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "iroh",
+ "postcard",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "siar-android-connectivity"
 version = "0.1.0"
 dependencies = [
@@ -8129,7 +8142,9 @@ dependencies = [
 name = "siar-crypto-advanced"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "blst",
+ "chacha20poly1305",
  "ed25519-dalek 2.2.0",
  "frost-ed25519",
  "getrandom 0.4.3",
@@ -8166,15 +8181,18 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "iroh",
  "notify-rust",
  "ron",
  "serde",
+ "siar-admin",
  "siar-app-core",
  "siar-backup",
  "siar-crypto-mls",
  "siar-domain",
  "siar-power",
  "siar-runtime",
+ "siar-storage",
  "siar-ui-model",
  "siar-ui-state",
  "siar-ui-sync",
@@ -8540,6 +8558,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "siar-root"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ed25519-dalek 2.2.0",
+ "postcard",
+ "siar-crypto-advanced",
+ "siar-runtime",
+]
+
+[[package]]
 name = "siar-routing-policy"
 version = "0.1.0"
 dependencies = [
@@ -8557,6 +8587,8 @@ dependencies = [
 name = "siar-runtime"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "ed25519-dalek 2.2.0",
  "interprocess",
  "postcard",
  "sd-notify",

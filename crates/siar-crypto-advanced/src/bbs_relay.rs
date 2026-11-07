@@ -53,10 +53,11 @@ const ATTRS: usize = 3;
 /// 32 B response per *hidden* attribute (one: the pass id) and the 32 B
 /// challenge.
 ///
-/// Enforced *before* the bytes reach `zkryptium`, because
-/// `zkryptium` 0.8.1's `PoKSignature::from_bytes` slices its input without a
-/// length check (it **panics** on anything shorter than 240 bytes) and
-/// silently ignores trailing bytes (a malleability hole). A relay parses
+/// Enforced *before* the bytes reach `zkryptium`.
+/// `zkryptium` 0.8.1's upstream `PoKSignature::from_bytes` sliced its input
+/// without a length check (panicking on < 240 bytes and ignoring trailing bytes);
+/// this is fixed via workspace patch (`[patch.crates-io]`), and this exact check
+/// is retained here as defence in depth for the relay-pass schema. A relay parses
 /// proofs from strangers, so neither is acceptable.
 pub const PROOF_LEN: usize = 240 + 32 * (ATTRS - DISCLOSED.len()) + 32;
 

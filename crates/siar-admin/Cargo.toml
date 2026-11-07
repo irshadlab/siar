@@ -1,0 +1,15 @@
+[package]
+name = "siar-admin"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "comm-admin/1: remote administration of a headless Siar node over authenticated Iroh (separate identity, role-based, audited, rate-limited, explicit operations only)"
+
+[dependencies]
+iroh.workspace = true
+tokio.workspace = true
+postcard.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+getrandom = "0.4"

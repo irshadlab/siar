@@ -276,6 +276,7 @@ fn safe_relative(path: &str) -> bool {
 fn collect(
     dir: &Path,
     root: &Path,
+    include: &dyn Fn(&str) -> bool,
     out: &mut Vec<Entry>,
     total: &mut u64,
 ) -> Result<(), BackupError> {
@@ -292,19 +293,24 @@ fn collect(
             continue;
         }
         if ty.is_dir() {
-            collect(&path, root, out, total)?;
+            collect(&path, root, include, out, total)?;
         } else if ty.is_file() {
-            let data = fs::read(&path)?;
-            *total += data.len() as u64;
-            if *total > MAX_TOTAL_BYTES || out.len() >= MAX_ENTRIES {
-                return Err(BackupError::TooLarge(MAX_TOTAL_BYTES >> 20));
-            }
             let rel = path.strip_prefix(root).map_err(|_| BackupError::Corrupt)?;
             let rel = rel
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
+            // Decide BEFORE reading: a filtered-out file (a live database
+            // volume) is never opened, so it cannot be read mid-write.
+            if !include(&rel) {
+                continue;
+            }
+            let data = fs::read(&path)?;
+            *total += data.len() as u64;
+            if *total > MAX_TOTAL_BYTES || out.len() >= MAX_ENTRIES {
+                return Err(BackupError::TooLarge(MAX_TOTAL_BYTES >> 20));
+            }
             out.push(Entry { path: rel, data });
         }
     }
@@ -399,24 +405,59 @@ pub fn create_backup_with(
     out: &Path,
     kdf: KdfParams,
 ) -> Result<BackupSummary, BackupError> {
-    if let Some(reason) = passphrase_problem(passphrase) {
-        return Err(BackupError::WeakPassphrase(reason));
-    }
     let data_dir = fs::canonicalize(data_dir)?;
-    // A backup written inside the folder being backed up would be swept up
-    // into the NEXT backup (and into itself, if listed mid-write).
-    let out_parent = fs::canonicalize(out.parent().unwrap_or(Path::new(".")))?;
-    if out_parent.starts_with(&data_dir) {
-        return Err(BackupError::OutputInsideData);
-    }
     let _lock = InstanceLock::acquire(&data_dir).map_err(|e| match e {
         LockError::Held => BackupError::InstanceRunning,
         LockError::Io(e) => BackupError::Io(e),
     })?;
+    write_backup(&data_dir, passphrase, out, kdf, &|_| true)
+}
 
+/// Like [`create_backup_with`], for a **running** process that already holds
+/// the data folder's [`InstanceLock`] (the daemon): it cannot take the lock a
+/// second time, so the caller hands over the lock it holds as proof that no
+/// other process is writing.
+///
+/// This only proves *no other process* writes. Making this process's own
+/// writers quiet, and having its database write a consistent snapshot first,
+/// is the caller's job — the daemon does both before calling this.
+///
+/// `include` receives each file's `/`-separated path relative to the data
+/// folder and decides whether it goes in the archive; a file it rejects is
+/// never read. A running daemon uses this to leave its live database
+/// volumes and write-ahead log out and archive only the database's
+/// immutable snapshot files.
+pub fn create_backup_while_locked(
+    data_dir: &Path,
+    passphrase: &str,
+    out: &Path,
+    kdf: KdfParams,
+    _held: &InstanceLock,
+    include: &dyn Fn(&str) -> bool,
+) -> Result<BackupSummary, BackupError> {
+    let data_dir = fs::canonicalize(data_dir)?;
+    write_backup(&data_dir, passphrase, out, kdf, include)
+}
+
+fn write_backup(
+    data_dir: &Path,
+    passphrase: &str,
+    out: &Path,
+    kdf: KdfParams,
+    include: &dyn Fn(&str) -> bool,
+) -> Result<BackupSummary, BackupError> {
+    if let Some(reason) = passphrase_problem(passphrase) {
+        return Err(BackupError::WeakPassphrase(reason));
+    }
+    // A backup written inside the folder being backed up would be swept up
+    // into the NEXT backup (and into itself, if listed mid-write).
+    let out_parent = fs::canonicalize(out.parent().unwrap_or(Path::new(".")))?;
+    if out_parent.starts_with(data_dir) {
+        return Err(BackupError::OutputInsideData);
+    }
     let mut entries = Vec::new();
     let mut total = 0u64;
-    collect(&data_dir, &data_dir, &mut entries, &mut total)?;
+    collect(data_dir, data_dir, include, &mut entries, &mut total)?;
     for needed in REQUIRED {
         if !entries.iter().any(|e| e.path == *needed) {
             return Err(BackupError::MissingRequired(needed));

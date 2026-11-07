@@ -41,6 +41,23 @@ pub enum Command {
         name: String,
         data: Vec<u8>,
     },
+    /// §113: consistent backup into the directory `target` (absolute path).
+    /// Replies with the backup id. Appended last: existing variant indices
+    /// on the wire are unchanged.
+    CreateBackup {
+        target: String,
+    },
+    /// §115: restore from `source`; only legal in Maintenance.
+    RestoreBackup {
+        source: String,
+    },
+    /// §72: enrol this node. `payload` is the postcard-encoded
+    /// `node::ProvisionPayload`, `signature` the admin's Ed25519 signature
+    /// over `node::signing_message`. Appended last (wire indices stable).
+    Provision {
+        payload: Vec<u8>,
+        signature: Vec<u8>,
+    },
 }
 
 impl Command {
@@ -48,7 +65,12 @@ impl Command {
     #[must_use]
     pub const fn required_role(&self) -> Role {
         match self {
-            Self::Shutdown | Self::SetMaintenance(_) | Self::SetReadOnly(_) => Role::Admin,
+            Self::Shutdown
+            | Self::SetMaintenance(_)
+            | Self::SetReadOnly(_)
+            | Self::CreateBackup { .. }
+            | Self::RestoreBackup { .. }
+            | Self::Provision { .. } => Role::Admin,
             Self::SetEmergency(_) | Self::App { .. } => Role::Operator,
         }
     }
@@ -74,13 +96,18 @@ pub enum Query {
         name: String,
         data: Vec<u8>,
     },
+    /// §95: redacted diagnostic bundle (text). Admin. Appended last.
+    Diagnostics,
+    /// §73: provisioning state and, while unprovisioned, the challenge for
+    /// the QR. Admin. Appended last.
+    ProvisionStatus,
 }
 
 impl Query {
     #[must_use]
     pub const fn required_role(&self) -> Role {
         match self {
-            Self::Audit => Role::Admin,
+            Self::Audit | Self::Diagnostics | Self::ProvisionStatus => Role::Admin,
             _ => Role::Observer,
         }
     }

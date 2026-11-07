@@ -45,7 +45,7 @@ pub use security_event_repo::{
 };
 
 use std::sync::Arc;
-use stoolap::Database;
+pub use stoolap::Database;
 
 /// Opens (or creates) the local database and applies the schema.
 /// One `Database` handle is meant to be shared (via `Arc`) across every

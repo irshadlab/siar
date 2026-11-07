@@ -450,4 +450,118 @@ mod tests {
         };
         assert!(r.verify(&head(1), &a, 1).is_err());
     }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        fn mutate(&mut self, src: &[u8]) -> Vec<u8> {
+            let mut v = src.to_vec();
+            for _ in 0..=self.below(4) {
+                match self.below(4) {
+                    0 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] ^= 1 << self.below(8);
+                    }
+                    1 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] = self.next() as u8;
+                    }
+                    2 => {
+                        let i = self.below(v.len() + 1);
+                        v.insert(i, self.next() as u8);
+                    }
+                    _ if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            v
+        }
+    }
+
+    /// Attestations arrive from group members (or anyone): random bitmaps and
+    /// signatures, and mutations of a real one, must never panic and never
+    /// verify as something they are not.
+    #[test]
+    fn hostile_attestations_never_panic_and_only_the_genuine_one_verifies() {
+        let (r, ks) = group(12);
+        let h = head(3);
+        let genuine = attest(&r, &ks, &[0, 1, 2, 3, 4, 5, 6, 7], &h);
+        assert_eq!(r.verify(&h, &genuine, 8).unwrap(), 8);
+        let mut rng = Rng(0xB15_B175);
+        for round in 0..400 {
+            let att = match round % 3 {
+                0 => Attestation {
+                    bitmap: genuine
+                        .bitmap
+                        .iter()
+                        .map(|b| b ^ ((1 << rng.below(8)) * u8::from(rng.below(2) == 0)))
+                        .collect(),
+                    signature: genuine.signature,
+                },
+                1 => {
+                    let mut sig = genuine.signature;
+                    let m = rng.mutate(&sig);
+                    for (d, s) in sig.iter_mut().zip(m.iter()) {
+                        *d = *s;
+                    }
+                    Attestation {
+                        bitmap: genuine.bitmap.clone(),
+                        signature: sig,
+                    }
+                }
+                _ => {
+                    let n = rng.below(6);
+                    let mut sig = [0u8; SIG_LEN];
+                    for b in &mut sig {
+                        *b = rng.next() as u8;
+                    }
+                    Attestation {
+                        bitmap: rng.bytes(n),
+                        signature: sig,
+                    }
+                }
+            };
+            let res =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.verify(&h, &att, 1)));
+            let res = res.unwrap_or_else(|_| panic!("verify PANICKED (round {round})"));
+            if att == genuine {
+                continue; // an unchanged mutation draw
+            }
+            // Every draw that differs from the genuine attestation is either a
+            // bitmap that names the wrong signers or a signature that is not
+            // their aggregate: neither may verify.
+            assert!(
+                res.is_err(),
+                "a modified attestation VERIFIED (round {round})"
+            );
+        }
+        // Registration inputs: random keys/PoPs are rejected, not crashed on.
+        let mut roster = Roster::new();
+        for _ in 0..200 {
+            let mut pk = [0u8; PK_LEN];
+            let mut pop = [0u8; SIG_LEN];
+            for b in pk.iter_mut().chain(pop.iter_mut()) {
+                *b = rng.next() as u8;
+            }
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                roster.register(&pk, &pop)
+            }));
+            assert!(res.unwrap_or_else(|_| panic!("register PANICKED")).is_err());
+        }
+        assert!(roster.is_empty());
+    }
 }

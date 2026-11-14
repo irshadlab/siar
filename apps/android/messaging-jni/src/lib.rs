@@ -25,11 +25,12 @@
 //!
 //! ## Event line format
 //!
-//! Deliberately plain tab-separated text, not JSON — this workspace has
-//! no `serde_json` dependency anywhere (checked: `siar-crypto-mls`'s own
-//! Cargo.toml has a comment explaining why it deliberately avoided
-//! adding one), and inventing a second serialization format across the
-//! JNI boundary for a handful of fixed-shape lines is real, avoidable
+//! Deliberately plain tab-separated text, not JSON — no crate of ours
+//! depends on `serde_json` (config is TOML, on-disk state is RON, wire data
+//! is postcard; `serde_json` remains in the graph only inside upstream crates
+//! such as openmls and stoolap, which we do not control), and inventing a
+//! second serialization format across the JNI boundary for a handful of
+//! fixed-shape lines is real, avoidable
 //! overhead for both sides — Kotlin can `split("\t")` a fixed number of
 //! fields without a JSON parser dependency of its own. Two event kinds
 //! today:
@@ -126,7 +127,7 @@
 //!   Deliberately no image decoding/thumbnailing here (unlike
 //!   `apps/desktop`'s `siar-media-image`-backed preview pipeline) —
 //!   Android already prefers platform codecs over this workspace's own
-//!   native ones (see `build-native.sh`'s own comment on why
+//!   native ones (see `cargo xtask android-native`'s docs on why
 //!   `siar-media-audio`/`siar-media-av1` are desktop-only), and
 //!   `BitmapFactory` on the Kotlin side is the equivalent tool for
 //!   images specifically, not a new native dependency here.

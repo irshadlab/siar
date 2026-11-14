@@ -34,7 +34,7 @@
 //!
 //! - **Still in-memory here, even though a persistent option now
 //!   exists upstream.** `siar-crypto-mls` now has
-//!   `SqlitePersistentProvider` (real SQLite-backed `OpenMlsProvider`)
+//!   `FilePersistentProvider` (real file-backed (pure-Rust) `OpenMlsProvider`)
 //!   and `MlsGroupSession<P>` is generic enough to use it — but this
 //!   module's `mls_sessions` map still holds the default, in-memory
 //!   `MlsGroupSession<OpenMlsRustCrypto>`, and nothing here constructs
@@ -62,8 +62,8 @@ use crate::mls_store::{GroupRecord, MlsStore, PendingRecord};
 use crate::PeerTicket;
 use siar_crypto::{DeviceIdentity, Session};
 use siar_crypto_mls::{
-    generate_identity, IncomingMlsMessage, MlsGroupSession, SignatureKeyPair,
-    SqlitePersistentProvider,
+    generate_identity, FilePersistentProvider, IncomingMlsMessage, MlsGroupSession,
+    SignatureKeyPair,
 };
 use siar_domain::{
     now_millis, AccountId, ConversationId, DeliveryState, DeviceId, DurableGroupEvent, GroupState,
@@ -268,7 +268,7 @@ pub struct GroupService {
     /// drops the guard *before* any `.await` (network send), so a
     /// std lock is both correct and cheaper than pulling in a second
     /// mutex flavor for one field.
-    mls_sessions: Mutex<HashMap<ConversationId, MlsGroupSession<SqlitePersistentProvider>>>,
+    mls_sessions: Mutex<HashMap<ConversationId, MlsGroupSession<FilePersistentProvider>>>,
     /// Where each group's SQLite file and the rediscovery index live.
     mls_store: MlsStore,
     /// Holds this device's most recently generated-but-not-yet-consumed
@@ -406,7 +406,7 @@ impl CommitBundle {
 /// storage holds its private keys, the signing key, and which file that
 /// is (so it can be recorded in the index once a welcome consumes it).
 struct PendingKeyPackage {
-    provider: SqlitePersistentProvider,
+    provider: FilePersistentProvider,
     signature_keys: SignatureKeyPair,
     file: String,
 }
@@ -414,8 +414,8 @@ struct PendingKeyPackage {
 fn open_mls_file(
     store: &MlsStore,
     file: &str,
-) -> Result<SqlitePersistentProvider, GroupServiceError> {
-    SqlitePersistentProvider::open(&store.path_of(file))
+) -> Result<FilePersistentProvider, GroupServiceError> {
+    FilePersistentProvider::open(&store.path_of(file))
         .map_err(|e| GroupServiceError::MlsStorage(e.to_string()))
 }
 
@@ -911,7 +911,7 @@ impl GroupService {
         conversation: ConversationId,
         founder: AccountId,
     ) -> Result<GroupState, GroupServiceError> {
-        let file = format!("{conversation}.sqlite3");
+        let file = format!("{conversation}.ron");
         let provider = open_mls_file(&self.mls_store, &file)?;
         let identity = generate_identity(self.device_id, &provider)?;
         let session = MlsGroupSession::create(provider, &identity)?;
@@ -1365,7 +1365,7 @@ impl GroupService {
         &self,
         directory: &dyn KeyPackageDirectory,
     ) -> Result<(), GroupServiceError> {
-        let file = format!("kp-{}.sqlite3", ConversationId::new());
+        let file = format!("kp-{}.ron", ConversationId::new());
         let provider = open_mls_file(&self.mls_store, &file)?;
         let identity = generate_identity(self.device_id, &provider)?;
         let key_package_bytes =

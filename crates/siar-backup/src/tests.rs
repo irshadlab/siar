@@ -34,7 +34,7 @@ fn data_dir(name: &str) -> PathBuf {
     )
     .unwrap();
     fs::write(d.join("mls/index.txt"), "group a b c d\n").unwrap();
-    fs::write(d.join("mls/empty.sqlite3"), []).unwrap();
+    fs::write(d.join("mls/empty.ron"), []).unwrap();
     d
 }
 

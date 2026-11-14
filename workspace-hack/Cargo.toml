@@ -17,98 +17,170 @@ publish = false
 [dependencies]
 aead = { version = "0.5", default-features = false, features = ["getrandom", "std"] }
 aes-gcm = { version = "0.10" }
+anstyle = { version = "1" }
 arrayvec = { version = "0.7" }
-bitflags = { version = "2", default-features = false, features = ["serde"] }
-bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "extern_crate_alloc", "wasm_simd"] }
+bitflags = { version = "2", default-features = false, features = ["serde", "std"] }
+bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics", "wasm_simd"] }
 byteorder = { version = "1" }
 bytes = { version = "1", features = ["serde"] }
 chacha20poly1305 = { version = "0.10", features = ["std"] }
+chrono = { version = "0.4", features = ["serde"] }
+cipher = { version = "0.4", default-features = false, features = ["zeroize"] }
 const-oid = { version = "0.10", default-features = false, features = ["db"] }
-crossbeam-channel = { version = "0.5" }
 crypto-common-6f8ce4dd05d13bba = { package = "crypto-common", version = "0.2", default-features = false, features = ["getrandom"] }
 crypto-common-c65f7effa3be6d31 = { package = "crypto-common", version = "0.1", default-features = false, features = ["getrandom", "std"] }
-curve25519-dalek = { version = "5", features = ["rand_core", "serde"] }
+curve25519-dalek-164d15cefe24d7eb = { package = "curve25519-dalek", version = "4", features = ["digest", "rand_core"] }
+curve25519-dalek-cdf1610d3e1514e9 = { package = "curve25519-dalek", version = "5", features = ["rand_core", "serde"] }
 data-encoding = { version = "2" }
 der = { version = "0.8", default-features = false, features = ["oid", "pem"] }
 deranged = { version = "0.5", features = ["serde"] }
+derive_more = { version = "2", features = ["add", "add_assign", "debug", "deref", "deref_mut", "display", "error", "from", "from_str", "into", "into_iterator", "mul", "not", "try_into"] }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", features = ["mac", "oid", "std"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11", features = ["alloc", "mac", "oid", "rand_core"] }
 ed25519 = { version = "2", default-features = false, features = ["alloc", "serde", "std"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
-either = { version = "1", default-features = false, features = ["use_std"] }
+either = { version = "1", features = ["use_std"] }
+elliptic-curve = { version = "0.13", features = ["ecdh", "hash2curve", "hazmat", "pem", "std"] }
 fastrand = { version = "2" }
+ff = { version = "0.13" }
 futures-core = { version = "0.3" }
-futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["sink"] }
 generic-array = { version = "0.14", default-features = false, features = ["more_lengths", "zeroize"] }
-hashbrown = { version = "0.17" }
+getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
+getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
+group = { version = "0.13" }
+hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14", default-features = false, features = ["inline-more", "raw"] }
+hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+hmac = { version = "0.12", default-features = false, features = ["reset"] }
 hybrid-array = { version = "0.4", default-features = false, features = ["alloc", "ctutils", "extra-sizes"] }
+icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
+icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
 image = { version = "0.25" }
+itertools = { version = "0.14" }
 libsqlite3-sys = { version = "0.35", features = ["bundled"] }
+litemap = { version = "0.8", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
+lyon_extra = { version = "1" }
+lyon_geom = { version = "1", default-features = false, features = ["std"] }
+lyon_path = { version = "1", default-features = false, features = ["std"] }
 maybe-rayon = { version = "0.1", default-features = false, features = ["threads"] }
 memchr = { version = "2" }
-num-traits = { version = "0.2", features = ["i128"] }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1", features = ["critical-section"] }
-percent-encoding = { version = "2" }
 pkcs8 = { version = "0.11", default-features = false, features = ["pem"] }
-portable-atomic = { version = "1", features = ["serde"] }
+portable-atomic = { version = "1", features = ["critical-section", "serde"] }
 postcard = { version = "1", features = ["experimental-derive", "use-std"] }
+potential_utf = { version = "0.1", default-features = false, features = ["alloc", "zerovec"] }
 ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
 rand-274715c4dabd11b0 = { package = "rand", version = "0.9" }
 rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
-rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
+rand_chacha-274715c4dabd11b0 = { package = "rand_chacha", version = "0.9", default-features = false, features = ["std"] }
+rand_chacha-468e82937335b1c9 = { package = "rand_chacha", version = "0.3" }
+rand_core = { version = "0.6", default-features = false, features = ["std"] }
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
+read-fonts = { version = "0.37", default-features = false, features = ["libm", "std"] }
 refinery-core = { version = "0.9", features = ["rusqlite", "toml"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
+rgb = { version = "0.8" }
 rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
-serde_core = { version = "1", default-features = false, features = ["alloc", "rc", "result", "std"] }
+serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_spanned = { version = "1", default-features = false, features = ["serde", "std"] }
 sha2-93f6ce9d446188ac = { package = "sha2", version = "0.10" }
 sha2-a6292c17cd707f01 = { package = "sha2", version = "0.11" }
 signature-7b89eefb6aaa9bf3 = { package = "signature", version = "3", default-features = false, features = ["alloc", "digest", "rand_core"] }
 signature-f595c2ba2a3f28df = { package = "signature", version = "2", default-features = false, features = ["digest", "rand_core", "std"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
+slotmap = { version = "1", default-features = false, features = ["std"] }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 spki = { version = "0.8", default-features = false, features = ["pem"] }
-subtle = { version = "2", features = ["const-generics"] }
-time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }
-tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "rt-multi-thread", "test-util"] }
+stable_deref_trait = { version = "1", default-features = false, features = ["alloc"] }
+strum = { version = "0.28", features = ["derive"] }
+subtle = { version = "2", default-features = false, features = ["const-generics", "i128"] }
+time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
+tinystr = { version = "0.8", default-features = false, features = ["alloc", "zerovec"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "test-util"] }
+tokio-util = { version = "0.7", features = ["codec", "io-util", "rt"] }
 toml = { version = "1" }
 toml_datetime = { version = "1", features = ["serde"] }
 toml_parser = { version = "1" }
+toml_writer = { version = "1" }
 tracing-core = { version = "0.1" }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 url = { version = "2", features = ["serde"] }
 winnow = { version = "1" }
+writeable = { version = "0.6", default-features = false, features = ["alloc"] }
+yoke = { version = "0.8", default-features = false, features = ["alloc", "derive"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
 zeroize = { version = "1", features = ["derive"] }
+zerotrie = { version = "0.2", default-features = false, features = ["alloc", "yoke", "zerofrom"] }
+zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
 
 [build-dependencies]
-bitflags = { version = "2", default-features = false, features = ["serde"] }
+anstyle = { version = "1" }
+arrayvec = { version = "0.7" }
+bitflags = { version = "2", default-features = false, features = ["serde", "std"] }
+bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics", "wasm_simd"] }
 data-encoding = { version = "2" }
 deranged = { version = "0.5", features = ["serde"] }
-hashbrown = { version = "0.17" }
+derive_more = { version = "2", features = ["add", "add_assign", "debug", "deref", "deref_mut", "display", "error", "from", "from_str", "into", "into_iterator", "mul", "not", "try_into"] }
+derive_more-impl = { version = "2", features = ["add", "add_assign", "debug", "deref", "deref_mut", "display", "error", "from", "from_str", "into", "into_iterator", "mul", "not", "try_into"] }
+either = { version = "1", features = ["use_std"] }
+hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14", default-features = false, features = ["inline-more", "raw"] }
+hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
+icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
+icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
+image = { version = "0.25" }
+itertools = { version = "0.14" }
 libsqlite3-sys = { version = "0.35", features = ["bundled"] }
+litemap = { version = "0.8", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
+lyon_extra = { version = "1" }
+lyon_geom = { version = "1", default-features = false, features = ["std"] }
+lyon_path = { version = "1", default-features = false, features = ["std"] }
+maybe-rayon = { version = "0.1", default-features = false, features = ["threads"] }
 memchr = { version = "2" }
-percent-encoding = { version = "2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+num-traits = { version = "0.2", features = ["i128", "libm"] }
+once_cell = { version = "1", features = ["critical-section"] }
+portable-atomic = { version = "1", features = ["critical-section", "serde"] }
+potential_utf = { version = "0.1", default-features = false, features = ["alloc", "zerovec"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
+rav1e = { version = "0.8", default-features = false, features = ["threading"] }
+read-fonts = { version = "0.37", default-features = false, features = ["libm", "std"] }
 refinery-core = { version = "0.9", features = ["rusqlite", "toml"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
+rgb = { version = "0.8" }
 rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
-serde_core = { version = "1", default-features = false, features = ["alloc", "rc", "result", "std"] }
+serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_spanned = { version = "1", default-features = false, features = ["serde", "std"] }
+simd-adler32 = { version = "0.3" }
+slotmap = { version = "1", default-features = false, features = ["std"] }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
+stable_deref_trait = { version = "1", default-features = false, features = ["alloc"] }
+strum = { version = "0.28", features = ["derive"] }
 syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["full", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
-time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }
+time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
+tinystr = { version = "0.8", default-features = false, features = ["alloc", "zerovec"] }
 toml = { version = "1" }
 toml_datetime = { version = "1", features = ["serde"] }
+toml_edit = { version = "0.25" }
 toml_parser = { version = "1" }
+toml_writer = { version = "1" }
 url = { version = "2", features = ["serde"] }
 winnow = { version = "1" }
+writeable = { version = "0.6", default-features = false, features = ["alloc"] }
+yoke = { version = "0.8", default-features = false, features = ["alloc", "derive"] }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
+zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
+zerotrie = { version = "0.2", default-features = false, features = ["alloc", "yoke", "zerofrom"] }
+zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
 
 ### END HAKARI SECTION

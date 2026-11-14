@@ -92,7 +92,7 @@ missing since they were built: "this workspace doesn't have an
   `apps/emergency-node`'s `send_and_record` (where the caller happens
   to already have the full address) and `siar-android-messaging`'s
   `send_text`/`send_text_anon`.
-- **`.so` build script now exists**: `build-native.sh` runs a real,
+- **`.so` build command exists**: `cargo xtask android-native` runs a real,
   explicitly-scoped `cargo ndk` invocation across all 4 ABIs, for
   exactly the 7 Android-relevant crates — a real build/error report
   against this workspace confirmed that scoping is both necessary

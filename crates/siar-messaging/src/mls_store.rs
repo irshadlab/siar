@@ -7,8 +7,8 @@
 //! application layer (see `siar-crypto-mls::persistent`). This is that
 //! layer:
 //!
-//! * one SQLite file per group (`<conversation>.sqlite3`) or per
-//!   not-yet-used key package (`kp-<uuid>.sqlite3`), so one corrupt file
+//! * one state file per group (`<conversation>.ron`) or per
+//!   not-yet-used key package (`kp-<uuid>.ron`), so one corrupt file
 //!   costs one group, not all of them;
 //! * `index.txt` beside them, mapping each conversation to its file, MLS
 //!   group id and signing *public* key — the two public values
@@ -71,7 +71,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 /// refuse anything that could point outside the directory.
 fn safe_file_name(name: &str) -> bool {
     !name.is_empty()
-        && name.ends_with(".sqlite3")
+        && name.ends_with(".ron")
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
@@ -204,7 +204,7 @@ mod tests {
     fn group(n: u8) -> GroupRecord {
         GroupRecord {
             conversation: ConversationId::new(),
-            file: format!("g{n}.sqlite3"),
+            file: format!("g{n}.ron"),
             group_id: vec![n, 1, 2, 3],
             signature_public_key: vec![n, 9, 9],
         }
@@ -217,7 +217,7 @@ mod tests {
         store.record_group(a.clone()).unwrap();
         store.record_group(b.clone()).unwrap();
         let pending = PendingRecord {
-            file: "kp-1.sqlite3".into(),
+            file: "kp-1.ron".into(),
             signature_public_key: vec![7, 7],
             key_package: vec![0xde, 0xad],
         };
@@ -230,7 +230,7 @@ mod tests {
 
         // re-recording the same conversation replaces, never duplicates
         let a2 = GroupRecord {
-            file: "other.sqlite3".into(),
+            file: "other.ron".into(),
             ..a
         };
         store.record_group(a2.clone()).unwrap();
@@ -249,15 +249,12 @@ mod tests {
         let good = group(3);
         store.record_group(good.clone()).unwrap();
         let mut text = std::fs::read_to_string(store.dir().join("index.txt")).unwrap();
-        text.push_str("garbage line\ngroup not-a-uuid f.sqlite3 00 00\ngroup\n");
+        text.push_str("garbage line\ngroup not-a-uuid f.ron 00 00\ngroup\n");
         text.push_str(&format!(
             "group {} ../../etc/passwd 00 00\n",
             ConversationId::new()
         ));
-        text.push_str(&format!(
-            "group {} g.sqlite3 zz 00\n",
-            ConversationId::new()
-        ));
+        text.push_str(&format!("group {} g.ron zz 00\n", ConversationId::new()));
         std::fs::write(store.dir().join("index.txt"), text).unwrap();
         let loaded = store.load();
         assert_eq!(loaded.groups, vec![good], "only the valid line survives");
@@ -273,9 +270,9 @@ mod tests {
 
     #[test]
     fn file_names_cannot_escape_the_directory() {
-        assert!(safe_file_name("kp-1a2b.sqlite3"));
-        assert!(!safe_file_name("../x.sqlite3"));
-        assert!(!safe_file_name("a/b.sqlite3"));
+        assert!(safe_file_name("kp-1a2b.ron"));
+        assert!(!safe_file_name("../x.ron"));
+        assert!(!safe_file_name("a/b.ron"));
         assert!(!safe_file_name("x.txt"));
         assert!(!safe_file_name(""));
     }

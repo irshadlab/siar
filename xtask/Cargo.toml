@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+publish = false
+description = "Repository automation (replaces every shell script): `cargo xtask --help`"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# Reads `cargo metadata` — Cargo's own tool output is JSON and cannot be
+# changed. This is the one place JSON is parsed; nothing we author is JSON.
+cargo_metadata = "0.19"
+ron = "0.10"
+serde = { version = "1", features = ["derive"] }

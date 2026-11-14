@@ -1,0 +1,36 @@
+// Policy for `cargo xtask audit-pure` — what counts as "C/C++ in a pure-Rust
+// workspace". RON, not JSON. Every entry carries its reason.
+(
+    // Build-script helpers whose presence means a crate MAY compile C/C++.
+    native_build_deps: ["cc", "cmake", "bindgen", "pkg-config", "vcpkg", "nasm-rs"],
+
+    // Crates that declare `links = "…"` only so Cargo can enforce uniqueness;
+    // they contain no native code.
+    pure_links: [
+        ("rayon-core", "links is only a uniqueness marker"),
+        ("wasm-bindgen-shared", "links is only a uniqueness marker"),
+        ("prettyplease", "links is only a uniqueness marker"),
+    ],
+
+    // A native build step that is switched OFF by an activated feature. The
+    // feature must really be active in the resolved graph for this to apply.
+    inactive_when: [
+        ("blake3", "pure", "build.rs skips every C/asm path when `pure` is on (verified in build.rs)"),
+    ],
+
+    // Reachable ONLY through these workspace packages ⇒ exempt (the Slint UI).
+    exempt_roots: ["siar-ui-slint"],
+
+    // Native code we cannot bypass and have decided to live with. The rule for
+    // headless binaries is: build for musl (`cargo xtask build-musl`).
+    accepted: [
+        ("ring", "TLS for iroh (QUIC/rustls). iroh offers no pure-Rust provider switch; unavoidable → musl for headless binaries."),
+    ],
+
+    // Known violations with a plan. They do not fail the audit (unless
+    // `--strict`), but they are printed every time so they cannot be forgotten.
+    tracked: [
+        ("alsa-sys", "ALSA for audio capture/playback (cpal). Desktop calls only; no pure-Rust ALSA/CPAL replacement is audited. Decide: keep behind the desktop app, or move audio to a Kotlin/Slint-side boundary."),
+        ("audiopus_sys", "libopus (C) for call audio. No mature audited pure-Rust Opus codec exists. Decide: accept for desktop calls, or replace the codec."),
+    ],
+)

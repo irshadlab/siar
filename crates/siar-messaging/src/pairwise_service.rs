@@ -3,7 +3,7 @@
 //! replacing the static-key `siar_crypto::Session` for peers that have one.
 //!
 //! This type owns the *state*: per-conversation sessions persisted through
-//! `SqlitePersistentProvider` files (same [`MlsStore`] layout as
+//! `FilePersistentProvider` files (same [`MlsStore`] layout as
 //! [`GroupService`](crate::GroupService), in its own directory so the two
 //! never share a "pending key package" slot), the one pending key package a
 //! responder is waiting on, and the **un-acked ciphertext** kept for
@@ -24,8 +24,8 @@
 use crate::key_package_directory::KeyPackageDirectory;
 use crate::mls_store::{GroupRecord, MlsStore, PendingRecord};
 use siar_crypto_mls::{
-    pairwise_identity, MlsGroupSession, PairwiseError, PairwiseEvent, PairwisePolicy,
-    PairwiseProfile, PairwiseSession, SignatureKeyPair, SqlitePersistentProvider,
+    pairwise_identity, FilePersistentProvider, MlsGroupSession, PairwiseError, PairwiseEvent,
+    PairwisePolicy, PairwiseProfile, PairwiseSession, SignatureKeyPair,
 };
 use siar_domain::{ConversationId, DeviceId, MessageId};
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use thiserror::Error;
 
-type Session = PairwiseSession<SqlitePersistentProvider>;
+type Session = PairwiseSession<FilePersistentProvider>;
 
 #[derive(Debug, Error)]
 pub enum PairwiseServiceError {
@@ -69,7 +69,7 @@ pub struct Unacked {
 }
 
 struct Pending {
-    provider: SqlitePersistentProvider,
+    provider: FilePersistentProvider,
     keys: SignatureKeyPair,
     file: String,
 }
@@ -111,8 +111,8 @@ impl PairwiseService {
         })
     }
 
-    fn open(&self, file: &str) -> Result<SqlitePersistentProvider, PairwiseServiceError> {
-        SqlitePersistentProvider::open(&self.store.path_of(file)).map_err(io)
+    fn open(&self, file: &str) -> Result<FilePersistentProvider, PairwiseServiceError> {
+        FilePersistentProvider::open(&self.store.path_of(file)).map_err(io)
     }
 
     fn save_unacked(&self, rows: &[Unacked]) -> Result<(), PairwiseServiceError> {
@@ -166,7 +166,7 @@ impl PairwiseService {
         profile: PairwiseProfile,
         directory: &dyn KeyPackageDirectory,
     ) -> Result<(), PairwiseServiceError> {
-        let file = format!("kp-{}.sqlite3", ConversationId::new());
+        let file = format!("kp-{}.ron", ConversationId::new());
         let provider = self.open(&file)?;
         let identity = pairwise_identity(self.device_id, &provider, profile)
             .map_err(|e| io(format!("{e}")))?;
@@ -196,7 +196,7 @@ impl PairwiseService {
         peer_key_package: &[u8],
         profile: PairwiseProfile,
     ) -> Result<Vec<u8>, PairwiseServiceError> {
-        let file = format!("pw-{conversation}.sqlite3");
+        let file = format!("pw-{conversation}.ron");
         let provider = self.open(&file)?;
         let me = pairwise_identity(self.device_id, &provider, profile)
             .map_err(|e| io(format!("{e}")))?;

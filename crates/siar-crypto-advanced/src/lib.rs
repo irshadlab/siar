@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | [`frost_root`] | `frost-ed25519` 3.0 (ZF FROST, RFC 9591) | NCC Group audited v0.6.0 of frost-core/frost-ed25519; **not** re-audited at 3.0 |
 //! | [`hybrid`] | `ml-dsa` 0.1 (RustCrypto, FIPS 204) + `ed25519-dalek` 2 | `ml-dsa`: **never independently audited** (its own README says so); dalek: widely reviewed |
-//! | [`bls_audit`] | `blst` 0.3 (supranational) | independent audit commissioned by the Ethereum Foundation / Protocol Labs |
+//! | [`bls_audit`] | `blsful` 4.2 (pure-Rust `bls12_381_plus` backend; the default C `blst` backend is OFF) | **audited by Kudelski Security** (no significant findings), maintained; **not** re-audited for the `rust` backend feature choice |
 //! | [`ceremony`] | `argon2` + `chacha20poly1305` (RustCrypto) around the FROST rounds | passphrase-sealed share files; no new primitive |
 //! | [`bbs_relay`] | `zkryptium` 0.8 (IETF BBS draft-14, on `bls12_381_plus`) | **no audit found**; actively maintained |
 //!

@@ -45,20 +45,21 @@ openmls_basic_credential = { version = "0.6.0", features = ["clonable", "draft-i
 # `MlsGroupSession`) name the trait explicitly rather than relying
 # entirely on the prelude glob.
 tls_codec = { version = "0.5", features = ["derive", "serde", "mls"] }
-# Real disk persistence for MLS group state (`persistent.rs`) —
-# version confirmed the same way as every other pin here: read directly
-# from openmls's own workspace Cargo.toml, not guessed. Brings in
-# `rusqlite` (bundled, so no system SQLite dependency) transitively;
-# this crate doesn't depend on `rusqlite` directly — see `persistent.rs`
-# for why (its `Connection` re-export is enough).
-openmls_sqlite_storage = { version = "0.3.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
-# `JsonCodec` (`persistent.rs`) implements `openmls_sqlite_storage`'s
-# `Codec` trait with `serde_json`. This is local on-disk state, not
-# hot-path networking, so architecture.md §59's "avoid JSON" does not
-# apply — and postcard CANNOT do this job: it rejects some of openmls's
-# stored types on read (`WontImplement`, found by tests/persistence.rs,
-# the first test to reload a group), so the earlier postcard choice made
-# every reload fail. openmls's own tests use JSON for the same reason.
-serde_json = { workspace = true }
+# Durable MLS group state (`persistent.rs`) — pure Rust. `FileStorage` wraps
+# openmls's own in-memory store (`openmls_memory_storage`) and writes a RON
+# snapshot after every mutation; the delegating `StorageProvider` impl is
+# generated from `openmls_traits` by `cargo xtask gen-mls-storage`.
+# (Replaces `openmls_sqlite_storage`, which bundled C SQLite.)
+openmls_memory_storage = "0.6.0"
+ron = "0.10"
 serde = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+# Mirrors of `openmls_traits`' feature gates on `StorageProvider` methods
+# (`persistent_delegate.rs` is generated with the same gates). If anything in
+# the build enables one of these on `openmls_traits` without enabling it here,
+# `FileStorage` fails to compile ("not all trait items implemented") instead of
+# silently missing a method.
+[features]
+extensions-draft = ["openmls_traits/extensions-draft", "openmls_memory_storage/extensions-draft"]
+virtual-clients-draft = ["extensions-draft", "openmls_traits/virtual-clients-draft", "openmls_memory_storage/virtual-clients-draft"]

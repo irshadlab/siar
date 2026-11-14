@@ -1,125 +1,225 @@
-//! Real disk persistence for MLS group state — closes the gap this
-//! crate's own `lib.rs` doc comment has flagged since the first MLS
-//! delivery: `OpenMlsRustCrypto`'s bundled storage
-//! (`openmls_memory_storage::MemoryStorage`) is in-memory only, so a
-//! process restart lost every group's live crypto state.
+//! Durable MLS group state in **pure Rust** — no SQLite, no C.
 //!
-//! ## A genuinely separate database, not a shared connection
+//! `OpenMlsRustCrypto`'s bundled storage (`openmls_memory_storage::MemoryStorage`)
+//! is in-memory only, so a restart lost every group's live crypto state.
+//! [`FileStorage`] wraps that same store and writes a snapshot to disk after
+//! **every successful mutation, before the call returns** (the delegating
+//! `impl StorageProvider` is generated from openmls's own trait by
+//! `cargo xtask gen-mls-storage`; `--check` fails CI on drift).
 //!
-//! An earlier version of this crate's docs speculated about "deciding
-//! how this composes with `siar-storage`'s own SQLite connection" —
-//! that was **wrong**, caught while actually building this rather than
-//! left uncorrected: `siar-storage` is backed by `stoolap`
-//! (`crates/siar-storage/Cargo.toml`), not SQLite/`rusqlite` at all.
-//! There is no existing SQLite connection to share. `SqlitePersistentProvider`
-//! opens its own, separate SQLite file dedicated to MLS state. Two
-//! embedded databases in one application is a real trade-off, not
-//! ideal — but it's the honest one, not a "unify them" plan that was
-//! never actually checked against what `siar-storage` runs on.
+//! Why write-through and not "save on shutdown": an MLS ratchet advance that
+//! is not on disk when a message is sent means, after a crash, the *same*
+//! key can be derived and used for a different plaintext. Nothing is
+//! acknowledged to openmls that is not durable.
 //!
-//! ## What "real persistence" means here, precisely
+//! ## Format
 //!
-//! `openmls_sqlite_storage::SqliteStorageProvider` implements
-//! `openmls_traits::storage::StorageProvider` — every signing key,
-//! epoch secret, proposal, and piece of group state `MlsGroupSession`
-//! touches now round-trips through SQLite instead of an in-memory
-//! `HashMap`-equivalent. What this does NOT give you:
+//! One RON file (`Snapshot { version, entries: [(key_hex, value_hex)] }`),
+//! entries sorted by key so the file is deterministic. The stored *values*
+//! are opaque bytes produced by `openmls_memory_storage`, which serialises
+//! them with `serde_json` internally — that is upstream's encoding of its own
+//! values and is not ours to change; everything this crate authors is RON.
+//! Writes are atomic (temp file → `fsync` → rename → `fsync` the directory),
+//! mode 0600.
 //!
-//! - **No wiring into `GroupService` yet.** `GroupService`'s
-//!   `mls_sessions`/`pending_identity` fields still use the default
-//!   `MlsGroupSession`/`OpenMlsRustCrypto` (in-memory) — nothing
-//!   currently constructs an `MlsGroupSession<SqlitePersistentProvider>`
-//!   anywhere in `siar-messaging`. That's a real follow-up: deciding
-//!   where the `.sqlite3` file lives on disk, how/whether one file
-//!   holds every conversation's state or each gets its own, and how a
-//!   restarting `GroupService` rediscovers which conversations have a
-//!   persisted session to reopen — none of that is a `siar-crypto-mls`
-//!   decision, it's an application-layer one, so it isn't made here.
-//! - **No migration path for already-in-memory sessions.** A group
-//!   created with `MlsGroupSession<OpenMlsRustCrypto>` (the default)
-//!   can't be converted to a persistent one after the fact — nothing
-//!   here attempts that.
-//! - **No compiler-verified tests**, same caveat as this crate's other
-//!   modules and for the same reason (see `lib.rs`'s top doc comment):
-//!   correctness here rests on the openmls/rusqlite source checked
-//!   below, not on having actually run.
+//! ## Costs and limits, stated plainly
+//!
+//! * Every mutation rewrites the **whole** snapshot and fsyncs it. That is
+//!   O(state) per write and openmls issues many writes per operation. Fine
+//!   for the handful of small groups a chat client holds; it is not a
+//!   database, and a very large group will feel it.
+//! * If persisting fails *after* the in-memory change succeeded, the error is
+//!   returned to openmls (the operation fails) but memory has advanced; the
+//!   next successful write persists everything. That errs toward skipping a
+//!   ratchet generation, never toward reusing one.
+//! * A snapshot that does not parse is **refused** (`PersistentProviderError::Corrupt`),
+//!   never silently replaced by an empty state — that would orphan every group.
+//! * No wiring into `GroupService` (see `lib.rs`): where the file lives and how
+//!   a restarting service finds its conversations is an application decision.
+//! * No migration from the earlier SQLite files — this crate is pre-release.
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use openmls::prelude::OpenMlsProvider;
+use openmls_memory_storage::{MemoryStorage, MemoryStorageError};
 use openmls_rust_crypto::RustCrypto;
-use openmls_sqlite_storage::{Codec, Connection, SqliteStorageProvider};
-use std::path::Path;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+#[path = "persistent_delegate.rs"]
+mod delegate;
+
+const SNAPSHOT_VERSION: u32 = 1;
+/// A snapshot larger than this is refused rather than read into memory.
+pub const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Debug, Error)]
+pub enum FileStorageError {
+    #[error("MLS storage: {0}")]
+    Memory(MemoryStorageError),
+    #[error("could not write the MLS state to disk: {0}")]
+    Persist(io::Error),
+}
 
 #[derive(Debug, Error)]
 pub enum PersistentProviderError {
-    #[error("failed to open the MLS state database: {0}")]
+    #[error("failed to open the MLS state file: {0}")]
     Open(String),
-    #[error("failed to run MLS state database migrations: {0}")]
-    Migrate(String),
+    #[error("the MLS state file is corrupt and was NOT replaced: {0}")]
+    Corrupt(String),
 }
 
-/// `openmls_sqlite_storage::Codec` implemented with `serde_json` — see
-/// this crate's `Cargo.toml` for why not postcard (it cannot read back
-/// some openmls types). `Codec::Error` just needs `std::error::Error +
-/// Debug + Send + Sync + 'static`, which `serde_json::Error` satisfies.
-#[derive(Debug, Default)]
-pub struct JsonCodec;
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    version: u32,
+    /// `(key, value)` as lowercase hex, sorted by key.
+    entries: Vec<(String, String)>,
+}
 
-impl Codec for JsonCodec {
-    type Error = serde_json::Error;
+fn to_hex(b: &[u8]) -> String {
+    use std::fmt::Write as _;
+    b.iter()
+        .fold(String::with_capacity(b.len() * 2), |mut s, x| {
+            let _ = write!(s, "{x:02x}");
+            s
+        })
+}
 
-    fn to_vec<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Self::Error> {
-        serde_json::to_vec(value)
+fn from_hex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return None;
     }
-
-    fn from_slice<T: serde::de::DeserializeOwned>(slice: &[u8]) -> Result<T, Self::Error> {
-        serde_json::from_slice(slice)
-    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok())
+        .collect()
 }
 
-/// An `OpenMlsProvider` backed by real SQLite storage instead of
-/// `OpenMlsRustCrypto`'s in-memory default — composed from two
-/// upstream pieces rather than reimplemented: `openmls_rust_crypto`'s
-/// `RustCrypto` (confirmed from that crate's own `lib.rs` to be the
-/// same type `OpenMlsRustCrypto` uses for both its `CryptoProvider` and
-/// `RandProvider` — reused here unchanged, since swapping the storage
-/// backend has nothing to do with the crypto/randomness backend) for
-/// crypto and randomness, and `openmls_sqlite_storage::SqliteStorageProvider`
-/// for storage.
-pub struct SqlitePersistentProvider {
-    crypto: RustCrypto,
-    storage: SqliteStorageProvider<JsonCodec, Connection>,
+/// The in-memory MLS store plus the file it is mirrored to.
+pub struct FileStorage {
+    inner: MemoryStorage,
+    path: PathBuf,
 }
 
-impl SqlitePersistentProvider {
-    /// Opens (creating if needed — `rusqlite::Connection::open`'s own
-    /// behavior, confirmed from `rusqlite`'s source) the SQLite file at
-    /// `path` and runs `openmls_sqlite_storage`'s bundled schema
-    /// migrations (`SqliteStorageProvider::run_migrations`, required
-    /// before first use per that crate's own doc comment). Safe to call
-    /// again on an already-migrated file — `refinery` migrations are
-    /// idempotent by design (tracked via a migration-history table,
-    /// same principle `siar-storage`'s own schema versioning follows,
-    /// different mechanism).
+impl FileStorage {
+    /// Open (or start) the store at `path`. A missing file is an empty store;
+    /// an unreadable or malformed one is an error.
     pub fn open(path: &Path) -> Result<Self, PersistentProviderError> {
-        let connection =
-            Connection::open(path).map_err(|e| PersistentProviderError::Open(format!("{e:?}")))?;
-        let mut storage = SqliteStorageProvider::<JsonCodec, Connection>::new(connection);
-        storage
-            .run_migrations()
-            .map_err(|e| PersistentProviderError::Migrate(format!("{e:?}")))?;
+        let inner = MemoryStorage::default();
+        match fs::metadata(path) {
+            Ok(meta) => {
+                if meta.len() > MAX_SNAPSHOT_BYTES {
+                    return Err(PersistentProviderError::Corrupt("file is too large".into()));
+                }
+                let bytes =
+                    fs::read(path).map_err(|e| PersistentProviderError::Open(e.to_string()))?;
+                let text = String::from_utf8(bytes)
+                    .map_err(|_| PersistentProviderError::Corrupt("not valid UTF-8".into()))?;
+                let snap: Snapshot = ron::from_str(&text)
+                    .map_err(|e| PersistentProviderError::Corrupt(e.to_string()))?;
+                if snap.version != SNAPSHOT_VERSION {
+                    return Err(PersistentProviderError::Corrupt(format!(
+                        "unsupported snapshot version {}",
+                        snap.version
+                    )));
+                }
+                let mut values = inner
+                    .values
+                    .write()
+                    .map_err(|_| PersistentProviderError::Open("lock poisoned".into()))?;
+                for (k, v) in snap.entries {
+                    let (Some(k), Some(v)) = (from_hex(&k), from_hex(&v)) else {
+                        return Err(PersistentProviderError::Corrupt("entry is not hex".into()));
+                    };
+                    values.insert(k, v);
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(PersistentProviderError::Open(e.to_string())),
+        }
+        Ok(Self {
+            inner,
+            path: path.to_owned(),
+        })
+    }
 
+    /// Write the whole store atomically and durably.
+    fn persist(&self) -> io::Result<()> {
+        let mut entries: Vec<(String, String)> = {
+            let values = self
+                .inner
+                .values
+                .read()
+                .map_err(|_| io::Error::other("lock poisoned"))?;
+            values.iter().map(|(k, v)| (to_hex(k), to_hex(v))).collect()
+        };
+        entries.sort();
+        let text = ron::to_string(&Snapshot {
+            version: SNAPSHOT_VERSION,
+            entries,
+        })
+        .map_err(io::Error::other)?;
+
+        let dir = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        fs::create_dir_all(dir)?;
+        let tmp = self.path.with_extension("tmp");
+        {
+            let mut opts = OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(&tmp)?;
+            f.write_all(text.as_bytes())?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp, &self.path)?;
+        // Make the rename itself durable.
+        #[cfg(unix)]
+        File::open(dir)?.sync_all()?;
+        Ok(())
+    }
+
+    /// Number of stored entries (for tests and diagnostics).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner.values.read().map_or(0, |v| v.len())
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// An `OpenMlsProvider` whose storage survives a restart. Crypto and
+/// randomness are `openmls_rust_crypto`'s `RustCrypto` — pure Rust, reused
+/// unchanged, since swapping the storage backend has nothing to do with them.
+pub struct FilePersistentProvider {
+    crypto: RustCrypto,
+    storage: FileStorage,
+}
+
+impl FilePersistentProvider {
+    pub fn open(path: &Path) -> Result<Self, PersistentProviderError> {
         Ok(Self {
             crypto: RustCrypto::default(),
-            storage,
+            storage: FileStorage::open(path)?,
         })
     }
 }
 
-impl OpenMlsProvider for SqlitePersistentProvider {
+impl OpenMlsProvider for FilePersistentProvider {
     type CryptoProvider = RustCrypto;
     type RandProvider = RustCrypto;
-    type StorageProvider = SqliteStorageProvider<JsonCodec, Connection>;
+    type StorageProvider = FileStorage;
 
     fn storage(&self) -> &Self::StorageProvider {
         &self.storage

@@ -9,3 +9,8 @@
 channel = "1.91.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
+# Headless binaries (daemon, cli, relay, root ceremony) are built for musl so
+# the unavoidable C (ring) is linked statically: `cargo xtask build-musl`.
+# Slint/desktop stay on the host target.
+# Note: target download requires network access (`rustup target add x86_64-unknown-linux-musl`).
+# targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]

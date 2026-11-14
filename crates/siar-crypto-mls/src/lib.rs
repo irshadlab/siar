@@ -55,25 +55,22 @@
 //!   caller's `add_member_mls`, which needs to turn wire bytes it
 //!   didn't generate into a `KeyPackage` `MlsGroupSession::add_member`
 //!   can consume.
-//! - **Real disk persistence now exists, but isn't the default and
-//!   isn't wired into `GroupService`.** `persistent.rs`'s
-//!   `SqlitePersistentProvider` is a second `OpenMlsProvider`
-//!   implementation, backed by real SQLite via
-//!   `openmls_sqlite_storage` (`0.3.0-rc.1`, same workspace this
-//!   crate's other pins were checked against) instead of
-//!   `OpenMlsRustCrypto`'s bundled in-memory
-//!   `openmls_memory_storage::MemoryStorage` — confirmed directly from
-//!   `openmls_rust_crypto/src/lib.rs`, not assumed. `MlsGroupSession`
-//!   is now generic over the provider (`MlsGroupSession<P:
-//!   OpenMlsProvider = OpenMlsRustCrypto>`) specifically so this didn't
-//!   require touching anything already using the unparameterized
-//!   default. See `persistent.rs`'s own doc comment for why it's a
-//!   genuinely separate SQLite database from `siar-storage` (which
-//!   turned out to run on `stoolap`, not SQLite — an earlier version of
-//!   this very doc comment assumed otherwise and was wrong, corrected
-//!   once actually checked) and for what's still not decided
-//!   (where the file lives, how `GroupService` would pick between the
-//!   default and persistent providers per conversation).
+//! - **Durable MLS state is pure Rust and is wired into `GroupService`.**
+//!   `persistent.rs`'s `FilePersistentProvider` is a second
+//!   `OpenMlsProvider`: openmls's own in-memory store
+//!   (`openmls_memory_storage::MemoryStorage`) wrapped so that every
+//!   successful mutation is written to disk (RON snapshot, atomic, 0600)
+//!   **before the call returns** — an un-persisted ratchet advance would risk
+//!   key reuse after a crash. The 72-method delegating `StorageProvider` impl
+//!   is generated from openmls's own trait by `cargo xtask gen-mls-storage`
+//!   (CI: `--check`). It replaces `openmls_sqlite_storage`, which bundled C
+//!   SQLite. `MlsGroupSession` is generic over the provider
+//!   (`MlsGroupSession<P: OpenMlsProvider = OpenMlsRustCrypto>`) so code
+//!   using the default is untouched; `siar-messaging` opens one state file per
+//!   group / pairwise session / key package (`<id>.ron`) through its
+//!   `MlsStore`. See `persistent.rs` for the costs (whole-snapshot rewrite per
+//!   mutation) and limits. No migration from the earlier `.sqlite3` files.
+
 //! - **No test coverage against a real compiler.** Every other crate in
 //!   this workspace has unit tests that (as far as this sandbox can
 //!   verify without `cargo`) exercise real logic. This crate's
@@ -97,7 +94,9 @@ pub use pairwise::{
     pairwise_identity, PairwiseError, PairwiseEvent, PairwisePolicy, PairwiseProfile,
     PairwiseSession,
 };
-pub use persistent::{JsonCodec, PersistentProviderError, SqlitePersistentProvider};
+pub use persistent::{
+    FilePersistentProvider, FileStorage, FileStorageError, PersistentProviderError,
+};
 // Re-exported so callers (e.g. `siar-messaging::group_service`) don't
 // need their own direct dependency on `openmls_rust_crypto` just to
 // construct a provider to hand to `MlsGroupSession::create`/

@@ -2,22 +2,30 @@
 //! groups.
 //!
 //! In a group of N members, "N people each checked the audit log and agree
-//! its head at epoch E is H" would cost N × 96 bytes as separate signatures.
-//! With BLS the same statement is **one 96-byte signature plus an N-bit
+//! its head at epoch E is H" would cost N × 97 bytes as separate signatures.
+//! With BLS the same statement is **one 97-byte signature plus an N-bit
 //! bitmap**, verified with one pairing check no matter how many signed.
 //!
-//! Primitive: `blst` (supranational), minimal-pubkey-size variant, the
-//! IETF BLS `POP` ciphersuite
-//! (`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_`) — the same one Ethereum
-//! uses. This module adds only the rules that make aggregation *safe*:
+//! Primitive: `blsful` (Michael Lodder / LIT Protocol; **audited by Kudelski
+//! Security**, no significant findings) with its **pure-Rust** backend
+//! (`bls12_381_plus`; the default `blst` backend, which wraps C, is switched
+//! off — this workspace is pure Rust outside Slint). Signatures in G2, keys
+//! in G1 (48-byte keys), the **proof-of-possession** scheme only. This module
+//! adds only the rules that make aggregation *safe*:
 //!
-//! * **Proof of possession on registration.** Same-message aggregation
-//!   (`fast_aggregate_verify`) is only sound if no member can choose their
-//!   key as a function of another's (the *rogue-key attack*). [`Roster`]
-//!   therefore admits a key only together with a valid proof of
-//!   possession (a signature over the key's own bytes, under a separate
-//!   domain tag), so a [`Roster`] simply cannot contain an unproven key.
-//! * **Subgroup/infinity checks** on every key and signature.
+//! * **Proof of possession on registration.** Same-message aggregation is
+//!   only sound if no member can choose their key as a function of another's
+//!   (the *rogue-key attack*). [`Roster`] therefore admits a key only
+//!   together with a valid proof of possession, so a [`Roster`] simply cannot
+//!   contain an unproven key.
+//! * **The point at infinity is rejected explicitly** — as a key, a proof, a
+//!   signature or an aggregate. `blsful` (unlike `blst`'s `key_validate`)
+//!   *accepts* an infinity public key on decode; left alone, an infinity key
+//!   with an infinity signature verifies **any** message. Found by probing
+//!   the library, guarded by a test.
+//! * Only the proof-of-possession *scheme variant* is accepted on decode: a
+//!   `Basic`-scheme signature uses a different domain tag and is not safe to
+//!   aggregate, so it is refused even though it parses.
 //! * **No double counting:** one slot per member, duplicates rejected both
 //!   when collecting and when decoding a bitmap.
 //! * **Canonical bitmap:** exact length, no stray bits past the roster size.
@@ -25,25 +33,39 @@
 //! * A signed [`AuditHead`] carries its own domain tag, group id, epoch and
 //!   head hash, so an attestation for one group/epoch cannot be replayed for
 //!   another.
+//!
+//! Limits: `blsful`'s `SecretKey` is not zeroized on drop by upstream, so the
+//! key scalar may linger in freed memory; and decoding relies on upstream for
+//! the subgroup check (it rejects junk encodings; a crafted on-curve
+//! non-subgroup point is not constructed in our tests).
 
 use std::collections::BTreeMap;
 
-use blst::min_pk::{AggregateSignature, PublicKey, SecretKey, Signature};
-use blst::BLST_ERROR;
+use blsful::{
+    Bls12381G2Impl, MultiPublicKey, MultiSignature, ProofOfPossession, PublicKey, SecretKey,
+    Signature, SignatureSchemes,
+};
 
-use crate::{fill_random, Error};
+use crate::Error;
 
-const DST_SIG: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
-const DST_POP: &[u8] = b"BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+type C = Bls12381G2Impl;
+
 const HEAD_TAG: &[u8] = b"siar-audit-head-v1";
 
+/// Compressed G1 public key.
 pub const PK_LEN: usize = 48;
-pub const SIG_LEN: usize = 96;
+/// A tagged proof-of-possession signature: 1 scheme byte + a compressed G2 point.
+pub const SIG_LEN: usize = 97;
+/// A proof of possession: a compressed G2 point.
+pub const POP_LEN: usize = 96;
 /// Upper bound on roster size (bitmap ≤ 12.5 KB, verification linear in
 /// signers).
 pub const MAX_ROSTER: usize = 100_000;
 
-fn bls(e: BLST_ERROR) -> Error {
+/// The "point at infinity" flag in a compressed BLS12-381 encoding.
+const INFINITY_FLAG: u8 = 0x40;
+
+fn up<E: std::fmt::Debug>(e: E) -> Error {
     Error::Upstream(format!("{e:?}"))
 }
 
@@ -68,49 +90,91 @@ impl AuditHead {
 }
 
 pub struct AuditKey {
-    sk: SecretKey,
+    sk: SecretKey<C>,
+}
+
+fn to_array<const N: usize>(v: Vec<u8>) -> Result<[u8; N], Error> {
+    v.try_into()
+        .map_err(|_| Error::Malformed("unexpected encoded length"))
 }
 
 impl AuditKey {
     pub fn generate() -> Result<Self, Error> {
-        let mut ikm = [0u8; 32];
-        fill_random(&mut ikm)?;
-        let sk = SecretKey::key_gen(&ikm, &[]).map_err(bls);
-        zeroize::Zeroize::zeroize(&mut ikm);
-        Ok(Self { sk: sk? })
+        Ok(Self {
+            sk: SecretKey::<C>::new(),
+        })
     }
 
     #[must_use]
     pub fn public_key(&self) -> [u8; PK_LEN] {
-        self.sk.sk_to_pk().to_bytes()
+        let v: Vec<u8> = (&self.sk.public_key()).into();
+        // A fixed-size encoding by construction; an empty fallback would be
+        // rejected by `register`.
+        to_array(v).unwrap_or([0; PK_LEN])
     }
 
-    /// Proof of possession: a signature over this key's own public bytes
-    /// under the POP domain tag.
+    /// Proof of possession (the scheme's own, separately domain-tagged).
     #[must_use]
-    pub fn proof_of_possession(&self) -> [u8; SIG_LEN] {
-        self.sk.sign(&self.public_key(), DST_POP, &[]).to_bytes()
+    pub fn proof_of_possession(&self) -> [u8; POP_LEN] {
+        self.sk
+            .proof_of_possession()
+            .ok()
+            .and_then(|p| to_array(Vec::<u8>::from(&p)).ok())
+            .unwrap_or([0; POP_LEN])
     }
 
     #[must_use]
     pub fn sign_head(&self, head: &AuditHead) -> [u8; SIG_LEN] {
-        self.sk.sign(&head.signing_bytes(), DST_SIG, &[]).to_bytes()
+        self.sk
+            .sign(SignatureSchemes::ProofOfPossession, &head.signing_bytes())
+            .ok()
+            .and_then(|s| Vec::<u8>::try_from(&s).ok())
+            .and_then(|v| to_array(v).ok())
+            .unwrap_or([0; SIG_LEN])
     }
 }
 
-impl Drop for AuditKey {
-    fn drop(&mut self) {
-        // blst's SecretKey is plain data; overwrite our copy's bytes.
-        let mut b = self.sk.to_bytes();
-        zeroize::Zeroize::zeroize(&mut b);
+/// `true` if a compressed point has the infinity flag set.
+fn is_infinity(point_bytes: &[u8]) -> bool {
+    point_bytes.first().is_some_and(|b| b & INFINITY_FLAG != 0)
+}
+
+fn decode_key(pk: &[u8; PK_LEN]) -> Result<PublicKey<C>, Error> {
+    if is_infinity(pk) {
+        return Err(Error::Malformed("public key is the point at infinity"));
     }
+    PublicKey::<C>::try_from(&pk[..]).map_err(|_| Error::Malformed("public key"))
+}
+
+/// Decode a member signature: proof-of-possession variant only, never infinity.
+fn decode_sig(sig: &[u8; SIG_LEN]) -> Result<Signature<C>, Error> {
+    if is_infinity(&sig[1..]) {
+        return Err(Error::Malformed("signature is the point at infinity"));
+    }
+    let s = Signature::<C>::try_from(&sig[..]).map_err(|_| Error::Malformed("signature"))?;
+    if !matches!(s, Signature::ProofOfPossession(_)) {
+        return Err(Error::Malformed("wrong signature scheme"));
+    }
+    Ok(s)
+}
+
+fn decode_aggregate(sig: &[u8; SIG_LEN]) -> Result<MultiSignature<C>, Error> {
+    if is_infinity(&sig[1..]) {
+        return Err(Error::Malformed("aggregate is the point at infinity"));
+    }
+    let m = MultiSignature::<C>::try_from(&sig[..])
+        .map_err(|_| Error::Malformed("aggregate signature"))?;
+    if !matches!(m, MultiSignature::ProofOfPossession(_)) {
+        return Err(Error::Malformed("wrong signature scheme"));
+    }
+    Ok(m)
 }
 
 /// An ordered set of members whose keys have all proven possession. A
 /// member's *index* is their slot in attestation bitmaps.
 #[derive(Default)]
 pub struct Roster {
-    keys: Vec<PublicKey>,
+    keys: Vec<PublicKey<C>>,
     seen: std::collections::BTreeSet<[u8; PK_LEN]>,
 }
 
@@ -130,19 +194,22 @@ impl Roster {
         self.keys.is_empty()
     }
 
-    /// Admit a member. Returns their index. Rejects: malformed / off-curve /
-    /// wrong-subgroup / infinity keys, an invalid proof of possession, and a
-    /// key that is already registered.
-    pub fn register(&mut self, pk: &[u8; PK_LEN], pop: &[u8; SIG_LEN]) -> Result<usize, Error> {
+    /// Admit a member. Returns their index. Rejects: malformed / infinity /
+    /// wrong-subgroup keys, an invalid proof of possession, and a key that is
+    /// already registered.
+    pub fn register(&mut self, pk: &[u8; PK_LEN], pop: &[u8; POP_LEN]) -> Result<usize, Error> {
         if self.keys.len() >= MAX_ROSTER {
             return Err(Error::InvalidParameter("roster full"));
         }
-        let key = PublicKey::key_validate(pk).map_err(|_| Error::Malformed("public key"))?;
-        let pop_sig = Signature::sig_validate(pop, true)
-            .map_err(|_| Error::Malformed("proof of possession"))?;
-        if pop_sig.verify(true, pk, DST_POP, &[], &key, false) != BLST_ERROR::BLST_SUCCESS {
-            return Err(Error::VerificationFailed);
+        let key = decode_key(pk)?;
+        if is_infinity(pop) {
+            return Err(Error::Malformed(
+                "proof of possession is the point at infinity",
+            ));
         }
+        let pop = ProofOfPossession::<C>::try_from(&pop[..])
+            .map_err(|_| Error::Malformed("proof of possession"))?;
+        pop.verify(&key).map_err(|_| Error::VerificationFailed)?;
         if !self.seen.insert(*pk) {
             return Err(Error::InvalidParameter("key already registered"));
         }
@@ -162,11 +229,9 @@ impl Roster {
             .keys
             .get(index)
             .ok_or(Error::InvalidParameter("no such member"))?;
-        let s = Signature::sig_validate(sig, true).map_err(|_| Error::Malformed("signature"))?;
-        match s.verify(true, &head.signing_bytes(), DST_SIG, &[], key, false) {
-            BLST_ERROR::BLST_SUCCESS => Ok(()),
-            _ => Err(Error::VerificationFailed),
-        }
+        decode_sig(sig)?
+            .verify(key, head.signing_bytes())
+            .map_err(|_| Error::VerificationFailed)
     }
 
     /// Verify an aggregate attestation. `min_signers` is chosen by the
@@ -185,13 +250,13 @@ impl Roster {
         if signers.len() < min_signers {
             return Err(Error::VerificationFailed);
         }
-        let pks: Vec<&PublicKey> = signers.iter().map(|i| &self.keys[*i]).collect();
-        let sig = Signature::sig_validate(&att.signature, true)
-            .map_err(|_| Error::Malformed("aggregate signature"))?;
-        match sig.fast_aggregate_verify(true, &head.signing_bytes(), DST_SIG, &pks) {
-            BLST_ERROR::BLST_SUCCESS => Ok(signers.len()),
-            _ => Err(Error::VerificationFailed),
-        }
+        let pks: Vec<PublicKey<C>> = signers.iter().map(|i| self.keys[*i]).collect();
+        let mpk =
+            MultiPublicKey::<C>::from_public_keys(&pks).map_err(|_| Error::VerificationFailed)?;
+        decode_aggregate(&att.signature)?
+            .verify(&mpk, head.signing_bytes())
+            .map_err(|_| Error::VerificationFailed)?;
+        Ok(signers.len())
     }
 }
 
@@ -229,7 +294,7 @@ impl Attestation {
 pub struct Collector<'a> {
     roster: &'a Roster,
     head: AuditHead,
-    got: BTreeMap<usize, Signature>,
+    got: BTreeMap<usize, Signature<C>>,
 }
 
 impl<'a> Collector<'a> {
@@ -249,8 +314,7 @@ impl<'a> Collector<'a> {
             return Err(Error::InvalidParameter("member already contributed"));
         }
         self.roster.verify_one(index, &self.head, sig)?;
-        let s = Signature::from_bytes(sig).map_err(|_| Error::Malformed("signature"))?;
-        self.got.insert(index, s);
+        self.got.insert(index, decode_sig(sig)?);
         Ok(())
     }
 
@@ -263,15 +327,16 @@ impl<'a> Collector<'a> {
         if self.got.is_empty() {
             return Err(Error::InvalidParameter("no contributions"));
         }
-        let sigs: Vec<&Signature> = self.got.values().collect();
-        let agg = AggregateSignature::aggregate(&sigs, false).map_err(bls)?;
+        let sigs: Vec<Signature<C>> = self.got.values().copied().collect();
+        let agg = MultiSignature::<C>::from_signatures(&sigs).map_err(up)?;
         let mut bitmap = vec![0u8; self.roster.len().div_ceil(8)];
         for i in self.got.keys() {
             bitmap[i / 8] |= 1 << (i % 8);
         }
+        let bytes = Vec::<u8>::try_from(&agg).map_err(up)?;
         Ok(Attestation {
             bitmap,
-            signature: agg.to_signature().to_bytes(),
+            signature: to_array(bytes)?,
         })
     }
 }
@@ -418,11 +483,18 @@ mod tests {
             .register(&a.public_key(), &b.proof_of_possession())
             .is_err());
         // A plain signature over the key under the *signature* domain is not a PoP.
-        let wrong_domain = a.sk.sign(&a.public_key(), DST_SIG, &[]).to_bytes();
+        let tagged = Vec::<u8>::try_from(
+            &a.sk
+                .sign(SignatureSchemes::ProofOfPossession, &a.public_key())
+                .unwrap(),
+        )
+        .unwrap();
+        let mut wrong_domain = [0u8; POP_LEN];
+        wrong_domain.copy_from_slice(&tagged[1..]); // strip the scheme tag
         assert!(r.register(&a.public_key(), &wrong_domain).is_err());
         // Garbage key / garbage PoP.
         assert!(r.register(&[0; PK_LEN], &a.proof_of_possession()).is_err());
-        assert!(r.register(&a.public_key(), &[0; SIG_LEN]).is_err());
+        assert!(r.register(&a.public_key(), &[0; POP_LEN]).is_err());
         assert!(r.is_empty(), "nothing was admitted");
         // The honest registration works once, and only once.
         r.register(&a.public_key(), &a.proof_of_possession())
@@ -433,22 +505,96 @@ mod tests {
         assert_eq!(r.len(), 1);
     }
 
+    /// Each infinity guard on its own, so removing either one is caught (in
+    /// `register` the two overlap and would hide each other).
+    #[test]
+    fn each_infinity_check_holds_on_its_own() {
+        let mut inf_pk = [0u8; PK_LEN];
+        inf_pk[0] = 0xc0;
+        assert!(
+            decode_key(&inf_pk).is_err(),
+            "an infinity public key must not decode"
+        );
+        let mut inf_sig = [0u8; SIG_LEN];
+        inf_sig[0] = 0x02;
+        inf_sig[1] = 0xc0;
+        assert!(
+            decode_sig(&inf_sig).is_err(),
+            "an infinity signature must not decode"
+        );
+        assert!(
+            decode_aggregate(&inf_sig).is_err(),
+            "an infinity aggregate must not decode"
+        );
+        // The library itself would have accepted the key — that is why the guard exists.
+        assert!(PublicKey::<C>::try_from(&inf_pk[..]).is_ok());
+        // And the proof of possession: infinity proof + a REAL key is refused.
+        let mut r = Roster::new();
+        let a = AuditKey::generate().unwrap();
+        let mut inf_pop = [0u8; POP_LEN];
+        inf_pop[0] = 0xc0;
+        let e = r.register(&a.public_key(), &inf_pop).unwrap_err();
+        assert!(
+            matches!(e, Error::Malformed(m) if m.contains("infinity")),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_signature_from_another_scheme_is_refused_even_though_it_parses() {
+        let (r, ks) = group(2);
+        let h = head(1);
+        // A `Basic`-scheme signature by member 0 over the same bytes.
+        let basic = ks[0]
+            .sk
+            .sign(SignatureSchemes::Basic, &h.signing_bytes())
+            .unwrap();
+        let bytes: [u8; SIG_LEN] = Vec::<u8>::try_from(&basic).unwrap().try_into().unwrap();
+        assert!(
+            Signature::<C>::try_from(&bytes[..]).is_ok(),
+            "it does parse"
+        );
+        let e = r.verify_one(0, &h, &bytes).unwrap_err();
+        assert!(
+            matches!(e, Error::Malformed(m) if m.contains("scheme")),
+            "{e:?}"
+        );
+    }
+
     #[test]
     fn the_point_at_infinity_is_not_a_key_or_a_signature() {
         // Compressed encoding of infinity in G1/G2: 0xc0 then zeros.
         let mut inf_pk = [0u8; PK_LEN];
         inf_pk[0] = 0xc0;
+        let mut inf_pop = [0u8; POP_LEN];
+        inf_pop[0] = 0xc0;
+        // A tagged signature/aggregate whose point is infinity.
         let mut inf_sig = [0u8; SIG_LEN];
-        inf_sig[0] = 0xc0;
+        inf_sig[0] = 0x02; // the proof-of-possession scheme tag
+        inf_sig[1] = 0xc0;
         let mut r = Roster::new();
-        assert!(r.register(&inf_pk, &inf_sig).is_err());
+        // Rejected for the RIGHT reason: our explicit infinity check
+        // (`blsful` itself would accept this key on decode).
+        let e = r.register(&inf_pk, &inf_pop).unwrap_err();
+        assert!(
+            matches!(e, Error::Malformed(m) if m.contains("infinity")),
+            "{e:?}"
+        );
+        assert!(r.is_empty());
 
-        let (r, _ks) = group(3);
+        let (r, ks) = group(3);
         let a = Attestation {
             bitmap: vec![0b111],
             signature: inf_sig,
         };
-        assert!(r.verify(&head(1), &a, 1).is_err());
+        let e = r.verify(&head(1), &a, 1).unwrap_err();
+        assert!(
+            matches!(e, Error::Malformed(m) if m.contains("infinity")),
+            "{e:?}"
+        );
+        // Neither can an infinity signature be contributed as one member's.
+        assert!(r.verify_one(0, &head(1), &inf_sig).is_err());
+        let _ = ks;
     }
 
     struct Rng(u64);
@@ -553,7 +699,7 @@ mod tests {
         let mut roster = Roster::new();
         for _ in 0..200 {
             let mut pk = [0u8; PK_LEN];
-            let mut pop = [0u8; SIG_LEN];
+            let mut pop = [0u8; POP_LEN];
             for b in pk.iter_mut().chain(pop.iter_mut()) {
                 *b = rng.next() as u8;
             }

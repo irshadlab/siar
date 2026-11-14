@@ -1,0 +1,14 @@
+# `cargo xtask <command>` — every build/test/release helper lives in the
+# `xtask` crate (pure Rust). There are no shell scripts in this repository.
+[alias]
+xtask = "run --quiet --package xtask --"
+
+# musl: fully static executables. rustc links musl's own libc for these
+# targets; the only C we compile is `ring`'s, which needs a musl-targeting C
+# compiler (`musl-gcc`). `cargo xtask build-musl` checks for it and verifies
+# the result is really static (`cargo xtask check-static <file>`).
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]

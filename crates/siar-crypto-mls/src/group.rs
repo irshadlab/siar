@@ -124,7 +124,7 @@ pub enum IncomingMlsMessage {
 /// (this crate's original in-memory-only provider) so every existing
 /// caller's plain `MlsGroupSession` — no type argument written anywhere
 /// in `siar-messaging::group_service` — keeps meaning exactly what it
-/// already meant, unchanged. `MlsGroupSession<SqlitePersistentProvider>`
+/// already meant, unchanged. `MlsGroupSession<FilePersistentProvider>`
 /// (see `persistent.rs`) is the same type with real disk persistence
 /// instead — see that module's doc comment for what "real" means here
 /// and doesn't yet.
@@ -312,7 +312,7 @@ impl<P: OpenMlsProvider> MlsGroupSession<P> {
 
     /// Reopens a group that an earlier run persisted through `provider`'s
     /// storage (only meaningful for a persistent provider, e.g.
-    /// `SqlitePersistentProvider`; an in-memory provider is empty on
+    /// `FilePersistentProvider`; an in-memory provider is empty on
     /// every start, so this returns `None` there).
     ///
     /// `group_id` and `signature_public_key` are what `group_id_bytes`

@@ -39,11 +39,11 @@ members = [
     "crates/siar-media-core",
     # siar-media-av1 and siar-media-audio are desktop-only (real Opus/
     # dav1d C dependencies with no configured Android cross-compilation
-    # story — see apps/android/build-native.sh's own comment for the
+    # story — see `cargo xtask android-native` (xtask/src/android.rs) for the
     # real errors this produces if a full-workspace `cargo ndk build`
     # is ever attempted). Android uses siar-media-android's hardware
     # codec path instead. Never add these two to
-    # apps/android/build-native.sh's CRATES list.
+    # xtask/src/android.rs's CRATES list.
     "crates/siar-media-av1",
     "crates/siar-media-audio",
     "crates/siar-media-android",
@@ -67,6 +67,7 @@ members = [
     "workspace-hack",
     "apps/root-ceremony",
     "crates/siar-admin",
+    "xtask",
 ]
 
 [workspace.package]
@@ -148,8 +149,8 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "ti
 # `siar-testkit`'s `lib.rs` doc comment).
 futures-executor = "0.3"
 serde = { version = "1", features = ["derive"] }
+ron = "0.10"
 postcard = { version = "1", features = ["alloc"] }
-serde_json = "1"
 bytes = { version = "1", features = ["serde"] }
 thiserror = "2"
 anyhow = "1"
@@ -166,6 +167,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = { version = "1", features = ["derive"] }
 
 # crypto: RustCrypto (pure Rust, audited-lineage, no OpenSSL/C)
+blsful = { version = "4.2", default-features = false, features = ["rust"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "serde", "zeroize"] }
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 chacha20poly1305 = { version = "0.10", features = ["std"] }

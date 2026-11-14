@@ -8,7 +8,7 @@ description = "FROST root key, hybrid ML-DSA+Ed25519, BLS audit aggregation, BBS
 [dependencies]
 frost-ed25519 = "3.0.0"
 ml-dsa = "0.1.2"
-blst = "0.3.17"
+blsful = { version = "4.2", default-features = false, features = ["rust"] }
 zkryptium = { version = "0.8.1", default-features = false, features = ["bbsplus"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha2 = "0.10"

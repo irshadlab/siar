@@ -1,12 +1,15 @@
 //! Siar desktop shell.
 //!
-//! Slint UI (`siar-ui-slint`) on top of the messaging core — embedded by
-//! default, or attached to a running `siar-daemon` with `--connect [SOCKET]`.
+//! Slint UI (`siar-ui-slint`) as a thin client of `siar-daemon`. The window
+//! never opens the database, keys or network identity: the daemon owns them,
+//! so there is nothing for two processes to fight over. On start the window
+//! connects to the daemon's control socket and, if none is running, starts
+//! one (found beside this program, never via `PATH`).
 //!
-//! Threading: Slint owns the main thread and its event loop; everything
-//! that touches `siar-messaging` / `siar-transport` runs on a separate
-//! multi-thread Tokio runtime. The two meet only at `UiHub` (state into
-//! the UI) and one bounded `AppCommand` channel (actions out of it).
+//! Threading: Slint owns the main thread and its event loop; everything else
+//! runs on a separate multi-thread Tokio runtime. The two meet only at
+//! `UiHub` (state into the UI) and one bounded `AppCommand` channel (actions
+//! out of it).
 
 mod cli;
 
@@ -32,9 +35,9 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let connect = take_connect(&mut args);
+    let socket = take_socket(&mut args);
     match cli::parse(&args) {
-        Ok(cli::Command::Run) => run_app(connect),
+        Ok(cli::Command::Run) => run_app(socket),
         Ok(command) => cli::execute(command),
         Err(why) => {
             eprintln!("{why}\n\n{}", cli::USAGE);
@@ -43,47 +46,54 @@ fn main() -> Result<()> {
     }
 }
 
-/// `--connect [SOCKET]`: attach this window to a running `siar-daemon`
-/// instead of embedding the core. Removes the flag so the normal parser never
-/// sees it.
-fn take_connect(args: &mut Vec<String>) -> Option<std::path::PathBuf> {
-    let i = args.iter().position(|a| a == "--connect")?;
+/// `--socket PATH`: use a daemon at a non-default control socket. Removes the
+/// flag so the normal parser never sees it. (`--connect [PATH]` is accepted as
+/// an alias; it no longer changes behaviour because connecting is the default.)
+fn take_socket(args: &mut Vec<String>) -> std::path::PathBuf {
+    let default = || siar_runtime::ipc::default_socket_path("daemon");
+    let Some(i) = args
+        .iter()
+        .position(|a| a == "--socket" || a == "--connect")
+    else {
+        return default();
+    };
     args.remove(i);
     let explicit = args.get(i).filter(|a| !a.starts_with('-')).cloned();
     if explicit.is_some() {
         args.remove(i);
     }
-    Some(explicit.map_or_else(
-        || siar_runtime::ipc::default_socket_path("daemon"),
-        std::path::PathBuf::from,
-    ))
+    explicit.map_or_else(default, std::path::PathBuf::from)
 }
 
-fn run_app(connect: Option<std::path::PathBuf>) -> Result<()> {
+/// Reach the daemon, starting it if needed. The message on failure is what the
+/// user sees in the window, so it says what to do next.
+async fn reach_daemon(socket: &std::path::Path) -> Result<(), String> {
+    let s = socket.to_path_buf();
+    siar_runtime::ensure::ensure_daemon(
+        socket,
+        siar_runtime::Role::Operator,
+        "siar-desktop",
+        move || async move { siar_runtime::ensure::spawn_daemon_beside_exe(&s) },
+        Duration::from_secs(20),
+    )
+    .await
+    .map(drop)
+    .map_err(|e| {
+        format!(
+            "Siar couldn’t reach its background service.\n\n{e}\n\n\
+             Start it yourself with `siar-daemon run`, then reopen this window."
+        )
+    })
+}
+
+fn run_app(socket: std::path::PathBuf) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .thread_name("siar-core")
+        .thread_name("siar-ui")
         .build()?;
 
-    // One copy of the app per data folder. Two would write the same
-    // database and key files; a backup also needs the folder quiet. The OS
-    // releases the lock if we crash, so it can never get stuck.
-    // (A window attached to a daemon takes no lock: the daemon holds it.)
-    let data_dir = siar_app_core::bootstrap::resolve_data_paths()
-        .ok()
-        .map(|p| p.data_dir)
-        .filter(|_| connect.is_none());
-    let lock = data_dir.as_deref().map(siar_backup::InstanceLock::acquire);
-    let already_running = matches!(lock, Some(Err(siar_backup::LockError::Held)));
-    if let Some(Err(siar_backup::LockError::Io(e))) = &lock {
-        // Can't lock (read-only folder, odd file system): carry on rather
-        // than refuse to start, but say so.
-        tracing::warn!(error = %e, "couldn’t take the data folder lock");
-    }
-    let _lock = lock.and_then(Result::ok);
-
     // Appearance settings are optional: no data dir or a damaged file just
-    // means defaults, never a failed start.
+    // means defaults, never a failed start. (Paths only; nothing is opened.)
     let settings_path = siar_app_core::bootstrap::resolve_data_paths()
         .ok()
         .map(|p| p.data_dir.join(SETTINGS_FILE));
@@ -103,8 +113,8 @@ fn run_app(connect: Option<std::path::PathBuf>) -> Result<()> {
     let validate_ticket: TicketValidator =
         Arc::new(|t| PeerTicket::decode(t).map(|_| ()).map_err(|e| e.to_string()));
 
-    // Created before the core is up: commands issued during start-up queue
-    // here instead of being lost.
+    // Created before the daemon is reached: commands issued during start-up
+    // queue here instead of being lost.
     let (command_tx, command_rx) = mpsc::channel::<AppCommand>(64);
     let ui = SiarUi::new(
         UiOptions {
@@ -117,63 +127,20 @@ fn run_app(connect: Option<std::path::PathBuf>) -> Result<()> {
     .map_err(|e| anyhow!("couldn't create the window: {e}"))?;
 
     let hub = ui.hub();
-    let mut stop_remote = None;
-    if already_running {
-        // Show why, instead of silently doing nothing (or worse, starting a
-        // second core on a database the first one is using).
-        hub.update(|s| {
-            s.startup_error = Some(
-                "Siar is already running with this data folder.\n\nSwitch to the open window, or close it and try again."
-                    .into(),
-            );
+    let stop = tokio_util::sync::CancellationToken::new();
+    {
+        let (state, stop) = (hub.state(), stop.clone());
+        runtime.spawn(async move {
+            tracing::info!(socket = %socket.display(), "connecting to the Siar daemon");
+            match reach_daemon(&socket).await {
+                Ok(()) => siar_ui_sync::run_remote(socket, state, command_rx, stop).await,
+                Err(message) => state.update(|s| s.startup_error = Some(message)),
+            }
         });
-    } else if let Some(socket) = connect {
-        tracing::info!(socket = %socket.display(), "attaching to the Siar daemon");
-        stop_remote = Some(spawn_remote(&runtime, hub.state(), command_rx, socket));
-    } else {
-        spawn_core(&runtime, hub.state(), command_rx);
     }
 
     let result = ui.run().map_err(|e| anyhow!("UI event loop failed: {e}"));
-    if let Some(stop) = stop_remote {
-        stop.cancel();
-    }
+    stop.cancel();
     runtime.shutdown_timeout(Duration::from_secs(2));
     result
-}
-
-fn spawn_remote(
-    runtime: &tokio::runtime::Runtime,
-    hub: std::sync::Arc<siar_ui_slint::StateHub>,
-    command_rx: mpsc::Receiver<AppCommand>,
-    socket: std::path::PathBuf,
-) -> tokio_util::sync::CancellationToken {
-    let stop = tokio_util::sync::CancellationToken::new();
-    runtime.spawn(siar_ui_sync::run_remote(
-        socket,
-        hub,
-        command_rx,
-        stop.clone(),
-    ));
-    stop
-}
-
-fn spawn_core(
-    runtime: &tokio::runtime::Runtime,
-    hub: std::sync::Arc<siar_ui_slint::StateHub>,
-    command_rx: mpsc::Receiver<AppCommand>,
-) {
-    runtime.spawn(async move {
-        match siar_app_core::bootstrap::bootstrap_messaging().await {
-            Ok(boot) => siar_app_core::core::run(boot, hub, command_rx).await,
-            Err(e) => {
-                tracing::error!(error = %format!("{e:#}"), "failed to bootstrap messaging");
-                hub.update(|s| {
-                    s.startup_error = Some(format!(
-                        "Siar couldn’t open its data or start networking.\n\n{e:#}"
-                    ));
-                });
-            }
-        }
-    });
 }

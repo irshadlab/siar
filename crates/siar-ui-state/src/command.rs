@@ -21,6 +21,25 @@ pub enum AppCommand {
         text: MessageText,
     },
     OpenConversation(ConversationId),
+    /// Send a local file to a direct conversation. `path` is read by the
+    /// process that owns the core (the daemon), so it must be absolute.
+    SendAttachment {
+        conversation: ConversationId,
+        path: String,
+    },
+    /// Send text through a relay's anonymous token mailbox instead of
+    /// directly (the peer collects it later with `CheckRelayMailbox`).
+    SendViaRelay {
+        conversation: ConversationId,
+        relay_ticket_text: String,
+        text: MessageText,
+    },
+    /// Ask a relay for anonymous mailbox items from this conversation's peer.
+    /// Items arrive over the next few seconds as ordinary new messages.
+    CheckRelayMailbox {
+        conversation: ConversationId,
+        relay_ticket_text: String,
+    },
     MarkRead {
         conversation: ConversationId,
         through_sequence: u64,

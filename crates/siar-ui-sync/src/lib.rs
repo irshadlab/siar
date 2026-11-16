@@ -13,6 +13,8 @@ pub mod apply;
 pub mod client;
 pub mod commands;
 pub mod engine;
+pub mod groups;
+pub mod profile;
 pub mod security;
 pub mod server;
 pub mod wire;

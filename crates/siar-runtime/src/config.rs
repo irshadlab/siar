@@ -113,6 +113,12 @@ pub struct NodeSection {
     /// Ed25519 public keys (64 lowercase hex chars) allowed to provision.
     /// A FROST group's root key is an ordinary Ed25519 key and works here.
     pub admin_keys: Vec<String>,
+    /// The role of an **unattended** node that is configured by its local
+    /// file instead of enrolled with a signed payload. Local file only (a
+    /// payload cannot set `[node]`). Refused together with
+    /// `require_provisioning`: a node that must be enrolled takes its role
+    /// from the signed payload, never from a file anyone could edit.
+    pub role: crate::node::NodeRole,
 }
 
 pub const MAX_ADMIN_KEYS: usize = 16;
@@ -188,6 +194,14 @@ impl RuntimeConfig {
     /// Report every problem, not just the first.
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut p = Vec::new();
+        if self.node.require_provisioning && self.node.role != crate::node::NodeRole::PersonalDevice
+        {
+            p.push(
+                "node.role cannot be set together with node.require_provisioning: \
+                 the role comes from the signed provisioning payload"
+                    .to_owned(),
+            );
+        }
         if self.node.admin_keys.len() > MAX_ADMIN_KEYS {
             p.push(format!(
                 "node.admin_keys has more than {MAX_ADMIN_KEYS} keys"
@@ -626,5 +640,32 @@ mod tests {
             accepted > 100,
             "the fuzzer should still reach valid configs: {accepted}"
         );
+    }
+
+    #[test]
+    fn a_local_node_role_is_parsed_and_defaults_to_a_personal_device() {
+        use crate::node::NodeRole;
+        assert_eq!(
+            RuntimeConfig::parse("").unwrap().node.role,
+            NodeRole::PersonalDevice
+        );
+        for role in NodeRole::ALL {
+            let c = RuntimeConfig::parse(&format!("[node]\nrole = \"{}\"\n", role.name())).unwrap();
+            assert_eq!(c.node.role, role);
+        }
+        assert!(RuntimeConfig::parse("[node]\nrole = \"emperor\"\n").is_err());
+    }
+
+    #[test]
+    fn a_node_that_must_be_enrolled_cannot_name_its_own_role() {
+        let key = "ab".repeat(32);
+        let text = format!(
+            "[node]\nrequire_provisioning = true\nadmin_keys = [\"{key}\"]\nrole = \"relay-gateway\"\n"
+        );
+        let e = RuntimeConfig::parse(&text).unwrap_err().to_string();
+        assert!(e.contains("node.role"), "{e}");
+        // The default role next to require_provisioning is fine.
+        let ok = format!("[node]\nrequire_provisioning = true\nadmin_keys = [\"{key}\"]\n");
+        assert!(RuntimeConfig::parse(&ok).is_ok());
     }
 }

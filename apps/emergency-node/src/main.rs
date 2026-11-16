@@ -373,6 +373,7 @@ async fn main() -> Result<()> {
         Mutex::new(SeenIds::new(config.seen_capacity));
     let transport_manager = Arc::new(TransportManager::new(endpoint.clone()));
     let device_keys: Mutex<DeviceKeyDirectory> = Mutex::new(DeviceKeyDirectory::new());
+    let ingress = siar_messaging::IngressGuard::new(siar_abuse::GateConfig::default());
     // The unlinkable counterpart to `bundle_store` — see
     // `siar_protocol::mailbox::TokenMailboxStore`'s own doc comment for
     // why this needs to be a structurally separate store rather than a
@@ -560,6 +561,19 @@ async fn main() -> Result<()> {
             () = runtime.lifecycle.shutdown_requested() => break,
             f = rx.recv() => match f { Some(f) => f, None => break },
         };
+        // Part 28 §60-§62: ration a stranger's frames BEFORE any decoding of
+        // its contents, dedup bookkeeping or signature verification. A device
+        // that has disclosed itself to this relay is a known peer; everyone
+        // else is a stranger with the (Sybil-bounded) stranger budgets.
+        let standing = if transport_manager.device_for(frame.from).is_some() {
+            siar_abuse::Standing::Contact
+        } else {
+            siar_abuse::Standing::Unknown
+        };
+        if let Err(reject) = ingress.admit_wire(frame.from.as_bytes(), standing, &frame.message) {
+            tracing::debug!(from = ?frame.from, %reject, "dropped a frame at admission");
+            continue;
+        }
         // Set inside the `Mesh` arm below when this iteration stored a
         // bundle AND already pushed it directly to a known destination
         // endpoint (see `DeviceRoutes` below) — skipped from the

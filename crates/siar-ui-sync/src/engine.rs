@@ -139,6 +139,44 @@ pub fn capture(s: &Slices) -> Vec<(SectionKey, Section)> {
     }
     out.push((SectionKey::SecurityEvents, Section::SecurityEvents(events)));
 
+    let mut groups: Vec<crate::groups::GroupDto> =
+        s.groups.ordered().iter().map(Into::into).collect();
+    groups.sort_by_key(|g| g.conversation_id.as_uuid().as_u128());
+    groups.truncate(MAX_LISTED);
+    out.push((SectionKey::Groups, Section::Groups(groups)));
+
+    let mut invites: Vec<crate::groups::InviteDto> =
+        s.pending_invites.pending().iter().map(Into::into).collect();
+    invites.sort_by_key(|i| i.conversation_id.as_uuid().as_u128());
+    invites.truncate(MAX_LISTED);
+    out.push((SectionKey::Invites, Section::Invites(invites)));
+
+    out.push((
+        SectionKey::OwnIdentity,
+        Section::OwnIdentity(s.own_identity.as_ref().map(Into::into)),
+    ));
+    out.push((
+        SectionKey::Diagnostics,
+        Section::Diagnostics(s.diagnostics.as_ref().map(Into::into)),
+    ));
+    out.push((
+        SectionKey::Devices,
+        Section::Devices(crate::profile::devices_for_wire(s.devices.all())),
+    ));
+
+    // One section per preview (a section is size-bounded on its own), the
+    // lowest ids first so the same set is chosen every time.
+    let mut previews: Vec<_> = s
+        .attachment_previews
+        .iter()
+        .filter_map(|(id, p)| crate::profile::preview_for_wire(p).map(|d| (id, d)))
+        .collect();
+    previews.sort_by_key(|(id, _)| id.as_uuid().as_u128());
+    previews.truncate(crate::profile::MAX_PREVIEWS);
+    for (id, dto) in previews {
+        out.push((SectionKey::Preview(id), Section::Preview(dto)));
+    }
+
     let mut convs: Vec<_> = s
         .timelines
         .keys()

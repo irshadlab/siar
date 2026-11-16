@@ -5,10 +5,12 @@
 //! and a command channel; *who* drives those — a Slint window, a daemon, an
 //! end-to-end test — is the host's business.
 
+mod attach;
 pub mod bootstrap;
 pub mod core;
 mod history;
 mod peers;
+pub use peers::conversation_for;
 pub mod power_gate;
 mod read_marks;
 mod security_log;

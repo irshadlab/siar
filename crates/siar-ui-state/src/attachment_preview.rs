@@ -64,6 +64,16 @@ impl AttachmentPreviewState {
             .unwrap_or(AttachmentPreview::NotRequested)
     }
 
+    /// Every message that has a preview in any state but `NotRequested`.
+    pub fn iter(&self) -> impl Iterator<Item = (MessageId, &AttachmentPreview)> {
+        self.previews.iter().map(|(id, p)| (*id, p))
+    }
+
+    /// Back to `NotRequested`.
+    pub fn forget(&mut self, message_id: MessageId) {
+        self.previews.remove(&message_id);
+    }
+
     pub fn set_loading(&mut self, message_id: MessageId) {
         self.previews.insert(message_id, AttachmentPreview::Loading);
     }

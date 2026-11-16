@@ -642,3 +642,76 @@ Ticket-carried prekey bundle and the ingress gate in front of `handle_incoming`.
 * 1:1 messaging: `PairwiseService` + `EnvelopeKind::PairwiseWelcome/PairwiseMls` + `MessageService::open_pairwise_session` exist with 3 real-iroh end-to-end tests; app-core bootstrap now attaches the service (data_dir/pairwise). A conversation only upgrades when `open_pairwise_session` is called for it (needs the peer's key package); otherwise it keeps the static-key `Session` (no forward secrecy). No UI/CLI command opens sessions yet.
 * Bumps: openmls 0.9.2 (+ traits/rust_crypto/basic_credential 0.6.0, sqlite_storage 0.3.0), stoolap 0.4.2.
 * Not verified in the sandbox (disk): full `siar-daemon`/`siar-messaging`/`siar-event-log` test runs, `apps/desktop` compile, `workspace-hack` regeneration.
+
+## Daemon-centric round (2026-11-15): CLI and window are daemon clients
+
+**Decision:** `siar-daemon` is the only process that opens the database, keys,
+MLS state and network identity. The window and the CLI are thin clients of its
+control socket. Nothing had shipped, so the embedded-core desktop path was removed.
+
+**Verified:** `siar-abuse` 31, `siar-runtime` 158, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 31 +
+10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
+parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
+runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
+Black-box with real binaries: `siar status` with no daemon gives an actionable
+error; `--spawn` starts one; `ticket/identity/key-package/group-create` work;
+**two daemons pair and exchange messages in both directions through the CLI**.
+Not run: `cargo check --workspace` in one pass (sandbox disk/RAM); the Slint
+window against a display; Windows named pipes.
+
+* **Ingress admission (Part 28 §60-§62, §65):** `siar-messaging::IngressGuard`
+  puts `siar-abuse::Gate` in front of the app-core receive loop, keyed on the
+  QUIC-authenticated endpoint id (never `Envelope::sender`, which a stranger
+  controls), salted-hashed. Standing comes from the device directory (contact /
+  group member) and the verification store (verified). The gate is never given
+  message ids, so retransmits still get ACKed. Bug found and fixed in
+  `siar-abuse`: demoting a peer to Unknown kept its old unlimited buckets.
+  Also wired into `apps/emergency-node` (every `WireMessage` kind is rationed
+  before any decoding or signature check: bundles/deposits/adverts use the
+  `DtnBundle` budget, signed check-ins `SignatureVerify`; a device that has
+  disclosed itself to the relay counts as a contact, everyone else as a
+  stranger). Limits are untuned defaults: a stranger gets 20 bundles then ~1 per
+  3 s, all strangers together ~3/s — measure before running a busy public relay.
+  The relay has unit tests only; no live-traffic test of the gate yet.
+* **CLI (`siar`):** rewritten as a client. Commands: status, ticket, identity,
+  key-package, conversations, groups, messages, pair, send (conversation id or
+  ticket), send-file (path read by the daemon; verified with two real daemons,
+  including a path with spaces), listen (polling), group-create, group-add,
+  group-send, **send-anon** and **check-mailbox-anon** (relay mailbox).
+  `--spawn`, `--socket`. **Removed:** `check-mailbox` (the signed device
+  check-in; its replies are relay bundles a client cannot decrypt, so it was only
+  a harness probe).
+* **Relay mailbox in the daemon core:** `send-anon` stores the message first
+  (timeline + restart-safe), deposits it with the relay, marks it `Sent` (or
+  `Failed`). `check-mailbox-anon` sends an anonymous check-in and, for 30 s,
+  accepts token-mailbox deliveries **only from that relay**, decrypts against
+  that conversation's peer, checks the body hash, stores and shows each item
+  once (re-deliveries are ignored). A relay we are waiting on is treated as a
+  known peer for admission so a large mailbox is not cut at the stranger budget.
+  Verified live: a real `siar-emergency-node` plus two real daemons; two messages
+  left at the relay were collected, stored and shown once, and a second check
+  said "nothing waiting". Limits: no retry on the anonymous send (`Sent` means
+  "handed to the relay", not delivered); an unpaired-by-message contact's stored
+  sender device is a stand-in derived from its transport key; tickets are
+  validated when the command arrives.
+* **Daemon app surface** gained identity, key-package, groups queries and
+  pair (returns the conversation id), group-create/add/send commands.
+* **Window:** connect-first; starts the daemon if absent (binary looked up only
+  beside the executable). New synced sections **Groups** and **Invites** and the
+  four group commands. Invite Welcome bytes never leave the daemon. Limit: a
+  legacy invite without an embedded group record cannot be finished from an
+  attached window. The daemon refuses a `CreateGroup` whose founder is not its
+  own account and an `AddGroupMember` whose two account fields differ. Own identity, diagnostics, devices and attachment previews are now
+  synced too (previews: one section each, max 64, JPEG over 128 KiB becomes an
+  honest "too large" failure, never a truncated image). `devices` is still never
+  populated by the core, so that section is empty until multi-device linking
+  fills it. A full resync now also clears security events, groups, invites and
+  the new sections (before, a daemon restart could leave stale ones in the
+  window). New `AppCommand::SendAttachment` (absolute path only, regular file,
+  within the attachment limit). `apps/desktop` still depends on `siar-app-core` for path
+  resolution only.
+* **Roles:** `[node] role = "..."` in the local config selects an unattended
+  node's role (refused with `require_provisioning`). Relay/DTN/organisation
+  roles still run `siar-emergency-node` as a supervised child, deliberately, for
+  privilege separation. `storage-node` is still "unavailable".

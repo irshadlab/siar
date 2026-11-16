@@ -114,14 +114,27 @@ fn reset_synced(s: &mut Slices) {
     s.identity = LocalIdentity::default();
     s.ready = false;
     s.startup_error = None;
+    s.security_events = siar_ui_state::SecurityEventState::default();
+    s.groups = siar_ui_state::GroupListState::new();
+    s.pending_invites = siar_ui_state::PendingInviteState::new();
+    s.own_identity = None;
+    s.diagnostics = None;
+    s.devices = siar_ui_state::DeviceListState::new();
+    s.attachment_previews = siar_ui_state::AttachmentPreviewState::new();
 }
 
 fn apply_update(s: &mut Slices, u: &SectionUpdate) {
     let Some(section) = &u.section else {
-        if let SectionKey::Timeline(c) = u.key {
-            s.timelines.remove(&c);
-            s.history.remove(&c);
-            s.sendable.remove(&c);
+        match u.key {
+            SectionKey::Timeline(c) => {
+                s.timelines.remove(&c);
+                s.history.remove(&c);
+                s.sendable.remove(&c);
+            }
+            // The daemon no longer has this preview (evicted or never kept):
+            // forget it, so the window asks again if it still wants it.
+            SectionKey::Preview(m) => s.attachment_previews.forget(m),
+            _ => {}
         }
         return;
     };
@@ -222,6 +235,47 @@ fn apply_update(s: &mut Slices, u: &SectionUpdate) {
                     .map(siar_ui_state::SecurityEvent::from)
                     .collect(),
             );
+        }
+        (SectionKey::Groups, Section::Groups(list)) => {
+            let mut groups = siar_ui_state::GroupListState::new();
+            for g in list {
+                groups.upsert(g.into());
+            }
+            s.groups = groups;
+        }
+        (SectionKey::Invites, Section::Invites(list)) => {
+            let mut invites = siar_ui_state::PendingInviteState::new();
+            for i in list {
+                invites.add(i.into());
+            }
+            s.pending_invites = invites;
+        }
+        (SectionKey::OwnIdentity, Section::OwnIdentity(o)) => {
+            s.own_identity = o.as_ref().map(Into::into);
+        }
+        (SectionKey::Diagnostics, Section::Diagnostics(d)) => {
+            s.diagnostics = d.as_ref().map(Into::into);
+        }
+        (SectionKey::Devices, Section::Devices(list)) => {
+            let mut devices = siar_ui_state::DeviceListState::new();
+            devices.set_devices(list.iter().map(Into::into).collect());
+            s.devices = devices;
+        }
+        (SectionKey::Preview(m), Section::Preview(p)) => {
+            use crate::profile::PreviewDto;
+            match p {
+                PreviewDto::Loading => s.attachment_previews.set_loading(m),
+                PreviewDto::Ready {
+                    jpeg_bytes,
+                    width,
+                    height,
+                } => s
+                    .attachment_previews
+                    .set_ready(m, jpeg_bytes.clone(), *width, *height),
+                PreviewDto::Failed { reason } => {
+                    s.attachment_previews.set_failed(m, reason.clone());
+                }
+            }
         }
         (SectionKey::Timeline(c), Section::Timeline(d)) => {
             let entries = d

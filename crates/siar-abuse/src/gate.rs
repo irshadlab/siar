@@ -280,6 +280,10 @@ impl Gate {
             }
             Standing::Unknown => {
                 self.standings.remove(&p);
+                // Trust was withdrawn: drop the old (larger) buckets so the
+                // peer is re-created lazily with the stranger limits. Without
+                // this a removed contact would keep contact-level limits.
+                self.peers.remove(&p);
             }
             other => {
                 self.blocked.remove(&p);
@@ -449,6 +453,22 @@ mod tests {
             version: 1,
             id: None,
         }
+    }
+
+    #[test]
+    fn withdrawing_trust_restores_stranger_limits() {
+        let mut g = Gate::new(GateConfig::default(), 0);
+        let p = pk(9);
+        g.set_standing(p, Standing::Contact);
+        // A contact's message quota is unlimited.
+        for _ in 0..100 {
+            assert!(g.admit(&inc(p, QuotaKind::MessageRequest), 0).is_ok());
+        }
+        g.set_standing(p, Standing::Unknown);
+        let ok = (0..100)
+            .filter(|_| g.admit(&inc(p, QuotaKind::MessageRequest), 0).is_ok())
+            .count();
+        assert_eq!(ok, 5, "stranger burst must apply again after demotion");
     }
 
     #[test]

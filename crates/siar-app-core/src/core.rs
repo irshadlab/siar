@@ -57,6 +57,32 @@ pub struct Core {
     /// Senders we already told the user about, so a chatty unknown device
     /// produces one notice, not a toast storm.
     warned_unknown: Mutex<HashSet<iroh::EndpointId>>,
+    /// Part 28 §60-§62: cheap admission checks before any decryption.
+    ingress: siar_messaging::IngressGuard,
+    /// Senders already told about a rate limit, so a flood is one notice.
+    warned_throttled: Mutex<HashSet<iroh::EndpointId>>,
+    /// Relays we just sent an anonymous mailbox check-in to. Only those, and
+    /// only for a short while, may deliver token-mailbox items to us.
+    mailbox_waits: Mutex<std::collections::HashMap<iroh::EndpointId, MailboxWait>>,
+}
+
+/// A stable device id for a peer whose real one is not known yet.
+fn stand_in_device(peer: &PeerTicket) -> DeviceId {
+    let key = peer.endpoint_addr.id.as_bytes();
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&key[16..]);
+    DeviceId::from_uuid(uuid::Uuid::from_bytes(b))
+}
+
+/// How long after a check-in a relay's deliveries are accepted.
+const MAILBOX_WAIT: Duration = Duration::from_secs(30);
+
+/// What a pending anonymous check-in needs to decrypt what comes back.
+struct MailboxWait {
+    conversation: ConversationId,
+    peer: PeerTicket,
+    sender_device: DeviceId,
+    until: std::time::Instant,
 }
 
 /// Boots the core into the UI and runs until the command channel closes
@@ -111,6 +137,9 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
             &data_dir.join("verified-contacts.txt"),
         )),
         warned_unknown: Mutex::new(HashSet::new()),
+        ingress: siar_messaging::IngressGuard::new(siar_abuse::GateConfig::default()),
+        warned_throttled: Mutex::new(HashSet::new()),
+        mailbox_waits: Mutex::new(std::collections::HashMap::new()),
     });
 
     // ---- seed the UI -----------------------------------------------------------
@@ -313,6 +342,128 @@ impl Core {
     }
 
     /// Safety number + current verification state for one contact.
+    /// How much the sender at `endpoint` is trusted, from state we already hold.
+    /// Saved contacts and group members are in the device directory; a
+    /// contact whose safety number was verified (and whose key is unchanged)
+    /// is `Verified`; anyone else is a stranger.
+    fn standing_of(&self, endpoint: &iroh::EndpointId) -> siar_abuse::Standing {
+        use siar_abuse::Standing;
+        // A relay we just asked for our mail is a known peer for now: its
+        // answer can be many items, which the stranger budget would cut off.
+        if self.waiting_on(endpoint) {
+            return Standing::Contact;
+        }
+        let Some((device, key)) = self.device_directory.device_at_endpoint(endpoint) else {
+            // A paired peer that is not in the directory yet is still ours.
+            let paired = self
+                .peers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .ticket_of_endpoint(endpoint)
+                .is_some();
+            return if paired {
+                Standing::Contact
+            } else {
+                Standing::Unknown
+            };
+        };
+        match self.verification().state(device, &key) {
+            VerificationState::Verified => Standing::Verified,
+            _ => Standing::Contact,
+        }
+    }
+
+    /// A frame was refused by the admission gate. Logged quietly; the user is
+    /// told at most once per sender, and only when it is a known contact being
+    /// throttled (a stranger being limited is the gate working as intended).
+    fn note_throttled(&self, endpoint: &iroh::EndpointId, reject: siar_messaging::IngressReject) {
+        tracing::debug!(from = ?endpoint, %reject, "dropped a frame at admission");
+        if self.standing_of(endpoint) == siar_abuse::Standing::Unknown {
+            return;
+        }
+        let first_time = self
+            .warned_throttled
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(*endpoint);
+        if first_time {
+            self.hub.notify(
+                NoticeLevel::Warning,
+                "A contact is sending faster than allowed; some messages were held back and will be retried.",
+            );
+        }
+    }
+
+    /// A relay ticket the user typed. Warns (never panics) on a bad one.
+    fn decode_relay(&self, text: &str) -> Option<PeerTicket> {
+        match PeerTicket::decode(text.trim()) {
+            Ok(t) => Some(t),
+            Err(_) => {
+                self.hub
+                    .notify(NoticeLevel::Warning, "That relay ticket isn’t valid.");
+                None
+            }
+        }
+    }
+
+    fn waiting_on(&self, relay: &iroh::EndpointId) -> bool {
+        self.mailbox_waits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(relay)
+            .is_some_and(|w| w.until > std::time::Instant::now())
+    }
+
+    /// Start waiting for a relay's answer to a check-in for `conversation`.
+    fn expect_mailbox(&self, relay: iroh::EndpointId, wait: MailboxWait) {
+        let mut waits = self
+            .mailbox_waits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        waits.retain(|_, w| w.until > now); // never grows without bound
+        waits.insert(relay, wait);
+    }
+
+    /// A token-mailbox item from `relay`. Accepted only from a relay we are
+    /// waiting on; decrypted against exactly the peer the check-in was for.
+    fn accept_mailbox_item(
+        &self,
+        relay: &iroh::EndpointId,
+        item: &siar_protocol::TokenMailboxEnvelope,
+    ) {
+        let wait = {
+            let waits = self
+                .mailbox_waits
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            waits
+                .get(relay)
+                .filter(|w| w.until > std::time::Instant::now())
+                .map(|w| (w.conversation, w.peer.clone(), w.sender_device))
+        };
+        let Some((conversation, peer, sender_device)) = wait else {
+            tracing::warn!(from = ?relay, "dropping an unsolicited mailbox delivery");
+            return;
+        };
+        match self
+            .service
+            .receive_token_mailbox_envelope(conversation, sender_device, &peer, item)
+        {
+            Ok(Some(content)) => {
+                self.hub.update(|s| {
+                    s.sendable.insert(conversation);
+                    s.record_incoming(conversation, item.id, item.created_at, content);
+                });
+                if self.hub.read(|s| s.selected) == Some(conversation) {
+                    self.advance_read(conversation);
+                }
+            }
+            Ok(None) => {} // already stored: a re-delivery, not a new message
+            Err(e) => tracing::warn!(error = %e, "couldn't accept a mailbox item"),
+        }
+    }
+
     fn safety_for(&self, device: DeviceId, ticket: &PeerTicket) -> ContactSafety {
         ContactSafety {
             number: safety_number(&self.local_key, &ticket.ed25519_verifying),
@@ -734,6 +885,91 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                     Err(e) => core.fail("Your message couldn’t be sent", e),
                 }
             }
+            AppCommand::SendAttachment { conversation, path } => {
+                let Some(peer) = core.peers().ticket(conversation).cloned() else {
+                    core.hub.notify(
+                        NoticeLevel::Warning,
+                        "This conversation has no paired peer yet.",
+                    );
+                    continue;
+                };
+                match crate::attach::read_for_sending(&path).await {
+                    Err(why) => core.hub.notify(NoticeLevel::Warning, &why),
+                    Ok((bytes, media_type)) => match core
+                        .service
+                        .send_attachment_detailed(conversation, &peer, bytes, media_type)
+                        .await
+                    {
+                        Ok((message_id, reference)) => {
+                            core.hub.update(|s| {
+                                s.record_outgoing(
+                                    conversation,
+                                    message_id,
+                                    MessageContent::Attachment(reference),
+                                );
+                            });
+                            core.advance_read(conversation);
+                        }
+                        Err(e) => core.fail("Your file couldn’t be sent", e),
+                    },
+                }
+            }
+            AppCommand::SendViaRelay {
+                conversation,
+                relay_ticket_text,
+                text,
+            } => {
+                let (Some(peer), Some(relay)) = (
+                    core.peers().ticket(conversation).cloned(),
+                    core.decode_relay(&relay_ticket_text),
+                ) else {
+                    continue;
+                };
+                match core
+                    .service
+                    .send_text_via_relay(conversation, &peer, &relay, text.clone())
+                    .await
+                {
+                    Ok(message_id) => {
+                        core.hub.update(|s| {
+                            s.record_outgoing(conversation, message_id, MessageContent::Text(text));
+                        });
+                    }
+                    Err(e) => core.fail("Your message couldn’t be left at the relay", e),
+                }
+            }
+            AppCommand::CheckRelayMailbox {
+                conversation,
+                relay_ticket_text,
+            } => {
+                let (Some(peer), Some(relay)) = (
+                    core.peers().ticket(conversation).cloned(),
+                    core.decode_relay(&relay_ticket_text),
+                ) else {
+                    continue;
+                };
+                // A ticket carries no device id (it is learned from the peer's
+                // first envelope), so an unpaired-by-message contact gets a
+                // stable stand-in derived from its transport key. It only
+                // labels the stored row; nothing is authenticated by it.
+                let sender_device = core
+                    .device_directory
+                    .device_at_endpoint(&peer.endpoint_addr.id)
+                    .map_or_else(|| stand_in_device(&peer), |(d, _)| d);
+                // Expect the answer BEFORE asking, or a fast relay could win the race.
+                core.expect_mailbox(
+                    relay.endpoint_addr.id,
+                    MailboxWait {
+                        conversation,
+                        peer: peer.clone(),
+                        sender_device,
+                        until: std::time::Instant::now() + MAILBOX_WAIT,
+                    },
+                );
+                if let Err(e) = core.service.send_anonymous_check_in(&peer, &relay).await {
+                    core.fail("The relay couldn’t be reached", e);
+                }
+            }
             AppCommand::OpenConversation(conversation) => {
                 core.hub.update(|s| s.conversations.mark_read(conversation));
                 core.ensure_history(conversation).await;
@@ -1111,12 +1347,27 @@ async fn incoming_loop(
     mut incoming: mpsc::Receiver<siar_transport::IncomingFrame>,
 ) {
     while let Some(frame) = incoming.recv().await {
+        // Part 28 §61: admission BEFORE any decryption, storage or ACK, keyed on
+        // the transport-authenticated sender (never `envelope.sender`). Every
+        // wire kind is rationed, not just chat envelopes.
+        let standing = core.standing_of(&frame.from);
+        if let Err(reject) =
+            core.ingress
+                .admit_wire(frame.from.as_bytes(), standing, &frame.message)
+        {
+            core.note_throttled(&frame.from, reject);
+            continue;
+        }
         let envelope = match frame.message {
             WireMessage::V1(envelope) => envelope,
+            // The answer to an anonymous check-in we sent.
+            WireMessage::TokenMailboxDeposit(item) => {
+                core.accept_mailbox_item(&frame.from, &item);
+                continue;
+            }
             // Relay-only traffic: not an ordinary chat client's job.
             WireMessage::Mesh(_)
             | WireMessage::MailboxCheckIn(_)
-            | WireMessage::TokenMailboxDeposit(_)
             | WireMessage::AnonymousMailboxCheckIn(_)
             | WireMessage::RouteAdvertisement(_) => {
                 tracing::warn!(from = ?frame.from, "dropping a relay-only frame — this app isn't a relay");

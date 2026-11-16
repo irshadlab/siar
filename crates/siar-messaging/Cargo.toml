@@ -11,6 +11,8 @@ siar-protocol.workspace = true
 siar-crypto.workspace = true
 siar-crypto-mls.workspace = true
 siar-storage.workspace = true
+# Part 28 §60-§67: cheap-validation-first admission in front of `handle_incoming`.
+siar-abuse.workspace = true
 siar-transport.workspace = true
 # spec 05 §204 — `send_imported_attachment` / `FilesBlobStore`.
 siar-files.workspace = true

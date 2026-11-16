@@ -443,3 +443,118 @@ fn resolving_a_security_event_is_a_wire_command_that_round_trips() {
         AppCommand::ResolveSecurityEvent { event_id: 7 }
     ));
 }
+
+#[test]
+fn groups_and_invites_sync_as_their_own_sections_without_key_material() {
+    use siar_ui_state::{GroupSummary, PendingInvite};
+    let mut w = world();
+    let mut server = SyncServer::new(1);
+    let _ = server.diff(&w.s); // baseline
+    let (mut client, mut cur) = mirror(&server, &w.s);
+
+    let g = ConversationId::new();
+    w.s.groups.upsert(GroupSummary {
+        conversation_id: g,
+        display_label: "crew".into(),
+        member_count: 3,
+        is_admin: true,
+        epoch: 4,
+    });
+    let inv = ConversationId::new();
+    w.s.pending_invites.add(PendingInvite {
+        conversation_id: inv,
+        from_device: DeviceId::new(),
+        welcome_bytes: vec![7; 8192],
+        state_input: "typed locally".into(),
+        carries_state: true,
+    });
+
+    let frames = server.diff(&w.s);
+    let mut keys: Vec<_> = frames
+        .iter()
+        .flat_map(|f| f.updates.iter().map(|u| u.key))
+        .collect();
+    keys.sort_by_key(SectionKey::sort_key);
+    assert_eq!(keys, vec![SectionKey::Groups, SectionKey::Invites]);
+    for f in &frames {
+        assert_eq!(apply_delta(&mut client, &mut cur, f), Verdict::Apply);
+    }
+    assert!(same(&w.s, &client));
+    assert_eq!(client.groups.get(g).unwrap().epoch, 4);
+    let mirrored = &client.pending_invites.pending()[0];
+    assert!(
+        mirrored.welcome_bytes.is_empty(),
+        "key material stays in the daemon"
+    );
+    assert!(mirrored.state_input.is_empty());
+
+    // The invite is answered on the daemon: the window sees it disappear.
+    w.s.pending_invites.remove(inv);
+    for f in &server.diff(&w.s) {
+        assert_eq!(apply_delta(&mut client, &mut cur, f), Verdict::Apply);
+    }
+    assert!(client.pending_invites.pending().is_empty());
+}
+
+#[test]
+fn identity_diagnostics_devices_and_previews_sync_and_previews_can_disappear() {
+    use siar_ui_state::{
+        DeviceKind, DeviceSecurityView, DeviceTrustState, IdentityKeyHealth, OwnIdentityView,
+        SecurityDiagnosticDetail,
+    };
+    let mut w = world();
+    let mut server = SyncServer::new(1);
+    let _ = server.diff(&w.s);
+    let (mut client, mut cur) = mirror(&server, &w.s);
+
+    w.s.own_identity = Some(OwnIdentityView {
+        account: AccountId::new(),
+        short_fingerprint: "ab12".into(),
+        full_fingerprint: "ab12cd34ef".into(),
+        created_at_millis: 5,
+        key_health: IdentityKeyHealth::RotationRecommended,
+    });
+    w.s.diagnostics = Some(SecurityDiagnosticDetail {
+        key_id: "ab12".into(),
+        epoch_id: String::new(),
+        signature_status: "ok".into(),
+        transport_security_details: "QUIC".into(),
+    });
+    w.s.devices.set_devices(vec![DeviceSecurityView {
+        id: DeviceId::new(),
+        display_name: "This laptop".into(),
+        kind: DeviceKind::Laptop,
+        status: DeviceTrustState::Trusted,
+        added_at_millis: 1,
+        last_active_millis: None,
+        current_device: true,
+        security_flags: vec![],
+    }]);
+    let m = MessageId::new();
+    w.s.attachment_previews
+        .set_ready(m, vec![0xFF, 0xD8, 0xFF], 4, 3);
+
+    for f in &server.diff(&w.s) {
+        assert_eq!(apply_delta(&mut client, &mut cur, f), Verdict::Apply);
+    }
+    assert!(same(&w.s, &client));
+    assert_eq!(
+        client.own_identity.as_ref().unwrap().key_health,
+        IdentityKeyHealth::RotationRecommended
+    );
+    assert!(client.devices.this_device().is_some());
+    assert!(matches!(
+        client.attachment_previews.get(m),
+        siar_ui_state::AttachmentPreview::Ready { width: 4, .. }
+    ));
+
+    // The daemon drops the preview: the window forgets it too.
+    w.s.attachment_previews.forget(m);
+    for f in &server.diff(&w.s) {
+        assert_eq!(apply_delta(&mut client, &mut cur, f), Verdict::Apply);
+    }
+    assert_eq!(
+        client.attachment_previews.get(m),
+        siar_ui_state::AttachmentPreview::NotRequested
+    );
+}

@@ -167,6 +167,15 @@ impl UiSyncService {
         let cmd = cmd
             .validate()
             .map_err(|e| RuntimeError::InvalidCommand(e.to_string()))?;
+        // A window may not found a group in someone else's name: the founder
+        // is this daemon's own account, whatever the window claims.
+        if let WireCommand::CreateGroup { founder } = &cmd {
+            if self.hub.read(|s| s.identity.account) != Some(*founder) {
+                return Err(RuntimeError::InvalidCommand(
+                    "a group can only be founded by this account".into(),
+                ));
+            }
+        }
         if self.hub.dispatch(cmd.into_app()) {
             Ok(())
         } else {

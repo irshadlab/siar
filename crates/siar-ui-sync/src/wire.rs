@@ -31,6 +31,12 @@ pub enum SectionKey {
     Network,
     Power,
     SecurityEvents,
+    Groups,
+    Invites,
+    OwnIdentity,
+    Diagnostics,
+    Devices,
+    Preview(MessageId),
     Timeline(ConversationId),
 }
 
@@ -46,6 +52,12 @@ impl SectionKey {
             Self::Network => (4, 0),
             Self::Power => (5, 0),
             Self::SecurityEvents => (5, 1),
+            Self::Groups => (5, 2),
+            Self::Invites => (5, 3),
+            Self::OwnIdentity => (5, 4),
+            Self::Diagnostics => (5, 5),
+            Self::Devices => (5, 6),
+            Self::Preview(id) => (7, id.as_uuid().as_u128()),
             Self::Timeline(id) => (6, id.as_uuid().as_u128()),
         }
     }
@@ -162,6 +174,12 @@ pub enum Section {
     Network(NetworkDto),
     Power(Option<PowerDto>),
     SecurityEvents(Vec<crate::security::SecurityEventDto>),
+    Groups(Vec<crate::groups::GroupDto>),
+    Invites(Vec<crate::groups::InviteDto>),
+    OwnIdentity(Option<crate::profile::OwnIdentityDto>),
+    Diagnostics(Option<crate::profile::DiagnosticsDto>),
+    Devices(Vec<crate::profile::DeviceDto>),
+    Preview(crate::profile::PreviewDto),
     Timeline(TimelineDto),
 }
 

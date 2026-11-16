@@ -113,7 +113,42 @@ impl DaemonApp {
                 s.conversations
                     .ordered()
                     .iter()
-                    .map(|c| format!("{}\t{}\t{}", c.id, c.display_name, c.unread_count))
+                    .map(|c| {
+                        let kind = match c.kind {
+                            siar_ui_state::ConversationKind::Direct => "direct",
+                            siar_ui_state::ConversationKind::Group => "group",
+                        };
+                        format!("{}\t{}\t{}\t{}", c.id, kind, c.display_name, c.unread_count)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
+            // `<device-id> <account-id>`
+            "identity" => hub.read(|s| match (s.identity.device, s.identity.account) {
+                (Some(d), Some(a)) => Ok(format!("{d} {a}")),
+                _ => Err(RuntimeError::NotReady),
+            })?,
+            // `<device-id> <account-id> <base64 key package>` — what a group
+            // admin needs in order to add this device.
+            "key-package" => hub.read(|s| match (s.identity.device, s.identity.account) {
+                (Some(d), Some(a)) if !s.identity.key_package.is_empty() => {
+                    Ok(format!("{d} {a} {}", s.identity.key_package))
+                }
+                _ => Err(RuntimeError::NotReady),
+            })?,
+            "groups" => hub.read(|s| {
+                s.groups
+                    .ordered()
+                    .iter()
+                    .map(|g| {
+                        format!(
+                            "{}\t{}\t{}\t{}",
+                            g.conversation_id,
+                            g.member_count,
+                            g.epoch,
+                            if g.is_admin { "admin" } else { "member" }
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             }),
@@ -145,7 +180,11 @@ impl DaemonApp {
                             let who = if e.from_me { "me  " } else { "them" };
                             match &e.content {
                                 MessageContent::Text(t) => format!("{who}  {}", t.as_str()),
-                                MessageContent::Attachment(_) => format!("{who}  [attachment]"),
+                                MessageContent::Attachment(r) => format!(
+                                    "{who}  [attachment: {:?}, {} bytes]",
+                                    r.media_type,
+                                    r.encrypted_size.bytes()
+                                ),
                             }
                         })
                         .collect::<Vec<_>>()
@@ -164,9 +203,112 @@ impl DaemonApp {
             return live.sync.command(&data).map(|()| Vec::new());
         }
         let cmd = match name {
-            "pair" => AppCommand::PairWithTicket {
-                ticket_text: utf8(data)?.trim().to_owned(),
-            },
+            "pair" => {
+                let ticket_text = utf8(data)?.trim().to_owned();
+                // The conversation id is derived from the ticket, so it can
+                // be returned now; the command channel is FIFO, so a `send`
+                // issued next runs after the pairing has been applied.
+                let ticket = siar_messaging::PeerTicket::decode(&ticket_text)
+                    .map_err(|e| RuntimeError::InvalidCommand(e.to_string()))?;
+                let id = siar_app_core::conversation_for(&ticket);
+                live.commands
+                    .try_send(AppCommand::PairWithTicket { ticket_text })
+                    .map_err(|_| RuntimeError::Busy)?;
+                return Ok(id.to_string().into_bytes());
+            }
+            "group-create" => {
+                let founder = live
+                    .core
+                    .state()
+                    .read(|s| s.identity.account)
+                    .ok_or(RuntimeError::NotReady)?;
+                AppCommand::CreateGroup { founder }
+            }
+            // `<conversation-id> <peer-ticket> <peer-device-id> <peer-account-id> <base64-key-package>`
+            "group-add" => {
+                let text = utf8(data)?;
+                let p: Vec<&str> = text.split_whitespace().collect();
+                let [conv, ticket, device, account, kp] = p.as_slice() else {
+                    return Err(RuntimeError::InvalidCommand(
+                        "expected: <conversation-id> <peer-ticket> <peer-device-id> <peer-account-id> <key-package>".into(),
+                    ));
+                };
+                let parse = |t: &str| {
+                    uuid::Uuid::parse_str(t)
+                        .map_err(|_| RuntimeError::InvalidCommand("not a valid id".into()))
+                };
+                let key_package_bytes = {
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(kp)
+                        .map_err(|_| {
+                            RuntimeError::InvalidCommand("key package is not base64".into())
+                        })?
+                };
+                AppCommand::AddGroupMember {
+                    conversation: conversation(conv)?,
+                    new_member: siar_domain::AccountId::from_uuid(parse(account)?),
+                    input: siar_ui_state::AddMemberInput {
+                        peer_account: siar_domain::AccountId::from_uuid(parse(account)?),
+                        peer_device: siar_domain::DeviceId::from_uuid(parse(device)?),
+                        peer_ticket_text: (*ticket).to_owned(),
+                        key_package_bytes,
+                    },
+                }
+            }
+            // `<conversation-id> <absolute path>`; the path may contain spaces.
+            "send-file" => {
+                let text = utf8(data)?;
+                let (id, path) = text.split_once(' ').ok_or_else(|| {
+                    RuntimeError::InvalidCommand("expected: <conversation-id> <path>".into())
+                })?;
+                AppCommand::SendAttachment {
+                    conversation: conversation(id)?,
+                    path: path.to_owned(),
+                }
+            }
+            // `<conversation-id> <relay-ticket> <text>`
+            "send-anon" => {
+                let text = utf8(data)?;
+                let mut it = text.splitn(3, ' ');
+                let (Some(id), Some(relay), Some(body)) = (it.next(), it.next(), it.next()) else {
+                    return Err(RuntimeError::InvalidCommand(
+                        "expected: <conversation-id> <relay-ticket> <text>".into(),
+                    ));
+                };
+                relay_ticket(relay)?;
+                AppCommand::SendViaRelay {
+                    conversation: conversation(id)?,
+                    relay_ticket_text: relay.to_owned(),
+                    text: siar_domain::MessageText::parse(body.to_owned())
+                        .map_err(|e| RuntimeError::InvalidCommand(e.to_string()))?,
+                }
+            }
+            // `<conversation-id> <relay-ticket>`
+            "check-mailbox-anon" => {
+                let text = utf8(data)?;
+                let Some((id, relay)) = text.split_once(' ') else {
+                    return Err(RuntimeError::InvalidCommand(
+                        "expected: <conversation-id> <relay-ticket>".into(),
+                    ));
+                };
+                relay_ticket(relay.trim())?;
+                AppCommand::CheckRelayMailbox {
+                    conversation: conversation(id)?,
+                    relay_ticket_text: relay.trim().to_owned(),
+                }
+            }
+            "group-send" => {
+                let text = utf8(data)?;
+                let (id, body) = text.split_once(' ').ok_or_else(|| {
+                    RuntimeError::InvalidCommand("expected: <conversation-id> <text>".into())
+                })?;
+                AppCommand::SendGroupMessage {
+                    conversation: conversation(id)?,
+                    text: siar_domain::MessageText::parse(body.to_owned())
+                        .map_err(|e| RuntimeError::InvalidCommand(e.to_string()))?,
+                }
+            }
             "send" => {
                 let text = utf8(data)?;
                 let (id, body) = text.split_once(' ').ok_or_else(|| {
@@ -208,4 +350,12 @@ impl AppService for DaemonApp {
     ) -> BoxFuture<'a, Result<Vec<u8>, RuntimeError>> {
         Box::pin(self.run_query(name, data))
     }
+}
+
+/// A relay ticket is checked when the command arrives, so a typo is an
+/// immediate error for the person who made it, not a silent no-op later.
+fn relay_ticket(text: &str) -> Result<(), RuntimeError> {
+    siar_messaging::PeerTicket::decode(text)
+        .map(drop)
+        .map_err(|_| RuntimeError::InvalidCommand("that relay ticket isn't valid".into()))
 }

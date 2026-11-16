@@ -36,9 +36,10 @@ use thiserror::Error;
 use crate::config::RuntimeConfig;
 
 /// §74. The role controls which features are enabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NodeRole {
+    #[default]
     PersonalDevice,
     RelayGateway,
     DtnNode,

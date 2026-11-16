@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use siar_domain::{ConversationId, DeliveryState, MessageContent, MessageId, MessageText};
 use siar_runtime::ipc::{serve_local, ServerConfig};
 use siar_runtime::{AppService, BoxFuture, Runtime, RuntimeError};
-use siar_ui_model::{NoticeLevel, StateHub};
+use siar_ui_model::StateHub;
 use siar_ui_state::{AppCommand, ConversationKind, ConversationSummary, TimelineWindow};
 use siar_ui_sync::{capture, run_remote, UiSyncService};
 use tokio::sync::mpsc;
@@ -169,7 +169,7 @@ async fn window_mirrors_the_daemon_and_follows_live_changes() {
 }
 
 #[tokio::test]
-async fn commands_cross_the_boundary_validated_and_unsupported_ones_say_so() {
+async fn commands_cross_the_boundary_and_arrive_unchanged() {
     let path = sock("cmd");
     let mut d = start_daemon(&path).await;
     let a = populate(&d.hub, 1, 1, 5);
@@ -192,16 +192,56 @@ async fn commands_cross_the_boundary_validated_and_unsupported_ones_say_so() {
         other => panic!("{other:?}"),
     }
 
-    // Not supported through the daemon yet: the user is told, nothing is sent.
-    w.hub
-        .dispatch(AppCommand::DeclineGroupInvite { conversation: a });
-    let end = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < end && w.hub.read(|s| s.notice.is_none()) {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let n = w.hub.read(|s| s.notice.clone()).expect("a notice");
-    assert_eq!(n.level, NoticeLevel::Warning);
-    assert!(d.commands.try_recv().is_err());
+    // Group decisions now cross the boundary too: the daemon's core receives
+    // the same command the window dispatched.
+    assert!(w
+        .hub
+        .dispatch(AppCommand::DeclineGroupInvite { conversation: a }));
+    let got = tokio::time::timeout(Duration::from_secs(5), d.commands.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(got, AppCommand::DeclineGroupInvite { conversation } if conversation == a),
+        "{got:?}"
+    );
+
+    w.stop.cancel();
+    let _ = w.task.await;
+    d.rt.shutdown(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn a_window_cannot_found_a_group_in_someone_elses_name() {
+    let path = sock("founder");
+    let mut d = start_daemon(&path).await;
+    populate(&d.hub, 1, 1, 5);
+    let me = siar_domain::AccountId::new();
+    d.hub.update(|s| s.identity.account = Some(me));
+    let w = open_window(&path);
+    assert!(converged(&d.hub, &w.hub).await);
+
+    // Someone else's account: queued by the window, refused by the daemon.
+    w.hub.dispatch(AppCommand::CreateGroup {
+        founder: siar_domain::AccountId::new(),
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(800), d.commands.recv())
+            .await
+            .is_err(),
+        "the daemon must not forward a foreign founder"
+    );
+
+    // This daemon's own account goes through.
+    w.hub.dispatch(AppCommand::CreateGroup { founder: me });
+    let got = tokio::time::timeout(Duration::from_secs(5), d.commands.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(got, AppCommand::CreateGroup { founder } if founder == me),
+        "{got:?}"
+    );
 
     w.stop.cancel();
     let _ = w.task.await;

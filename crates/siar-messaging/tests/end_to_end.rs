@@ -724,6 +724,63 @@ async fn send_text_anon_round_trips_through_the_relay_deposit() {
     assert_eq!(received.as_str(), "via relay");
 }
 
+#[tokio::test]
+async fn a_message_left_at_a_relay_is_stored_by_both_sides_and_never_shown_twice() {
+    use siar_domain::{ConversationId, DeviceId};
+    let mut relay = Node::spawn().await;
+    let alice = Node::spawn().await;
+    let bob = Node::spawn().await;
+    let (relay_ticket, alice_ticket, bob_ticket) = (relay.ticket(), alice.ticket(), bob.ticket());
+    let conversation = ConversationId::new();
+
+    // Alice leaves a message for Bob at the relay: stored locally first.
+    let id = alice
+        .service
+        .send_text_via_relay(
+            conversation,
+            &bob_ticket,
+            &relay_ticket,
+            text("see you at 5"),
+        )
+        .await
+        .expect("deposit succeeds");
+    let frame = tokio::time::timeout(Duration::from_secs(20), relay.incoming.recv())
+        .await
+        .expect("relay receives")
+        .expect("channel open");
+    let siar_protocol::WireMessage::TokenMailboxDeposit(deposit) = frame.message else {
+        panic!("expected a TokenMailboxDeposit");
+    };
+    assert_eq!(
+        deposit.id, id,
+        "the stored message and the deposit share an id"
+    );
+
+    // Bob "collects" it: stored, shown once, and a re-delivery is not new.
+    let sender = DeviceId::new();
+    let first = bob
+        .service
+        .receive_token_mailbox_envelope(conversation, sender, &alice_ticket, &deposit)
+        .expect("accepted");
+    let Some(MessageContent::Text(t)) = first else {
+        panic!("first delivery is new content");
+    };
+    assert_eq!(t.as_str(), "see you at 5");
+    assert!(bob
+        .service
+        .receive_token_mailbox_envelope(conversation, sender, &alice_ticket, &deposit)
+        .expect("accepted again")
+        .is_none());
+
+    // A relay that swaps the body is caught, not decrypted-and-hoped.
+    let mut tampered = deposit.clone();
+    tampered.ciphertext[0] ^= 1;
+    assert!(bob
+        .service
+        .receive_token_mailbox_envelope(conversation, sender, &alice_ticket, &tampered)
+        .is_err());
+}
+
 /// §14 "Transactional Outbox": "If the process dies, the outbox still
 /// exists" — the outbox is the actual system of record for send/retry,
 /// the event log is additive (see `MessageService::record_messaging_

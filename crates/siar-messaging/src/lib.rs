@@ -14,6 +14,7 @@ pub mod event_policy;
 pub mod events;
 mod files_transport;
 mod group_service;
+pub mod ingress;
 mod key_package_directory;
 mod pairwise_service;
 pub mod projections;
@@ -53,6 +54,7 @@ pub use group_service::{
     CommitBundle, DeviceDirectory, DirectoryEntry, GroupService, GroupServiceError,
     InMemoryDeviceDirectory, MemberDevice, WelcomeBundle,
 };
+pub use ingress::{quota_for, quota_for_wire, IngressGuard, IngressReject};
 pub use key_package_directory::{InMemoryKeyPackageDirectory, KeyPackageDirectory};
 pub use pairwise_service::{PairwisePlain, PairwiseService, PairwiseServiceError, Unacked};
 

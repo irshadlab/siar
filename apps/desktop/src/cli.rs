@@ -21,7 +21,7 @@ use siar_backup::BackupError;
 
 pub const USAGE: &str = "\
 Usage:
-  siar-desktop                       run the app
+  siar-desktop [--socket PATH]       run the app (connects to siar-daemon, starting it if needed)
   siar-desktop backup  <file>        back up your account and data into an encrypted file
   siar-desktop restore <file> [dir]  restore a backup into an empty folder
                                      (default: this device's data folder)

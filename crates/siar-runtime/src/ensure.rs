@@ -56,6 +56,45 @@ where
     }
 }
 
+/// Start `siar-daemon run --socket <socket>` as a detached background
+/// process. The binary is looked up **only beside the running executable** —
+/// never via `PATH`, where a planted binary would run with the user's rights.
+/// Output is discarded; on Unix the daemon gets its own process group so
+/// closing the launching terminal does not stop it. The returned error text
+/// is meant for users.
+pub fn spawn_daemon_beside_exe(socket: &Path) -> io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| io::Error::other("program path has no directory"))?;
+    let name = if cfg!(windows) {
+        "siar-daemon.exe"
+    } else {
+        "siar-daemon"
+    };
+    let bin = dir.join(name);
+    if !bin.is_file() {
+        return Err(io::Error::other(format!(
+            "siar-daemon was not found next to this program ({})",
+            bin.display()
+        )));
+    }
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg("run")
+        .arg("--socket")
+        .arg(socket)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    // Dropping the handle leaves the daemon running.
+    cmd.spawn().map(|_| ())
+}
+
 fn describe(e: &ClientError) -> String {
     e.to_string()
 }

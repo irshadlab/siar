@@ -660,6 +660,22 @@ impl MessageService {
         let session = self.session_for(peer);
         let ciphertext = session.encrypt(&plaintext)?;
 
+        self.deposit_anon(peer, relay, message_id, ciphertext, now)
+            .await?;
+        Ok(message_id)
+    }
+
+    /// Wrap already-encrypted `ciphertext` in a token-addressed envelope and
+    /// hand it to `relay`. Shared by the fire-and-forget and the persisted
+    /// anonymous sends, so both address and expire items identically.
+    async fn deposit_anon(
+        &self,
+        peer: &PeerTicket,
+        relay: &PeerTicket,
+        message_id: MessageId,
+        ciphertext: Vec<u8>,
+        now: u64,
+    ) -> Result<(), MessageServiceError> {
         let peer_x25519_public = x25519_dalek::PublicKey::from(peer.x25519_public);
         let token_secret =
             siar_crypto::MailboxTokenSecret::establish(&self.identity, &peer_x25519_public);
@@ -669,14 +685,9 @@ impl MessageService {
             id: message_id,
             destination_token,
             created_at: now,
-            // A day is an approximation, not a measured value — same
-            // "chosen conservatively, not tuned against real traffic"
-            // status every other untuned constant in this workspace
-            // carries (see e.g. `siar_crypto::mailbox_token::
-            // EPOCH_LENGTH_MILLIS`'s own doc comment). Long enough that
-            // a recipient checking in once a day still finds it; short
-            // enough that an unclaimed message doesn't sit in a relay's
-            // `TokenMailboxStore` forever.
+            // A day is an approximation, not a measured value — long enough
+            // that a recipient checking in once a day still finds it, short
+            // enough that an unclaimed message doesn't sit in a relay forever.
             expires_at: now + 24 * 60 * 60 * 1000,
             hop_limit: 4,
             priority: siar_domain::MessagePriority::Normal,
@@ -690,8 +701,106 @@ impl MessageService {
                 &WireMessage::TokenMailboxDeposit(envelope),
             )
             .await?;
+        Ok(())
+    }
 
-        Ok(message_id)
+    /// [`send_text_anon`](Self::send_text_anon) for a conversation that lives
+    /// in this app: the message is **stored first** (so it is in the
+    /// timeline and survives a restart), deposited with `relay`, then marked
+    /// `Sent`. A failed deposit leaves it `Failed`, never silently `Local`.
+    ///
+    /// Limit (inherited from the anonymous path): there is no retry. The
+    /// relay accepting the deposit says nothing about the peer ever
+    /// collecting it, so `Sent` here means "handed to the relay", not
+    /// "delivered".
+    pub async fn send_text_via_relay(
+        &self,
+        conversation: ConversationId,
+        peer: &PeerTicket,
+        relay: &PeerTicket,
+        text: MessageText,
+    ) -> Result<MessageId, MessageServiceError> {
+        let message_id = MessageId::new();
+        let now = now_millis();
+        let content = MessageContent::Text(text);
+        let plaintext = postcard::to_allocvec(&content).expect("MessageContent always serializes");
+        let ciphertext = self.session_for(peer).encrypt(&plaintext)?;
+
+        self.messages.insert_if_new(&StoredMessage {
+            message_id,
+            conversation_id: conversation,
+            sender_device: self.device_id,
+            sequence: next_sequence(&self.last_sequence, now),
+            timestamp_millis: now,
+            delivery_state: DeliveryState::Local,
+            payload: ciphertext.clone(),
+        })?;
+        match self
+            .deposit_anon(peer, relay, message_id, ciphertext, now)
+            .await
+        {
+            Ok(()) => {
+                self.messages
+                    .update_delivery_state(message_id, DeliveryState::Sent)?;
+                Ok(message_id)
+            }
+            Err(e) => {
+                // Best effort: the send error is the one worth reporting.
+                let _ = self
+                    .messages
+                    .update_delivery_state(message_id, DeliveryState::Failed);
+                Err(e)
+            }
+        }
+    }
+
+    /// Ask `relay` for anything waiting for us from `peer` (an anonymous,
+    /// token-addressed check-in). Deliveries come back later as
+    /// `TokenMailboxDeposit` frames; hand each to
+    /// [`receive_token_mailbox_envelope`](Self::receive_token_mailbox_envelope).
+    pub async fn send_anonymous_check_in(
+        &self,
+        peer: &PeerTicket,
+        relay: &PeerTicket,
+    ) -> Result<(), MessageServiceError> {
+        let check_in = self.build_anonymous_check_in(peer, now_millis());
+        self.endpoint
+            .send(
+                relay.endpoint_addr.clone(),
+                &WireMessage::AnonymousMailboxCheckIn(check_in),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Decrypt, verify and **store** an item a relay delivered for `peer`.
+    ///
+    /// `Ok(Some(content))` for a new message, `Ok(None)` if it was already
+    /// stored (a re-delivered item is not shown twice). The ciphertext must
+    /// match the envelope's own hash, so a relay cannot swap the body
+    /// without it being noticed here. `sender_device` is the peer's device
+    /// as the caller knows it — an anonymous item has no sender field.
+    pub fn receive_token_mailbox_envelope(
+        &self,
+        conversation: ConversationId,
+        sender_device: DeviceId,
+        peer: &PeerTicket,
+        envelope: &siar_protocol::TokenMailboxEnvelope,
+    ) -> Result<Option<MessageContent>, MessageServiceError> {
+        if *blake3::hash(&envelope.ciphertext).as_bytes() != envelope.payload_hash {
+            return Err(MessageServiceError::Malformed);
+        }
+        let content = self.decrypt_token_mailbox_envelope(peer, envelope)?;
+        let is_new = self.messages.insert_if_new(&StoredMessage {
+            message_id: envelope.id,
+            conversation_id: conversation,
+            sender_device,
+            sequence: envelope.created_at,
+            timestamp_millis: envelope.created_at,
+            delivery_state: DeliveryState::Delivered,
+            payload: envelope.ciphertext.clone(),
+        })?;
+        Ok(is_new.then_some(content))
     }
 
     /// Decrypts one [`siar_protocol::TokenMailboxEnvelope`] received in
@@ -727,6 +836,21 @@ impl MessageService {
         plaintext: Vec<u8>,
         media_type: MediaType,
     ) -> Result<MessageId, MessageServiceError> {
+        self.send_attachment_detailed(conversation, peer, plaintext, media_type)
+            .await
+            .map(|(id, _)| id)
+    }
+
+    /// [`send_attachment`](Self::send_attachment), also returning the
+    /// reference that was sent — what a caller needs to show the message in
+    /// its own timeline (the reference is what the timeline entry holds).
+    pub async fn send_attachment_detailed(
+        &self,
+        conversation: ConversationId,
+        peer: &PeerTicket,
+        plaintext: Vec<u8>,
+        media_type: MediaType,
+    ) -> Result<(MessageId, AttachmentReference), MessageServiceError> {
         let size = BlobSize::parse(plaintext.len() as u64)?;
         let (blob, key) = siar_crypto::encrypt_attachment(&plaintext)?;
         self.blobs.put(blob.hash.as_bytes(), &blob.ciphertext)?;
@@ -739,8 +863,10 @@ impl MessageService {
             thumbnail: None, // plan.md §25 — thumbnail generation is a later refinement
         };
 
-        self.send_attachment_reference(conversation, peer, reference)
-            .await
+        let id = self
+            .send_attachment_reference(conversation, peer, reference.clone())
+            .await?;
+        Ok((id, reference))
     }
 
     /// spec 05 §204: send an attachment that already lives in the file

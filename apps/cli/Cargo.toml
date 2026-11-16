@@ -4,27 +4,16 @@ version.workspace = true
 edition.workspace = true
 license = "AGPL-3.0-or-later"
 rust-version = "1.91"
+description = "Thin command-line client for siar-daemon (all state lives in the daemon)"
 
 [[bin]]
 name = "siar"
 path = "src/main.rs"
 
 [dependencies]
-siar-domain.workspace = true
-siar-crypto.workspace = true
-siar-storage.workspace = true
-siar-transport.workspace = true
-siar-messaging.workspace = true
-siar-protocol.workspace = true
-tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
+siar-runtime.workspace = true
+tokio = { workspace = true, features = ["process", "time", "macros", "rt", "signal"] }
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
-iroh.workspace = true
 uuid.workspace = true
-base64.workspace = true
-postcard.workspace = true
-rand_core = "0.9"
-directories.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }

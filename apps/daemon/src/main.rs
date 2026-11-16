@@ -443,7 +443,12 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
         .as_ref()
         .is_some_and(|p| matches!(p.state(), siar_runtime::node::Provisioning::Unprovisioned));
     let boot_core = match &provisioner {
-        None => true,
+        // Unattended node: its role comes from the local config file.
+        None => local_config
+            .node
+            .role
+            .features()
+            .contains(siar_runtime::node::Feature::Messaging),
         Some(p) => p.allows(siar_runtime::node::Feature::Messaging),
     };
     // The admin's config (if the payload carried one) laid over the local
@@ -481,6 +486,20 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
                     role = %done.role,
                     "provisioned, but this role runs nothing in this binary"
                 ),
+            }
+        }
+    }
+
+    if provisioner.is_none()
+        && local_config.node.role != siar_runtime::node::NodeRole::PersonalDevice
+    {
+        let role = local_config.node.role;
+        match roles::plan_for(role, &data_dir) {
+            roles::RolePlan::Unavailable(why) => {
+                tracing::warn!(%role, "configured role: {why}; nothing is started for it");
+            }
+            _ => {
+                tracing::info!(%role, messaging = boot_core, "running as the configured node role")
             }
         }
     }
@@ -727,10 +746,13 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     // What the role runs beyond the chat core (e.g. the relay engine). Only on
     // a normal start: an enrolment run exits 75 and restarts into the role.
     if !started_unprovisioned {
-        if let Some(siar_runtime::node::Provisioning::Provisioned(done)) =
-            provisioner.as_ref().map(|p| p.state())
-        {
-            if let roles::RolePlan::Child(launch) = roles::plan_for(done.role, &data_dir) {
+        let role = match provisioner.as_ref().map(|p| p.state()) {
+            Some(siar_runtime::node::Provisioning::Provisioned(done)) => Some(done.role),
+            Some(_) => None,
+            None => Some(local_config.node.role),
+        };
+        if let Some(role) = role {
+            if let roles::RolePlan::Child(launch) = roles::plan_for(role, &data_dir) {
                 roles::supervise(&runtime, launch);
             }
         }

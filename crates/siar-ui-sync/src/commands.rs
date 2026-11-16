@@ -11,6 +11,7 @@ use siar_ui_state::AppCommand;
 
 const MAX_TICKET: usize = 4 * 1024;
 const MAX_NAME: usize = 256;
+const MAX_PATH: usize = 4 * 1024;
 const MAX_KEY_PACKAGE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +25,19 @@ pub enum WireCommand {
         text: MessageText,
     },
     OpenConversation(ConversationId),
+    SendAttachment {
+        conversation: ConversationId,
+        path: String,
+    },
+    SendViaRelay {
+        conversation: ConversationId,
+        relay_ticket_text: String,
+        text: MessageText,
+    },
+    CheckRelayMailbox {
+        conversation: ConversationId,
+        relay_ticket_text: String,
+    },
     MarkRead {
         conversation: ConversationId,
         through_sequence: u64,
@@ -60,6 +74,24 @@ pub enum WireCommand {
     ResolveSecurityEvent {
         event_id: u64,
     },
+    CreateGroup {
+        founder: AccountId,
+    },
+    AddGroupMember {
+        conversation: ConversationId,
+        new_member: AccountId,
+        peer_account: AccountId,
+        peer_device: DeviceId,
+        peer_ticket_text: String,
+        key_package_bytes: Vec<u8>,
+    },
+    /// Acts on the Welcome the daemon holds; the window never sees it.
+    AcceptGroupInvite {
+        conversation: ConversationId,
+    },
+    DeclineGroupInvite {
+        conversation: ConversationId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -86,6 +118,26 @@ impl TryFrom<&AppCommand> for WireCommand {
                 text: text.clone(),
             },
             A::OpenConversation(id) => Self::OpenConversation(*id),
+            A::SendViaRelay {
+                conversation,
+                relay_ticket_text,
+                text,
+            } => Self::SendViaRelay {
+                conversation: *conversation,
+                relay_ticket_text: relay_ticket_text.clone(),
+                text: text.clone(),
+            },
+            A::CheckRelayMailbox {
+                conversation,
+                relay_ticket_text,
+            } => Self::CheckRelayMailbox {
+                conversation: *conversation,
+                relay_ticket_text: relay_ticket_text.clone(),
+            },
+            A::SendAttachment { conversation, path } => Self::SendAttachment {
+                conversation: *conversation,
+                path: path.clone(),
+            },
             A::MarkRead {
                 conversation,
                 through_sequence,
@@ -135,9 +187,27 @@ impl TryFrom<&AppCommand> for WireCommand {
             A::ResolveSecurityEvent { event_id } => Self::ResolveSecurityEvent {
                 event_id: *event_id,
             },
-            // Group management and invites need their own synced state first
-            // (see ROADMAP).
-            _ => return Err(WireCommandError::Unsupported),
+            A::CreateGroup { founder } => Self::CreateGroup { founder: *founder },
+            A::AddGroupMember {
+                conversation,
+                new_member,
+                input,
+            } => Self::AddGroupMember {
+                conversation: *conversation,
+                new_member: *new_member,
+                peer_account: input.peer_account,
+                peer_device: input.peer_device,
+                peer_ticket_text: input.peer_ticket_text.clone(),
+                key_package_bytes: input.key_package_bytes.clone(),
+            },
+            A::AcceptGroupInvite { conversation } => Self::AcceptGroupInvite {
+                conversation: *conversation,
+            },
+            A::DeclineGroupInvite { conversation } => Self::DeclineGroupInvite {
+                conversation: *conversation,
+            },
+            // No catch-all: a new `AppCommand` must get a wire form (or an
+            // explicit `Unsupported` arm) before this compiles.
         })
     }
 }
@@ -153,6 +223,26 @@ impl WireCommand {
             Self::PairWithTicket { ticket_text } => {
                 !ticket_text.is_empty() && ticket_text.len() <= MAX_TICKET
             }
+            Self::SendViaRelay {
+                relay_ticket_text,
+                text,
+                ..
+            } => {
+                !relay_ticket_text.is_empty()
+                    && relay_ticket_text.len() <= MAX_TICKET
+                    && MessageText::parse(text.as_str().to_owned()).is_ok()
+            }
+            Self::CheckRelayMailbox {
+                relay_ticket_text, ..
+            } => !relay_ticket_text.is_empty() && relay_ticket_text.len() <= MAX_TICKET,
+            // An absolute path only: a relative one would be resolved against
+            // the daemon's working directory, which the sender cannot know.
+            Self::SendAttachment { path, .. } => {
+                !path.is_empty()
+                    && path.len() <= MAX_PATH
+                    && !path.contains('\0')
+                    && std::path::Path::new(path).is_absolute()
+            }
             Self::SaveContact {
                 display_name,
                 ticket_text,
@@ -165,6 +255,20 @@ impl WireCommand {
                     && key_package_b64
                         .as_ref()
                         .is_none_or(|k| k.len() <= MAX_KEY_PACKAGE)
+            }
+            Self::AddGroupMember {
+                new_member,
+                peer_account,
+                peer_ticket_text,
+                key_package_bytes,
+                ..
+            } => {
+                // One member, one account: the two fields must agree.
+                new_member == peer_account
+                    && !peer_ticket_text.is_empty()
+                    && peer_ticket_text.len() <= MAX_TICKET
+                    && !key_package_bytes.is_empty()
+                    && key_package_bytes.len() <= MAX_KEY_PACKAGE
             }
             _ => true,
         };
@@ -185,6 +289,25 @@ impl WireCommand {
                 AppCommand::SendGroupMessage { conversation, text }
             }
             Self::OpenConversation(id) => AppCommand::OpenConversation(id),
+            Self::SendAttachment { conversation, path } => {
+                AppCommand::SendAttachment { conversation, path }
+            }
+            Self::SendViaRelay {
+                conversation,
+                relay_ticket_text,
+                text,
+            } => AppCommand::SendViaRelay {
+                conversation,
+                relay_ticket_text,
+                text,
+            },
+            Self::CheckRelayMailbox {
+                conversation,
+                relay_ticket_text,
+            } => AppCommand::CheckRelayMailbox {
+                conversation,
+                relay_ticket_text,
+            },
             Self::MarkRead {
                 conversation,
                 through_sequence,
@@ -228,6 +351,30 @@ impl WireCommand {
                 message_id,
                 reference,
             },
+            Self::CreateGroup { founder } => AppCommand::CreateGroup { founder },
+            Self::AddGroupMember {
+                conversation,
+                new_member,
+                peer_account,
+                peer_device,
+                peer_ticket_text,
+                key_package_bytes,
+            } => AppCommand::AddGroupMember {
+                conversation,
+                new_member,
+                input: siar_ui_state::AddMemberInput {
+                    peer_account,
+                    peer_device,
+                    peer_ticket_text,
+                    key_package_bytes,
+                },
+            },
+            Self::AcceptGroupInvite { conversation } => {
+                AppCommand::AcceptGroupInvite { conversation }
+            }
+            Self::DeclineGroupInvite { conversation } => {
+                AppCommand::DeclineGroupInvite { conversation }
+            }
         }
     }
 }
@@ -249,6 +396,15 @@ mod tests {
                 text: text("hi"),
             },
             AppCommand::OpenConversation(c),
+            AppCommand::SendViaRelay {
+                conversation: c,
+                relay_ticket_text: "relay".into(),
+                text: text("later"),
+            },
+            AppCommand::CheckRelayMailbox {
+                conversation: c,
+                relay_ticket_text: "relay".into(),
+            },
             AppCommand::MarkRead {
                 conversation: c,
                 through_sequence: 9,
@@ -276,14 +432,65 @@ mod tests {
     }
 
     #[test]
-    fn group_management_is_reported_unsupported_not_silently_dropped() {
-        let c = AppCommand::DeclineGroupInvite {
-            conversation: ConversationId::new(),
+    fn group_commands_round_trip_and_are_revalidated() {
+        let c = ConversationId::new();
+        let (acct, dev) = (AccountId::new(), DeviceId::new());
+        for app in [
+            AppCommand::CreateGroup { founder: acct },
+            AppCommand::AcceptGroupInvite { conversation: c },
+            AppCommand::DeclineGroupInvite { conversation: c },
+            AppCommand::AddGroupMember {
+                conversation: c,
+                new_member: acct,
+                input: siar_ui_state::AddMemberInput {
+                    peer_account: acct,
+                    peer_device: dev,
+                    peer_ticket_text: "ticket".into(),
+                    key_package_bytes: vec![1, 2, 3],
+                },
+            },
+        ] {
+            let w = WireCommand::try_from(&app).unwrap();
+            let bytes = postcard::to_allocvec(&w).unwrap();
+            let back: WireCommand = postcard::from_bytes(&bytes).unwrap();
+            assert_eq!(
+                format!("{:?}", back.validate().unwrap().into_app()),
+                format!("{app:?}")
+            );
+        }
+        // Oversize or empty member input is refused after decoding.
+        let bad = |ticket: &str, kp: Vec<u8>| WireCommand::AddGroupMember {
+            conversation: c,
+            new_member: acct,
+            peer_account: acct,
+            peer_device: dev,
+            peer_ticket_text: ticket.into(),
+            key_package_bytes: kp,
         };
-        assert_eq!(
-            WireCommand::try_from(&c),
-            Err(WireCommandError::Unsupported)
-        );
+        assert!(bad("", vec![1]).validate().is_err());
+        assert!(bad("t", vec![]).validate().is_err());
+        assert!(bad("t", vec![0; 70_000]).validate().is_err());
+        assert!(bad("t", vec![0; 100]).validate().is_ok());
+        let send = |p: &str| WireCommand::SendAttachment {
+            conversation: c,
+            path: p.into(),
+        };
+        assert!(send("relative/file.png").validate().is_err());
+        assert!(send("").validate().is_err());
+        assert!(send("/tmp/a\0b").validate().is_err());
+        assert!(send(&format!("/{}", "a".repeat(5_000))).validate().is_err());
+        #[cfg(unix)]
+        assert!(send("/tmp/photo.png").validate().is_ok());
+        // new_member and peer_account naming different accounts is refused.
+        let mismatched = WireCommand::AddGroupMember {
+            conversation: c,
+            new_member: AccountId::new(),
+            peer_account: AccountId::new(),
+            peer_device: dev,
+            peer_ticket_text: "t".into(),
+            key_package_bytes: vec![1],
+        };
+        assert!(mismatched.validate().is_err());
     }
 
     #[test]

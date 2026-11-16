@@ -202,6 +202,20 @@ impl InMemoryDeviceDirectory {
         directory
     }
 
+    /// The device (and its signing key) known to live at this transport
+    /// endpoint, if any. Used to decide how much an inbound frame's sender is
+    /// trusted *before* anything is decrypted: a saved contact or a member of
+    /// one of our groups is known here, a stranger is not.
+    pub fn device_at_endpoint(&self, endpoint: &iroh::EndpointId) -> Option<(DeviceId, [u8; 32])> {
+        self.devices
+            .lock()
+            .expect("InMemoryDeviceDirectory lock poisoned")
+            .values()
+            .flatten()
+            .find(|d| d.ticket.endpoint_addr.id == *endpoint)
+            .map(|d| (d.device_id, d.ticket.ed25519_verifying))
+    }
+
     /// Adds `device` to `account`'s known devices. Idempotent by
     /// `device_id`: re-registering the same device (e.g. with a
     /// refreshed `PeerTicket` after the peer's endpoint address

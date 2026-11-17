@@ -47,6 +47,17 @@ impl PeerRegistry {
         conversation
     }
 
+    /// Every paired peer, in a stable order (by conversation id).
+    pub fn all(&self) -> Vec<(ConversationId, PeerTicket)> {
+        let mut v: Vec<_> = self
+            .by_conversation
+            .iter()
+            .map(|(c, t)| (*c, t.clone()))
+            .collect();
+        v.sort_by_key(|(c, _)| c.as_uuid().as_u128());
+        v
+    }
+
     pub fn ticket(&self, conversation: ConversationId) -> Option<&PeerTicket> {
         self.by_conversation.get(&conversation)
     }

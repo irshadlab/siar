@@ -8246,6 +8246,7 @@ dependencies = [
  "iroh",
  "postcard",
  "rand_core 0.9.5",
+ "serde",
  "siar-abuse",
  "siar-backup",
  "siar-crypto",

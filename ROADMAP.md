@@ -650,7 +650,7 @@ MLS state and network identity. The window and the CLI are thin clients of its
 control socket. Nothing had shipped, so the embedded-core desktop path was removed.
 
 **Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 55 (incl. 11 linking + real two-core e2e), `siar-messaging` lib 62; was 34 +
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 59 (incl. 11 linking, 4 link_flow, real two-core e2e), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-messaging` lib 62; was 34 +
 10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
 parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
 runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
@@ -717,18 +717,35 @@ window against a display; Windows named pipes.
   libssl-dev libgtk-3-dev nasm pkg-config` on the build machine).
   `siar-ui-slint` headless interaction tests pass (15 + 27 + 8). **Not done:**
   the window on a real display (no display and too little disk in the sandbox).
-* **Device linking: engine only** (`siar-app-core::linking`, 11 tests): one-time
-  code (80 bits, 5 min, single use, 5 wrong tries destroys it, constant-time
-  compare, forgiving input), at most 4 waiting requests (10 min), nothing issued
-  until a person approves, approval signs a `DeviceCertificate` with the
-  account root key, the new device accepts only a certificate for *its own* id
-  and key signed by the root key it was given. **Not built, and the reason the
-  devices list still shows only this device:** (1) the core has no account root
-  key: `RootIdentityKey` has no export/import, so it cannot be stored or
-  backed up yet; (2) wire messages for request/approval (a `WireMessage`
-  addition plus the relay's match and the admission mapping); (3) the new
-  device adopting the account id; (4) `AppCommand`s + sync + CLI + a UI to show
-  the code and approve; (5) telling contacts about the new device.
+* **Device linking (CLI path, verified live):** `siar link-offer` on the device
+  that created the account prints a one-time code (80 bits, 5 min, single use,
+  5 wrong tries destroys it) and a ticket; on a fresh device `siar link-join
+  <ticket> <code>`; the first device sees the request with the new key's
+  fingerprint in `siar link-pending` and nothing happens until `siar
+  link-approve <device-id>`; approval signs a `DeviceCertificate` with the
+  account root key and the new device accepts only a certificate for its own
+  id and key. Both sides then list each other (`siar devices`, persisted in
+  `linked_devices.bin`). Pieces: `siar-app-core::linking` (rules, 11 tests),
+  `siar-app-core::link_flow` (storage, operations, message handler, 4 tests),
+  `WireMessage::Link` (`siar-protocol::link`), `RootIdentityKey::from_seed/seed`,
+  admission under the tight handshake budget, relay ignores link frames.
+  Verified live with two real daemons: wrong code refused; right code, pending,
+  approve; after restarting the new device its account id equals the first
+  device's and both lists persist; code reuse, a joined device trying to offer,
+  and a device with history trying to join are all refused; `root.key` and the
+  link files are owner-only (0600) and only the first device has a `root.key`.
+  **Known limits:**
+  - Only the device that created the account can approve (sharing the root key
+    between devices is a separate design); a joined device cannot link more.
+  - Joining replaces the account id on disk; the running core keeps the old id
+    until it restarts (the CLI says so). Only a *fresh* device may join.
+  - `root.key` is **not in the identity backup yet**: restoring the first
+    device from a backup loses the ability to link new devices.
+  - No window screen/sync section for linking yet (the `Core` methods exist;
+    wiring them as `AppCommand`s + a Slint screen is UI work, untested here).
+  - Contacts are not told about the new device, so messages from the new device
+    are not yet attributed to the account by others.
+  - A wrong code is refused silently on the new device's CLI, which just waits.
 * **CLI output:** `siar … | head` no longer panics on a closed pipe; any other
   write failure exits 1.
 * **Daemon app surface** gained identity, key-package, groups queries and

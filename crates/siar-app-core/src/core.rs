@@ -37,21 +37,21 @@ use crate::read_marks::{newest_incoming, unread_above, ReadMarks};
 use crate::verification::{key_fingerprint, safety_number, VerificationStore};
 
 pub struct Core {
-    service: Arc<MessageService>,
+    pub(crate) service: Arc<MessageService>,
     group_service: Arc<GroupService>,
     device_directory: Arc<InMemoryDeviceDirectory>,
     contact_repo: Arc<dyn ContactRepository + Send + Sync>,
     security_repo: Arc<dyn SecurityEventRepository + Send + Sync>,
     messages: Arc<dyn MessageRepository + Send + Sync>,
-    local_account: AccountId,
-    hub: Arc<StateHub>,
+    pub(crate) local_account: AccountId,
+    pub(crate) hub: Arc<StateHub>,
     /// Part 13: the one place the core asks "may I do this background work now?".
     /// Messages never go through it.
     power: Arc<PowerGate>,
-    peers: Mutex<PeerRegistry>,
+    pub(crate) peers: Mutex<PeerRegistry>,
     /// This device's signing public key (half of every safety number).
-    local_key: [u8; 32],
-    my_device: siar_domain::DeviceId,
+    pub(crate) local_key: [u8; 32],
+    pub(crate) my_device: siar_domain::DeviceId,
     read_marks: Mutex<ReadMarks>,
     /// Where every peer files its messages TO us (see `history.rs`).
     inbound_conversation: ConversationId,
@@ -74,6 +74,14 @@ pub struct Core {
     mailbox_poll_busy: std::sync::atomic::AtomicBool,
     /// Where the next poll starts in the contact list (fair rotation).
     mailbox_cursor: std::sync::atomic::AtomicUsize,
+    /// Where this device's files live (root key, linked devices, account id).
+    pub(crate) data_dir: std::path::PathBuf,
+    /// Device linking: the open offer and the requests waiting for approval.
+    pub(crate) link_offers: Mutex<crate::linking::LinkOffers>,
+    /// Which endpoint each waiting request came from, to answer it.
+    pub(crate) link_endpoints: Mutex<std::collections::HashMap<DeviceId, iroh::EndpointId>>,
+    /// Set while this (new) device waits to be approved by another.
+    pub(crate) link_join: Mutex<Option<crate::link_flow::JoinWait>>,
 }
 
 /// At most this many contacts are checked per relay per poll; the rest follow
@@ -157,6 +165,10 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
         mailbox_relays: Mutex::new(Vec::new()),
         mailbox_poll_busy: std::sync::atomic::AtomicBool::new(false),
         mailbox_cursor: std::sync::atomic::AtomicUsize::new(0),
+        data_dir: data_dir.to_path_buf(),
+        link_offers: Mutex::new(crate::linking::LinkOffers::new()),
+        link_endpoints: Mutex::new(std::collections::HashMap::new()),
+        link_join: Mutex::new(None),
     });
 
     // ---- seed the UI -----------------------------------------------------------
@@ -218,16 +230,19 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
         });
         // The one device that is certainly ours. Other devices of this account
         // appear here once device linking is wired into the core.
-        s.devices.set_devices(vec![DeviceSecurityView {
-            id: device_id,
-            display_name: crate::host::device_label(),
-            kind: crate::host::device_kind(),
-            status: DeviceTrustState::Trusted,
-            added_at_millis: identity_created_at_millis,
-            last_active_millis: None,
-            current_device: true,
-            security_flags: Vec::new(),
-        }]);
+        s.devices.set_devices(crate::link_flow::device_list(
+            DeviceSecurityView {
+                id: device_id,
+                display_name: crate::host::device_label(),
+                kind: crate::host::device_kind(),
+                status: DeviceTrustState::Trusted,
+                added_at_millis: identity_created_at_millis,
+                last_active_millis: None,
+                current_device: true,
+                security_flags: Vec::new(),
+            },
+            &crate::link_flow::load_linked(&data_dir),
+        ));
         for (device, account, safety) in seeded_safety {
             core.apply_safety(s, device, account, safety, true);
         }
@@ -1503,6 +1518,10 @@ async fn incoming_loop(
             // The answer to an anonymous check-in we sent.
             WireMessage::TokenMailboxDeposit(item) => {
                 core.accept_mailbox_item(&frame.from, &item);
+                continue;
+            }
+            WireMessage::Link(message) => {
+                core.handle_link_message(frame.from, message).await;
                 continue;
             }
             // Relay-only traffic: not an ordinary chat client's job.

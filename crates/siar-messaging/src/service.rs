@@ -26,7 +26,7 @@ use siar_storage::{BlobRepository, MessageRepository, OutboxRepository, StoredMe
 use siar_transport::{PeerTransport, SiarEndpoint};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 /// §33/Phase 3's own append retry budget for this crate's real call
@@ -709,10 +709,12 @@ impl MessageService {
     /// timeline and survives a restart), deposited with `relay`, then marked
     /// `Sent`. A failed deposit leaves it `Failed`, never silently `Local`.
     ///
-    /// Limit (inherited from the anonymous path): there is no retry. The
-    /// relay accepting the deposit says nothing about the peer ever
-    /// collecting it, so `Sent` here means "handed to the relay", not
-    /// "delivered".
+    /// The deposit is retried a few times (see
+    /// [`RELAY_DEPOSIT_RETRY_DELAYS`]) before the message is marked `Failed`.
+    /// Limit: a message that is `Failed` after those attempts is not retried
+    /// again later (not even after a restart), and the relay accepting a
+    /// deposit says nothing about the peer ever collecting it, so `Sent`
+    /// means "handed to the relay", not "delivered".
     pub async fn send_text_via_relay(
         &self,
         conversation: ConversationId,
@@ -735,9 +737,14 @@ impl MessageService {
             delivery_state: DeliveryState::Local,
             payload: ciphertext.clone(),
         })?;
-        match self
-            .deposit_anon(peer, relay, message_id, ciphertext, now)
-            .await
+        // A relay that is briefly unreachable (a network switch, a restart)
+        // should not turn a message into a failure: retry a few times with
+        // growing pauses before giving up. Same envelope (same id) every time,
+        // so a relay that did receive an earlier attempt just sees a repeat.
+        match retry_after(RELAY_DEPOSIT_RETRY_DELAYS, || {
+            self.deposit_anon(peer, relay, message_id, ciphertext.clone(), now)
+        })
+        .await
         {
             Ok(()) => {
                 self.messages
@@ -1587,5 +1594,97 @@ mod sequence_tests {
         let last = AtomicU64::new(0);
         assert_eq!(next_sequence(&last, 100), 100);
         assert_eq!(next_sequence(&last, 200), 200);
+    }
+}
+
+/// Pauses between attempts to leave a message at a relay: 4 attempts in all,
+/// about 9 s of waiting at most. Short on purpose — this runs while the user
+/// is looking at a "sending" message.
+pub const RELAY_DEPOSIT_RETRY_DELAYS: &[Duration] = &[
+    Duration::from_millis(500),
+    Duration::from_secs(2),
+    Duration::from_secs(6),
+];
+
+/// Run `op`; if it fails, wait for each delay in `delays` and try again. The
+/// last error is returned if every attempt fails.
+async fn retry_after<T, E, F, Fut>(delays: &[Duration], mut op: F) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    let mut result = op().await;
+    for delay in delays {
+        if result.is_ok() {
+            break;
+        }
+        tokio::time::sleep(*delay).await;
+        result = op().await;
+    }
+    result
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::retry_after;
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    const TINY: &[Duration] = &[Duration::from_millis(1), Duration::from_millis(1)];
+
+    #[tokio::test]
+    async fn a_first_success_makes_one_attempt() {
+        let calls = Cell::new(0);
+        let r: Result<u8, &str> = retry_after(TINY, || {
+            calls.set(calls.get() + 1);
+            async { Ok(7) }
+        })
+        .await;
+        assert_eq!((r, calls.get()), (Ok(7), 1));
+    }
+
+    #[tokio::test]
+    async fn it_retries_until_it_works() {
+        let calls = Cell::new(0);
+        let r: Result<u8, &str> = retry_after(TINY, || {
+            calls.set(calls.get() + 1);
+            let n = calls.get();
+            async move {
+                if n < 3 {
+                    Err("down")
+                } else {
+                    Ok(9)
+                }
+            }
+        })
+        .await;
+        assert_eq!((r, calls.get()), (Ok(9), 3));
+    }
+
+    #[tokio::test]
+    async fn it_gives_up_after_the_delays_run_out_with_the_last_error() {
+        let calls = Cell::new(0);
+        let r: Result<u8, u32> = retry_after(TINY, || {
+            calls.set(calls.get() + 1);
+            let n = calls.get();
+            async move { Err(n) }
+        })
+        .await;
+        assert_eq!(
+            (r, calls.get()),
+            (Err(3), 3),
+            "1 try + 2 retries, last error kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_delays_means_exactly_one_attempt() {
+        let calls = Cell::new(0);
+        let r: Result<u8, &str> = retry_after(&[], || {
+            calls.set(calls.get() + 1);
+            async { Err("no") }
+        })
+        .await;
+        assert_eq!((r, calls.get()), (Err("no"), 1));
     }
 }

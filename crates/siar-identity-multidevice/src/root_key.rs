@@ -26,6 +26,22 @@ impl RootIdentityKey {
         }
     }
 
+    /// Rebuild a root key from its 32-byte seed (the inverse of [`seed`](Self::seed)).
+    /// For loading a key this device stored earlier.
+    #[must_use]
+    pub fn from_seed(seed: &[u8; 32]) -> Self {
+        Self {
+            signing_key: SigningKey::from_bytes(seed),
+        }
+    }
+
+    /// The 32-byte seed, wiped from memory when dropped. Whoever holds it can
+    /// sign certificates for the account: store it like a private key.
+    #[must_use]
+    pub fn seed(&self) -> zeroize::Zeroizing<[u8; 32]> {
+        zeroize::Zeroizing::new(self.signing_key.to_bytes())
+    }
+
     pub fn root_public_key(&self) -> RootPublicKey {
         RootPublicKey(self.signing_key.verifying_key().to_bytes())
     }
@@ -62,5 +78,19 @@ impl RootPublicKey {
         verifying_key
             .verify(message, &signature)
             .map_err(|_| IdentityError::InvalidSignature)
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    #[test]
+    fn a_stored_seed_rebuilds_the_same_key() {
+        let a = RootIdentityKey::generate();
+        let b = RootIdentityKey::from_seed(&a.seed());
+        assert_eq!(a.root_public_key(), b.root_public_key());
+        let sig = a.sign(b"hello");
+        assert!(b.root_public_key().verify(b"hello", &sig).is_ok());
     }
 }

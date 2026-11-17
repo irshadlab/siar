@@ -587,6 +587,11 @@ async fn main() -> Result<()> {
         let mut just_received: Option<siar_domain::MessageId> = None;
 
         match frame.message {
+            // Device linking is between a person's own devices; a relay is
+            // never a party to it.
+            WireMessage::Link(_) => {
+                tracing::debug!(from = ?frame.from, "ignoring a device-link message");
+            }
             WireMessage::V1(_envelope) => {
                 // `MessageService::handle_incoming` needs a `&PeerTicket`
                 // known in advance to decrypt anything — this node can't

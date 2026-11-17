@@ -22,9 +22,9 @@ use siar_protocol::WireMessage;
 use siar_storage::{ContactRepository, MessageRepository, SecurityEventRepository};
 use siar_ui_model::{ContactSafety, NoticeLevel, StateHub, VerificationState};
 use siar_ui_state::{
-    AppCommand, ConversationKind, ConversationSummary, GroupSummary, IdentityKeyHealth,
-    NetworkState, OwnIdentityView, PendingInvite, SavedContact, SecurityDiagnosticDetail,
-    SecurityEventAction, SecurityEventKind, PAGE_SIZE,
+    AppCommand, ConversationKind, ConversationSummary, DeviceSecurityView, DeviceTrustState,
+    GroupSummary, IdentityKeyHealth, NetworkState, OwnIdentityView, PendingInvite, SavedContact,
+    SecurityDiagnosticDetail, SecurityEventAction, SecurityEventKind, PAGE_SIZE,
 };
 use tokio::sync::mpsc;
 
@@ -216,6 +216,18 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
                 my_ticket.endpoint_addr.id.fmt_short()
             ),
         });
+        // The one device that is certainly ours. Other devices of this account
+        // appear here once device linking is wired into the core.
+        s.devices.set_devices(vec![DeviceSecurityView {
+            id: device_id,
+            display_name: crate::host::device_label(),
+            kind: crate::host::device_kind(),
+            status: DeviceTrustState::Trusted,
+            added_at_millis: identity_created_at_millis,
+            last_active_millis: None,
+            current_device: true,
+            security_flags: Vec::new(),
+        }]);
         for (device, account, safety) in seeded_safety {
             core.apply_safety(s, device, account, safety, true);
         }

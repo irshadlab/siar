@@ -10,6 +10,8 @@
 //! siar pair <ticket>                      # prints the conversation id
 //! siar send <conversation-id|ticket> <text>
 //! siar send-file <conversation-id|ticket> <path>
+//! siar devices | link-offer | link-pending | link-approve <id> | link-reject <id>
+//! siar link-join <ticket> <code>          # on a fresh device
 //! siar send-anon <conversation-id|ticket> <relay-ticket> <text>
 //! siar check-mailbox-anon <conversation-id|ticket> <relay-ticket>
 //! siar messages <conversation-id>
@@ -137,6 +139,33 @@ async fn run(args: Args) -> Result<()> {
             if shown == before {
                 out!("nothing waiting");
             }
+        }
+        Command::Devices => print_lines(&d.query("devices", "").await?),
+        Command::LinkOffer => {
+            let reply = d.command("link-offer", "").await?;
+            let (code, ticket) = reply.split_once('\n').unwrap_or((&reply, ""));
+            out!("code:   {code}");
+            out!("ticket: {ticket}");
+            out!("On the new device: siar link-join <ticket> <code>   (valid for 5 minutes)");
+        }
+        Command::LinkPending => print_lines(&d.query("link-pending", "").await?),
+        Command::LinkApprove { device_id } => {
+            out!("{}", d.command("link-approve", &device_id).await?);
+        }
+        Command::LinkReject { device_id } => {
+            out!("{}", d.command("link-reject", &device_id).await?);
+        }
+        Command::LinkJoin { ticket, code } => {
+            d.command("link-join", &format!("{ticket} {code}")).await?;
+            out!("request sent; waiting for the other device to approve it…");
+            for _ in 0..60 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if d.query("link-state", "").await? == "restart-needed" {
+                    out!("linked. Restart siar-daemon to finish joining the account.");
+                    return Ok(());
+                }
+            }
+            anyhow::bail!("not approved yet; approve it on the other device (`siar link-approve`), then check `siar devices`");
         }
         Command::Listen { conversation } => listen(&mut d, &conversation).await?,
         Command::GroupCreate => {

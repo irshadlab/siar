@@ -96,6 +96,9 @@ pub fn quota_for_wire(msg: &WireMessage) -> (QuotaKind, usize, u16) {
         WireMessage::Mesh(m) => (QuotaKind::DtnBundle, m.ciphertext.len(), 1),
         WireMessage::TokenMailboxDeposit(t) => (QuotaKind::DtnBundle, t.ciphertext.len(), 1),
         WireMessage::MailboxCheckIn(_) => (QuotaKind::SignatureVerify, 256, 1),
+        // Rare, small, and the most security-sensitive thing a stranger can
+        // send: it shares the (tight) handshake budget.
+        WireMessage::Link(_) => (QuotaKind::Handshake, 1024, 1),
         WireMessage::AnonymousMailboxCheckIn(_) | WireMessage::RouteAdvertisement(_) => {
             (QuotaKind::DtnBundle, 128, 1)
         }
@@ -455,5 +458,25 @@ mod tests {
             .filter(|_| g.admit_wire(&B, Standing::Contact, &bundle()).is_ok())
             .count();
         assert_eq!(known, 150);
+    }
+
+    #[test]
+    fn device_link_messages_share_the_tight_handshake_budget() {
+        use siar_protocol::link::LinkMessage;
+        let (q, _, _) = quota_for_wire(&WireMessage::Link(LinkMessage::Denied));
+        assert_eq!(q, QuotaKind::Handshake);
+        // A stranger spraying link requests is cut off after a few.
+        let g = guard();
+        let admitted = (0..50)
+            .filter(|_| {
+                g.admit_wire(
+                    &A,
+                    Standing::Unknown,
+                    &WireMessage::Link(LinkMessage::Denied),
+                )
+                .is_ok()
+            })
+            .count();
+        assert!(admitted <= 4, "admitted {admitted}");
     }
 }

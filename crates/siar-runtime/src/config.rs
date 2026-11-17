@@ -123,6 +123,29 @@ pub struct NodeSection {
 
 pub const MAX_ADMIN_KEYS: usize = 16;
 
+/// Collect relay-mailbox items on a schedule (local file only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MailboxSection {
+    /// Relay tickets to collect from. Empty (the default) = never poll on a
+    /// schedule; `siar check-mailbox-anon` still works on demand.
+    pub relays: Vec<String>,
+    /// Seconds between collections (60 to 86 400).
+    pub interval_secs: u64,
+}
+
+impl Default for MailboxSection {
+    fn default() -> Self {
+        Self {
+            relays: Vec::new(),
+            interval_secs: 300,
+        }
+    }
+}
+
+pub const MAX_MAILBOX_RELAYS: usize = 8;
+pub const MAX_RELAY_TICKET_CHARS: usize = 4096;
+
 /// Remote administration (`comm-admin/1`, spec 16 §66-§71). **Local file
 /// only**, like `[node]`: a provisioning payload may not set it, otherwise a
 /// payload could appoint its own operators.
@@ -166,6 +189,7 @@ pub struct RuntimeConfig {
     pub secrets: SecretsConfig,
     pub node: NodeSection,
     pub admin: AdminSection,
+    pub mailbox: MailboxSection,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -201,6 +225,25 @@ impl RuntimeConfig {
                  the role comes from the signed provisioning payload"
                     .to_owned(),
             );
+        }
+        if self.mailbox.relays.len() > MAX_MAILBOX_RELAYS {
+            p.push(format!(
+                "mailbox.relays has {} entries (max {MAX_MAILBOX_RELAYS})",
+                self.mailbox.relays.len()
+            ));
+        }
+        if self
+            .mailbox
+            .relays
+            .iter()
+            .any(|r| r.is_empty() || r.len() > MAX_RELAY_TICKET_CHARS)
+        {
+            p.push(format!(
+                "mailbox.relays entries must be 1 to {MAX_RELAY_TICKET_CHARS} characters"
+            ));
+        }
+        if !(60..=86_400).contains(&self.mailbox.interval_secs) {
+            p.push("mailbox.interval_secs must be between 60 and 86400".to_owned());
         }
         if self.node.admin_keys.len() > MAX_ADMIN_KEYS {
             p.push(format!(
@@ -365,6 +408,7 @@ pub fn plan_reload(old: &RuntimeConfig, new: &RuntimeConfig) -> ReloadPlan {
     cold(old.secrets != new.secrets, "secrets");
     cold(old.node != new.node, "node");
     cold(old.admin != new.admin, "admin");
+    cold(old.mailbox != new.mailbox, "mailbox");
     p
 }
 
@@ -667,5 +711,26 @@ mod tests {
         // The default role next to require_provisioning is fine.
         let ok = format!("[node]\nrequire_provisioning = true\nadmin_keys = [\"{key}\"]\n");
         assert!(RuntimeConfig::parse(&ok).is_ok());
+    }
+
+    #[test]
+    fn mailbox_polling_is_off_by_default_and_bounded() {
+        let d = RuntimeConfig::parse("").unwrap();
+        assert!(d.mailbox.relays.is_empty());
+        assert_eq!(d.mailbox.interval_secs, 300);
+        let ok = RuntimeConfig::parse("[mailbox]\nrelays = [\"abc\"]\ninterval_secs = 120\n");
+        assert_eq!(ok.unwrap().mailbox.relays, vec!["abc".to_owned()]);
+        for bad in [
+            "[mailbox]\ninterval_secs = 59\n",
+            "[mailbox]\ninterval_secs = 86401\n",
+            "[mailbox]\nrelays = [\"\"]\n",
+            "[mailbox]\nrelays = [\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]\n",
+            "[mailbox]\nunknown = 1\n",
+        ] {
+            assert!(RuntimeConfig::parse(bad).is_err(), "{bad}");
+        }
+        let a = RuntimeConfig::parse("").unwrap();
+        let b = RuntimeConfig::parse("[mailbox]\nrelays = [\"abc\"]\n").unwrap();
+        assert_eq!(plan_reload(&a, &b).restart_required, vec!["mailbox"]);
     }
 }

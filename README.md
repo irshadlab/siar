@@ -65,6 +65,7 @@
 - [Empirical Evaluation & Distributed Telemetry Report](#empirical-evaluation--distributed-telemetry-report)
 - [License & Dual-Tier Model](#license--dual-tier-model)
 - [Contributing](#contributing)
+- [Special Thanks & Open-Source Appreciation](#special-thanks--open-source-appreciation)
 
 ---
 
@@ -1197,10 +1198,28 @@ cargo fuzz run decode_frame
 cargo fuzz run decode_blob_frame
 ```
 
-### Kubernetes & Podman Distributed Multi-Device Test Suite
+### Distributed Verification Infrastructure: Kiri, Kubernetes & Podman
+
+To empirically test how SIAR behaves under real-world, multi-user, multi-device distributed conditions, we deliberately chose a triad of complementary tools (**Kiri**, **Kubernetes**, and **Podman**):
+
+#### Why This Triad Was Deliberately Chosen for SIAR:
+
+1. **Kiri (`/usr/bin/kiri`) — Low-Overhead Micro-VM Virtualization & Fast QUIC Networking**:
+   - **Host Resource Conservation**: Standard local Kubernetes clusters (Minikube, Kind) consume 1.5–2.0 GB of host RAM for the control plane alone. Kiri runs embedded `k3s` inside an optimized micro-VM with near-zero idle overhead, allowing 500+ users (1,100 devices) to run comfortably on a standard 7.5 GB laptop.
+   - **High-Throughput Kernel Bridged UDP**: Rootless container bridges frequently throttle raw P2P UDP packet bursts. Kiri provides high-speed kernel network virtualization, enabling Iroh QUIC streams (`ALPN: messenger/msg/1`) to route with native-speed, sub-millisecond latencies across pod boundaries.
+   - **Zero-Drift Workspace Mounting**: Seamlessly shares the host project workspace and `/target/debug/` into Kubernetes without file permission collisions or virtiofs sync lag.
+
+2. **Kubernetes — Production Distributed Orchestration Primitives**:
+   - **StatefulSet Sharding**: Overcomes the Kubernetes 110 pod-per-node kubelet ceiling. Instead of crashing the node with 1,100 raw pods, it groups 500 accounts into 5 sharded worker pods (100 users / 220 devices per pod).
+   - **Headless Service DNS Discovery**: `siar-mesh` creates deterministic cluster-internal DNS endpoints (`siar-shard-*.siar-mesh`) so peer daemons can discover and pair without third-party bootstrap servers.
+   - **Deterministic Lifecycle**: Standardized `requests` and `limits` enforce exact CPU/RAM budgets per shard.
+
+3. **Podman — Fast, Daemonless OCI Builds & Lightweight Smoke Tests**:
+   - **Daemonless OCI Image Builds**: Builds minimal Linux base images (`archlinux`/Debian) with zero daemon lock-in via `podman build`.
+   - **Rapid 2-Node Smoke Testing**: `podman kube play` provides fast, control-plane-free verification for local 2-to-3 user scripts without spinning up an entire Kubernetes cluster.
 
 ```bash
-# Run multi-user & multi-device P2P verification across Podman Kubernetes pods
+# Run 2-user & 3-user multi-device smoke tests via Podman
 bash scripts/run-multi-device-test.sh
 
 # Run 500-user / 1,100-device distributed scale benchmark across Kiri / Kubernetes shards
@@ -1451,6 +1470,50 @@ All contributions to SIAR are governed by **[CONTRIBUTING.md](CONTRIBUTING.md)**
 4. Preserve strict boundary isolation — core crates under `crates/` must remain pure-Rust without mandatory C-library linkages.
 5. Platform-specific hardware integration must be strictly isolated in dedicated crates (`siar-media-android`, `siar-transport-ble-android`).
 6. **Follow Specification Governance**: Core domain, protocol, transport, routing, and daemon development must strictly follow [`sys-arch/`](sys-arch/); all UI, desktop/mobile interaction, visual state machines, and styling must strictly follow [`ui-ux/`](ui-ux/). Pull requests must cite their governing specification chapters.
+
+</details>
+
+---
+
+## Special Thanks & Open-Source Appreciation
+
+SIAR stands on the shoulders of giants. We express our deepest gratitude and appreciation to the open-source Rust community and the maintainers of the foundational crates that make sovereign, post-infrastructure peer-to-peer communication possible:
+
+### Major Foundational Crates
+
+| Project / Crate | Maintainers / Organization | Core Role in SIAR | Official Site | Source Repository |
+| :--- | :--- | :--- | :--- | :--- |
+| **Iroh** (`iroh`) | **n0 computer** | P2P QUIC transport engine, DERP relay coordination & NAT hole-punching | [iroh.computer](https://iroh.computer) | [GitHub](https://github.com/n0-computer/iroh) |
+| **OpenMLS** (`openmls`) | **OpenMLS Team** | RFC 9420 Messaging Layer Security (MLS) Tree-KEM group ratchet | [openmls.tech](https://openmls.tech) | [GitHub](https://github.com/openmls/openmls) |
+| **Slint** (`slint`) | **Slint UI Team** | Memory-efficient, declarative native desktop GUI toolkit | [slint.dev](https://slint.dev) | [GitHub](https://github.com/slint-ui/slint) |
+| **Tokio** (`tokio`) | **Tokio Contributors** | High-performance asynchronous runtime & multi-threaded task scheduling | [tokio.rs](https://tokio.rs) | [GitHub](https://github.com/tokio-rs/tokio) |
+| **Dalek Cryptography** (`ed25519-dalek`, `x25519-dalek`) | **Dalek Cryptography** | Curve25519 digital signatures, ECDH key agreements, and scalar math | [dalek.rs](https://dalek.rs) | [GitHub](https://github.com/dalek-cryptography) |
+| **RustCrypto** (`chacha20poly1305`, `argon2`, `zeroize`) | **RustCrypto Team** | Pure-Rust AEAD authenticated ciphers, memory-hard KDF, and secure key scrubbing | [rustcrypto.org](https://github.com/RustCrypto) | [GitHub](https://github.com/RustCrypto) |
+| **Postcard** (`postcard`) | **James Munns** | Zero-overhead, `#![no_std]` binary serialization format for wire envelopes | [jamesmunns.com](https://jamesmunns.com) | [GitHub](https://github.com/jamesmunns/postcard) |
+| **BLAKE3** (`blake3`) | **Jack O'Connor et al.** | Cryptographic tree hashing, key derivation, and content-addressed blobs | [blake3.io](https://blake3.io) | [GitHub](https://github.com/BLAKE3-team/BLAKE3) |
+| **Serde** (`serde`) | **Erick Tryzelaar & David Tolnay** | Zero-copy serialization & deserialization framework | [serde.rs](https://serde.rs) | [GitHub](https://github.com/serde-rs/serde) |
+| **Stoolap** (`stoolap`) | **Guregu** | Serverless, pure-Rust transactional embedded SQL storage engine | [crates.io/stoolap](https://crates.io/crates/stoolap) | [GitHub](https://github.com/guregu/stoolap) |
+| **Anyhow & Thiserror** | **David Tolnay** | Ergonomic, composable domain error handling across all 50 crates | [github.com/dtolnay](https://github.com/dtolnay) | [GitHub](https://github.com/dtolnay/anyhow) |
+
+<details>
+<summary><strong>Expand All Supporting, Utility & Specialized Crates</strong></summary>
+
+| Crate | Purpose in SIAR | Official Site / Source Link |
+| :--- | :--- | :--- |
+| **`blsful`** | BLS12-381 threshold signatures & verifiable credentials | [GitHub (mikelodder7/blsful)](https://github.com/mikelodder7/blsful) |
+| **`zkryptium`** | BBS+ zero-knowledge proofs and selective disclosure | [GitHub (hyperledger-archives/ursa)](https://github.com/hyperledger-archives/ursa) |
+| **`tracing` / `tracing-subscriber`** | Structured diagnostics, contextual logging, and distributed wire tracing | [tokio.rs](https://tokio.rs) / [GitHub](https://github.com/tokio-rs/tracing) |
+| **`uuid`** | Fast RFC 4122 canonical UUID generation for accounts and devices | [GitHub (uuid-rs/uuid)](https://github.com/uuid-rs/uuid) |
+| **`directories`** | Standards-compliant XDG and platform path resolution across Linux/Win/macOS | [GitHub (dirs-dev/directories-rs)](https://github.com/dirs-dev/directories-rs) |
+| **`proptest`** | Generative property-based fuzz testing verifying protocol state invariants | [GitHub (proptest-rs/proptest)](https://github.com/proptest-rs/proptest) |
+| **`bytes`** | Zero-copy byte slices and network buffer management | [GitHub (tokio-rs/bytes)](https://github.com/tokio-rs/bytes) |
+| **`rpassword`** | Hidden terminal passphrase prompts for encrypted backup vaults | [GitHub (conradkleinespel/rpassword)](https://github.com/conradkleinespel/rpassword) |
+| **`clap`** | Declarative CLI argument parsing powering `siar` and `siar-daemon` | [clap.rs](https://clap.rs) / [GitHub](https://github.com/clap-rs/clap) |
+| **`rand` / `rand_core`** | Cryptographically secure pseudo-random number generation | [rust-random.github.io](https://rust-random.github.io) / [GitHub](https://github.com/rust-random/rand) |
+| **`base64`** | RFC 4648 base64 encoding for storage payload representations | [GitHub (marshallpierce/rust-base64)](https://github.com/marshallpierce/rust-base64) |
+| **`ron`** | Rusty Object Notation for lossy-free administrative IPC responses | [GitHub (ron-rs/ron)](https://github.com/ron-rs/ron) |
+| **`async-trait`** | Idiomatic async trait definitions across core transport interfaces | [GitHub (dtolnay/async-trait)](https://github.com/dtolnay/async-trait) |
+| **`guppy` / `cargo_metadata`** | Dependency graph query engine powering `xtask` supply-chain audits | [GitHub (facebookincubator/cargo-guppy)](https://github.com/facebookincubator/cargo-guppy) |
 
 </details>
 

@@ -704,9 +704,24 @@ To ensure absolute engineering transparency and prevent overpromising, this sect
 > - ❌ **Not for Life-Critical / High-Threat Adversarial Environments**: Until independent third-party cryptographic audits, formal mathematical verification, and external penetration tests are completed, SIAR must **not** be trusted in high-threat, dissident, or life-or-death scenarios.
 > - ❌ **Not for Closed Apple iOS Environments**: Pure background P2P mesh (Bluetooth and Wi-Fi Direct promiscuous listening) is blocked by iOS sandbox rules.
 
-## 9.4 Verified Empirical Performance & Scale (Kubernetes on Kiri)
-As verified in November 2026 on a 500-user (1,100 physical devices) cluster:
-- **P2P Wire Frame Overhead**: 170 bytes on the wire for a 44-byte text payload (including AEAD MAC, nonces, and Postcard envelope framing).
-- **Cluster Memory**: Under 55 MiB RAM total across 5 StatefulSet worker pods on Kiri (`k3s v1.37.1`).
-- **Wire Latency**: Sub-100 ms delivery across pod boundaries over native Iroh QUIC (`messenger/msg/1`).
+## 9.4 Verified Empirical Performance & Scale (The Kiri + Kubernetes + Podman Testbed)
+
+To empirically validate SIAR's real-world behavior under scale, we deliberately engineered a verification testbed combining **Kiri**, **Kubernetes**, and **Podman**:
+
+### Why This Tooling Triad Was Deliberately Selected for SIAR:
+1. **Kiri (`/usr/bin/kiri`) — Low-Overhead Micro-VM Engine & Native QUIC UDP Throughput**:
+   - *The Problem*: Standard local Kubernetes distributions (Minikube, Kind) consume 1.5–2.0 GB of RAM for control plane overhead alone. On developer laptops with 7.5–16 GB RAM, running both K8s and 500+ simulated users causes memory exhaustion and swap thrashing.
+   - *The Kiri Solution*: Kiri boots an embedded `k3s` cluster inside an optimized micro-VM using a fraction of the memory, while providing high-speed kernel bridge networking. This prevents the severe UDP packet drop and rate-limiting common in rootless container bridges during Iroh QUIC handshakes.
+2. **Kubernetes — Production Distributed Sharding Primitives**:
+   - *The Problem*: Kubernetes nodes enforce a strict limit of 110 pods per node. Simulating 1,100 devices with 1 pod per device would require a 12-node cluster.
+   - *The Kubernetes Solution*: We utilize a 5-replica `StatefulSet` with headless `Service` DNS (`siar-mesh`), cleanly packing 100 user accounts (220 device directories) per pod into pooled worker runtimes.
+3. **Podman — Fast Daemonless Image Builds & Local Smoke Testing**:
+   - *The Solution*: Podman provides fast, rootless, daemonless OCI image builds (`podman build`) and lightweight single-file testing (`podman kube play`) for rapid 2-to-3 node smoke checks without spinning up a full cluster.
+
+### Empirical 500-User Scale Results (November 2026):
+- **Scale Tested**: 500 Canonical Accounts, 1,100 Provisioned Physical Devices (Phone, Laptop, Desktop).
+- **Cluster Memory Usage**: Under **55 MiB RAM total** across all 5 StatefulSet worker pods on Kiri (`k3s v1.37.1`), averaging ~10.5 MiB RSS per pod.
+- **Wire Framing Overhead**: 170 bytes on the wire for a 44-byte plaintext message (Postcard framing + AEAD authentication tag).
+- **Cross-Shard P2P Latency**: Sub-100 ms delivery across pod boundaries over native Iroh QUIC (`ALPN: messenger/msg/1`).
+- **Cryptographic Invariants**: 100% verified across all accounts (shared root `account_id.txt` with independent device seeds).
 

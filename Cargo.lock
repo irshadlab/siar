@@ -8260,6 +8260,7 @@ dependencies = [
  "siar-transport",
  "siar-ui-model",
  "siar-ui-state",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "uuid",

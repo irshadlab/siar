@@ -650,7 +650,7 @@ MLS state and network identity. The window and the CLI are thin clients of its
 control socket. Nothing had shipped, so the embedded-core desktop path was removed.
 
 **Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 32 +
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 34 +
 10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
 parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
 runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
@@ -719,9 +719,10 @@ window against a display; Windows named pipes.
   attached window. The daemon refuses a `CreateGroup` whose founder is not its
   own account and an `AddGroupMember` whose two account fields differ. Own identity, diagnostics, devices and attachment previews are now
   synced too (previews: one section each, max 64, JPEG over 128 KiB becomes an
-  honest "too large" failure, never a truncated image). `devices` is still never
-  populated by the core, so that section is empty until multi-device linking
-  fills it. A full resync now also clears security events, groups, invites and
+  honest "too large" failure, never a truncated image). the devices section now lists the one device that is
+  certainly ours (this one: host name, trusted, current). Other devices of the
+  account appear once device linking (`siar-identity-multidevice`, still without
+  a real call site in the core) is wired in. A full resync now also clears security events, groups, invites and
   the new sections (before, a daemon restart could leave stale ones in the
   window). New `AppCommand::SendAttachment` (absolute path only, regular file,
   within the attachment limit). `apps/desktop` still depends on `siar-app-core` for path

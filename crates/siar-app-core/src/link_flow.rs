@@ -1,0 +1,592 @@
+//! Device linking inside the core: storage, the offer/approve/join
+//! operations, and the handler for `WireMessage::Link`. The rules (codes,
+//! expiry, approval, certificates) live in [`crate::linking`]; this module
+//! connects them to disk, the transport and the device list.
+//!
+//! **Who can link.** The device that created the account holds the account's
+//! root key (`root.key`, created the first time it opens an offer) and is the
+//! only one that can approve new devices. A device that was itself linked
+//! holds no root key and cannot approve others — sharing the root key between
+//! devices is a separate design (it is what the spec's "any full-trust
+//! device" policy would need) and is not attempted here.
+//!
+//! **Joining.** Only a fresh device may join (no paired peers, no groups, not
+//! already linked): joining replaces the account id, and a device with
+//! history under the old id would orphan it. The new account id is written to
+//! `account_id.txt`; the running core keeps the old id until it restarts,
+//! which the user is told.
+
+use std::path::{Path, PathBuf};
+use std::sync::PoisonError;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use siar_domain::{AccountId, DeviceId};
+use siar_identity_multidevice::certificate::DeviceCertificate;
+use siar_identity_multidevice::root_key::{RootIdentityKey, RootPublicKey};
+use siar_messaging::PeerTicket;
+use siar_protocol::link::LinkMessage;
+use siar_protocol::WireMessage;
+use siar_ui_model::NoticeLevel;
+use siar_ui_state::{DeviceSecurityFlag, DeviceSecurityView, DeviceTrustState};
+
+use crate::core::Core;
+use crate::linking::{accept_certificate, LinkError, LinkRequest};
+
+const ROOT_KEY_FILE: &str = "root.key";
+const LINKED_FILE: &str = "linked_devices.bin";
+const JOINED_FILE: &str = "joined_account.bin";
+const ACCOUNT_FILE: &str = "account_id.txt";
+/// How long a joining device waits for a person to approve it.
+pub const JOIN_WAIT: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkedDevice {
+    pub device_id: DeviceId,
+    pub name: String,
+    pub public_key: [u8; 32],
+    pub added_at_millis: u64,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct LinkedFile {
+    devices: Vec<LinkedDevice>,
+}
+
+/// What a joined device remembers about the account it joined.
+#[derive(Serialize, Deserialize)]
+struct JoinedFile {
+    account_id: AccountId,
+    root_public_key: [u8; 32],
+    certificate: Vec<u8>,
+}
+
+// --- storage -------------------------------------------------------------
+
+fn write_private(path: &Path, bytes: &[u8], must_be_new: bool) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true);
+    if must_be_new {
+        opts.create_new(true);
+    } else {
+        opts.create(true).truncate(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600); // owner only: this is key material
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+fn load_root(dir: &Path) -> Option<RootIdentityKey> {
+    let bytes = std::fs::read(dir.join(ROOT_KEY_FILE)).ok()?;
+    let seed: [u8; 32] = bytes.as_slice().try_into().ok()?;
+    Some(RootIdentityKey::from_seed(&seed))
+}
+
+/// The account's root key, created on first use. `Err` for a joined device,
+/// which must never invent a second root for an account it joined.
+fn root_key_for_offers(dir: &Path) -> Result<RootIdentityKey, String> {
+    if dir.join(JOINED_FILE).exists() {
+        return Err(
+            "This device joined an existing account; only the device that created it can link new ones."
+                .into(),
+        );
+    }
+    if let Some(k) = load_root(dir) {
+        return Ok(k);
+    }
+    let key = RootIdentityKey::generate();
+    write_private(&dir.join(ROOT_KEY_FILE), &*key.seed(), true)
+        .map_err(|e| format!("couldn’t store the account key: {e}"))?;
+    Ok(key)
+}
+
+pub(crate) fn load_linked(dir: &Path) -> Vec<LinkedDevice> {
+    std::fs::read(dir.join(LINKED_FILE))
+        .ok()
+        .and_then(|b| postcard::from_bytes::<LinkedFile>(&b).ok())
+        .map(|f| f.devices)
+        .unwrap_or_default()
+}
+
+fn save_linked(dir: &Path, devices: &[LinkedDevice]) -> std::io::Result<()> {
+    let bytes = postcard::to_allocvec(&LinkedFile {
+        devices: devices.to_vec(),
+    })
+    .expect("a list of plain structs always serializes");
+    let tmp = dir.join(format!("{LINKED_FILE}.tmp"));
+    write_private(&tmp, &bytes, false)?;
+    std::fs::rename(tmp, dir.join(LINKED_FILE))
+}
+
+/// This device first, then every linked one (Trusted, flagged as not yet
+/// reviewed since linking).
+#[must_use]
+pub(crate) fn device_list(
+    this: DeviceSecurityView,
+    linked: &[LinkedDevice],
+) -> Vec<DeviceSecurityView> {
+    let mut out = vec![this];
+    out.extend(linked.iter().map(|l| DeviceSecurityView {
+        id: l.device_id,
+        display_name: l.name.clone(),
+        kind: siar_ui_state::DeviceKind::Unknown,
+        status: DeviceTrustState::Trusted,
+        added_at_millis: l.added_at_millis,
+        last_active_millis: None,
+        current_device: false,
+        security_flags: vec![DeviceSecurityFlag::UnreviewedSinceLinking],
+    }));
+    out
+}
+
+// --- what the operations return ----------------------------------------
+
+pub struct LinkOfferView {
+    pub code: String,
+    pub ticket: String,
+}
+
+pub struct PendingLinkView {
+    pub device_id: DeviceId,
+    pub name: String,
+    pub fingerprint: String,
+}
+
+fn millis_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// A joining device waiting for the answer to its request.
+pub(crate) struct JoinWait {
+    pub(crate) approver: iroh::EndpointId,
+    pub(crate) until: std::time::Instant,
+}
+
+impl Core {
+    fn this_device_view(&self) -> DeviceSecurityView {
+        self.hub
+            .read(|s| s.devices.this_device().cloned())
+            .unwrap_or_else(|| DeviceSecurityView {
+                id: self.my_device,
+                display_name: crate::host::device_label(),
+                kind: crate::host::device_kind(),
+                status: DeviceTrustState::Trusted,
+                added_at_millis: 0,
+                last_active_millis: None,
+                current_device: true,
+                security_flags: Vec::new(),
+            })
+    }
+
+    fn refresh_devices(&self) {
+        let list = device_list(self.this_device_view(), &load_linked(&self.data_dir));
+        self.hub.update(|s| s.devices.set_devices(list));
+    }
+
+    /// Open a one-time link offer. Show `code` and `ticket` to the person
+    /// setting up the other device.
+    pub fn link_open_offer(&self) -> Result<LinkOfferView, String> {
+        root_key_for_offers(&self.data_dir)?; // creates the key on first use
+        let code = self
+            .link_offers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .new_offer(millis_now());
+        Ok(LinkOfferView {
+            code,
+            ticket: self.hub.read(|s| s.identity.ticket.clone()),
+        })
+    }
+
+    #[must_use]
+    pub fn link_pending(&self) -> Vec<PendingLinkView> {
+        self.link_offers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pending(millis_now())
+            .into_iter()
+            .map(|p| PendingLinkView {
+                device_id: p.request.device_id,
+                name: p.request.display_name.clone(),
+                fingerprint: p.fingerprint.clone(),
+            })
+            .collect()
+    }
+
+    /// A person approved `device`: issue its certificate and send it.
+    pub async fn link_approve(&self, device: DeviceId) -> Result<(), String> {
+        let root = root_key_for_offers(&self.data_dir)?;
+        let now = millis_now();
+        let (pending, cert) = {
+            let mut offers = self
+                .link_offers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let pending = offers
+                .pending(now)
+                .into_iter()
+                .find(|p| p.request.device_id == device)
+                .map(|p| (*p).clone())
+                .ok_or_else(|| LinkError::NoSuchRequest.to_string())?;
+            let cert = offers
+                .approve(device, now, &root, self.local_account, 1)
+                .map_err(|e| e.to_string())?;
+            (pending, cert)
+        };
+        let endpoint = self
+            .link_endpoints
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&device)
+            .ok_or_else(|| "that device is no longer connected".to_owned())?;
+        let mut linked = load_linked(&self.data_dir);
+        linked.retain(|l| l.device_id != device);
+        linked.push(LinkedDevice {
+            device_id: device,
+            name: pending.request.display_name.clone(),
+            public_key: pending.request.device_public_key,
+            added_at_millis: now,
+        });
+        save_linked(&self.data_dir, &linked)
+            .map_err(|e| format!("couldn’t save the device: {e}"))?;
+        self.refresh_devices();
+        let msg = LinkMessage::Approved {
+            account_id: self.local_account,
+            root_public_key: root.root_public_key().0,
+            certificate: postcard::to_allocvec(&cert).map_err(|e| e.to_string())?,
+            approver_device: self.my_device,
+            approver_public_key: self.local_key,
+            approver_name: self.this_device_view().display_name,
+        };
+        self.service
+            .send_wire(iroh::EndpointAddr::new(endpoint), &WireMessage::Link(msg))
+            .await
+            .map_err(|e| format!("the new device couldn’t be reached: {e}"))?;
+        Ok(())
+    }
+
+    /// A person declined `device`.
+    pub async fn link_reject(&self, device: DeviceId) -> bool {
+        let removed = self
+            .link_offers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reject(device);
+        let endpoint = self
+            .link_endpoints
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&device);
+        if let Some(e) = endpoint {
+            let _ = self
+                .service
+                .send_wire(
+                    iroh::EndpointAddr::new(e),
+                    &WireMessage::Link(LinkMessage::Denied),
+                )
+                .await;
+        }
+        removed
+    }
+
+    /// Ask the device at `ticket_text` to link this device to its account,
+    /// using the one-time `code` its owner was shown. A person must then
+    /// approve on that device.
+    pub async fn link_join(&self, ticket_text: &str, code: &str) -> Result<(), String> {
+        if self.data_dir.join(JOINED_FILE).exists() || self.data_dir.join(ROOT_KEY_FILE).exists() {
+            return Err("This device already belongs to an account.".into());
+        }
+        let has_history = !self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .all()
+            .is_empty()
+            || self.hub.read(|s| s.groups.ordered().len()) > 0;
+        if has_history {
+            return Err(
+                "Only a fresh device can join an account: this one already has contacts or groups."
+                    .into(),
+            );
+        }
+        let approver = PeerTicket::decode(ticket_text.trim())
+            .map_err(|_| "That link ticket isn’t valid.".to_owned())?;
+        *self
+            .link_join
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(JoinWait {
+            approver: approver.endpoint_addr.id,
+            until: std::time::Instant::now() + JOIN_WAIT,
+        });
+        let msg = LinkMessage::Request {
+            code: code.trim().to_owned(),
+            device_id: self.my_device,
+            device_public_key: self.local_key,
+            display_name: self.this_device_view().display_name,
+        };
+        self.service
+            .send_wire(approver.endpoint_addr.clone(), &WireMessage::Link(msg))
+            .await
+            .map_err(|e| format!("couldn’t reach that device: {e}"))
+    }
+
+    /// Whether this device joined an account and the running core still uses
+    /// its old id (a restart finishes the join).
+    #[must_use]
+    pub fn link_restart_needed(&self) -> bool {
+        self.data_dir.join(JOINED_FILE).exists()
+            && std::fs::read_to_string(self.data_dir.join(ACCOUNT_FILE))
+                .ok()
+                .and_then(|t| uuid::Uuid::parse_str(t.trim()).ok())
+                .is_some_and(|id| id != self.local_account.as_uuid())
+    }
+
+    /// A `WireMessage::Link` arrived from the authenticated endpoint `from`.
+    pub(crate) async fn handle_link_message(&self, from: iroh::EndpointId, msg: LinkMessage) {
+        if !msg.within_limits() {
+            tracing::warn!(?from, "dropping an oversize link message");
+            return;
+        }
+        match msg {
+            LinkMessage::Request {
+                code,
+                device_id,
+                device_public_key,
+                display_name,
+            } => {
+                let result = self
+                    .link_offers
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .submit(
+                        millis_now(),
+                        &code,
+                        LinkRequest {
+                            device_id,
+                            device_public_key,
+                            display_name,
+                        },
+                    );
+                match result {
+                    Ok(p) => {
+                        self.link_endpoints
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .insert(device_id, from);
+                        self.hub.notify(
+                            NoticeLevel::Info,
+                            format!(
+                                "“{}” wants to join your account (key {}). Approve it only if that is your device.",
+                                p.request.display_name, p.fingerprint
+                            ),
+                        );
+                    }
+                    Err(e) => {
+                        // Say nothing about *why* to the requester.
+                        tracing::info!(error = %e, "refused a link request");
+                        let _ = self
+                            .service
+                            .send_wire(
+                                iroh::EndpointAddr::new(from),
+                                &WireMessage::Link(LinkMessage::Denied),
+                            )
+                            .await;
+                    }
+                }
+            }
+            LinkMessage::Denied => {
+                if self.take_join_wait(&from) {
+                    self.hub.notify(
+                        NoticeLevel::Warning,
+                        "The other device did not accept the link request.",
+                    );
+                }
+            }
+            LinkMessage::Approved {
+                account_id,
+                root_public_key,
+                certificate,
+                approver_device,
+                approver_public_key,
+                approver_name,
+            } => {
+                if !self.take_join_wait(&from) {
+                    tracing::warn!(?from, "ignoring an unsolicited link approval");
+                    return;
+                }
+                let cert: DeviceCertificate = match postcard::from_bytes(&certificate) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        self.hub
+                            .notify(NoticeLevel::Warning, "The link approval was malformed.");
+                        return;
+                    }
+                };
+                if cert.account_id != account_id
+                    || accept_certificate(
+                        &RootPublicKey(root_public_key),
+                        &cert,
+                        self.my_device,
+                        &self.local_key,
+                        millis_now(),
+                    )
+                    .is_err()
+                {
+                    self.hub.notify(
+                        NoticeLevel::Warning,
+                        "The link approval was not valid for this device, so it was ignored.",
+                    );
+                    return;
+                }
+                if let Err(e) = self.adopt_account(
+                    account_id,
+                    root_public_key,
+                    certificate,
+                    LinkedDevice {
+                        device_id: approver_device,
+                        name: approver_name.chars().filter(|c| !c.is_control()).collect(),
+                        public_key: approver_public_key,
+                        added_at_millis: millis_now(),
+                    },
+                ) {
+                    self.hub.notify(NoticeLevel::Warning, e);
+                    return;
+                }
+                self.refresh_devices();
+                self.hub.notify(
+                    NoticeLevel::Info,
+                    "This device is linked. Restart Siar to finish joining the account.",
+                );
+            }
+        }
+    }
+
+    /// Consume the join wait if `from` is the device we asked and it has not
+    /// expired.
+    fn take_join_wait(&self, from: &iroh::EndpointId) -> bool {
+        let mut wait = self
+            .link_join
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let ok = wait
+            .as_ref()
+            .is_some_and(|w| w.approver == *from && w.until > std::time::Instant::now());
+        if ok {
+            *wait = None;
+        }
+        ok
+    }
+
+    fn adopt_account(
+        &self,
+        account: AccountId,
+        root_public_key: [u8; 32],
+        certificate: Vec<u8>,
+        approver: LinkedDevice,
+    ) -> Result<(), String> {
+        let dir: PathBuf = self.data_dir.clone();
+        let joined = postcard::to_allocvec(&JoinedFile {
+            account_id: account,
+            root_public_key,
+            certificate,
+        })
+        .map_err(|e| e.to_string())?;
+        save_linked(&dir, &[approver]).map_err(|e| format!("couldn’t save the link: {e}"))?;
+        write_private(&dir.join(JOINED_FILE), &joined, false)
+            .map_err(|e| format!("couldn’t save the link: {e}"))?;
+        std::fs::write(dir.join(ACCOUNT_FILE), account.as_uuid().to_string())
+            .map_err(|e| format!("couldn’t save the account: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("siar-link-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn this() -> DeviceSecurityView {
+        DeviceSecurityView {
+            id: DeviceId::new(),
+            display_name: "me".into(),
+            kind: siar_ui_state::DeviceKind::Desktop,
+            status: DeviceTrustState::Trusted,
+            added_at_millis: 1,
+            last_active_millis: None,
+            current_device: true,
+            security_flags: vec![],
+        }
+    }
+
+    #[test]
+    fn the_root_key_is_created_once_stored_privately_and_reloaded() {
+        let d = scratch("root");
+        let a = root_key_for_offers(&d).unwrap();
+        let b = root_key_for_offers(&d).unwrap();
+        assert_eq!(a.root_public_key(), b.root_public_key());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(d.join(ROOT_KEY_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "key file must be owner-only");
+        }
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn a_joined_device_never_invents_its_own_root() {
+        let d = scratch("joined");
+        std::fs::write(d.join(JOINED_FILE), b"x").unwrap();
+        let e = root_key_for_offers(&d).err().unwrap();
+        assert!(e.contains("joined"), "{e}");
+        assert!(!d.join(ROOT_KEY_FILE).exists());
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn linked_devices_survive_a_restart_and_show_after_this_device() {
+        let d = scratch("linked");
+        assert!(load_linked(&d).is_empty());
+        let l = LinkedDevice {
+            device_id: DeviceId::new(),
+            name: "phone".into(),
+            public_key: [4; 32],
+            added_at_millis: 9,
+        };
+        save_linked(&d, std::slice::from_ref(&l)).unwrap();
+        assert_eq!(load_linked(&d), vec![l.clone()]);
+        let list = device_list(this(), &load_linked(&d));
+        assert_eq!(list.len(), 2);
+        assert!(list[0].current_device && !list[1].current_device);
+        assert_eq!(list[1].id, l.device_id);
+        assert_eq!(
+            list[1].security_flags,
+            vec![DeviceSecurityFlag::UnreviewedSinceLinking]
+        );
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn a_damaged_linked_file_means_no_linked_devices_not_a_crash() {
+        let d = scratch("damaged");
+        std::fs::write(d.join(LINKED_FILE), b"\xff\xff garbage").unwrap();
+        assert!(load_linked(&d).is_empty());
+        std::fs::remove_dir_all(d).ok();
+    }
+}

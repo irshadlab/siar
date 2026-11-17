@@ -30,7 +30,9 @@ use tokio::sync::mpsc;
 
 use crate::bootstrap::Bootstrapped;
 use crate::peers::PeerRegistry;
-use crate::power_gate::{preload_work, preview_work, Admission, Parked, PowerGate, PreviewJob};
+use crate::power_gate::{
+    mailbox_work, preload_work, preview_work, Admission, Parked, PowerGate, PreviewJob,
+};
 use crate::read_marks::{newest_incoming, unread_above, ReadMarks};
 use crate::verification::{key_fingerprint, safety_number, VerificationStore};
 
@@ -63,8 +65,20 @@ pub struct Core {
     warned_throttled: Mutex<HashSet<iroh::EndpointId>>,
     /// Relays we just sent an anonymous mailbox check-in to. Only those, and
     /// only for a short while, may deliver token-mailbox items to us.
-    mailbox_waits: Mutex<std::collections::HashMap<iroh::EndpointId, MailboxWait>>,
+    /// Several contacts may check the same relay at once, so each relay keeps
+    /// a list; a delivery is tried against each (decryption authenticates).
+    mailbox_waits: Mutex<std::collections::HashMap<iroh::EndpointId, Vec<MailboxWait>>>,
+    /// Relays collected from on a schedule (see [`Core::start_mailbox_polling`]).
+    mailbox_relays: Mutex<Vec<PeerTicket>>,
+    /// A scheduled poll is queued or running: never stack a second one.
+    mailbox_poll_busy: std::sync::atomic::AtomicBool,
+    /// Where the next poll starts in the contact list (fair rotation).
+    mailbox_cursor: std::sync::atomic::AtomicUsize,
 }
+
+/// At most this many contacts are checked per relay per poll; the rest follow
+/// on the next ones. Bounds a poll's cost however many contacts exist.
+const MAILBOX_POLL_MAX_CONTACTS: usize = 32;
 
 /// A stable device id for a peer whose real one is not known yet.
 fn stand_in_device(peer: &PeerTicket) -> DeviceId {
@@ -140,6 +154,9 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
         ingress: siar_messaging::IngressGuard::new(siar_abuse::GateConfig::default()),
         warned_throttled: Mutex::new(HashSet::new()),
         mailbox_waits: Mutex::new(std::collections::HashMap::new()),
+        mailbox_relays: Mutex::new(Vec::new()),
+        mailbox_poll_busy: std::sync::atomic::AtomicBool::new(false),
+        mailbox_cursor: std::sync::atomic::AtomicUsize::new(0),
     });
 
     // ---- seed the UI -----------------------------------------------------------
@@ -407,61 +424,171 @@ impl Core {
     }
 
     fn waiting_on(&self, relay: &iroh::EndpointId) -> bool {
+        let now = std::time::Instant::now();
         self.mailbox_waits
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(relay)
-            .is_some_and(|w| w.until > std::time::Instant::now())
+            .is_some_and(|w| w.iter().any(|w| w.until > now))
     }
 
-    /// Start waiting for a relay's answer to a check-in for `conversation`.
+    /// Start waiting for a relay's answer to a check-in for `wait.conversation`.
+    /// A second check-in for the same conversation replaces the first.
     fn expect_mailbox(&self, relay: iroh::EndpointId, wait: MailboxWait) {
         let mut waits = self
             .mailbox_waits
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let now = std::time::Instant::now();
-        waits.retain(|_, w| w.until > now); // never grows without bound
-        waits.insert(relay, wait);
+        // Never grows without bound: expired entries go on every insert.
+        waits.retain(|_, list| {
+            list.retain(|w| w.until > now);
+            !list.is_empty()
+        });
+        let list = waits.entry(relay).or_default();
+        list.retain(|w| w.conversation != wait.conversation);
+        list.push(wait);
     }
 
     /// A token-mailbox item from `relay`. Accepted only from a relay we are
-    /// waiting on; decrypted against exactly the peer the check-in was for.
+    /// waiting on. Which contact it is for is not on the item, so it is tried
+    /// against each contact we asked about; decryption is authenticated, so
+    /// only the right one succeeds.
     fn accept_mailbox_item(
         &self,
         relay: &iroh::EndpointId,
         item: &siar_protocol::TokenMailboxEnvelope,
     ) {
-        let wait = {
-            let waits = self
-                .mailbox_waits
+        let candidates: Vec<(ConversationId, PeerTicket, DeviceId)> = {
+            let now = std::time::Instant::now();
+            self.mailbox_waits
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            waits
+                .unwrap_or_else(PoisonError::into_inner)
                 .get(relay)
-                .filter(|w| w.until > std::time::Instant::now())
-                .map(|w| (w.conversation, w.peer.clone(), w.sender_device))
+                .map(|list| {
+                    list.iter()
+                        .filter(|w| w.until > now)
+                        .map(|w| (w.conversation, w.peer.clone(), w.sender_device))
+                        .collect()
+                })
+                .unwrap_or_default()
         };
-        let Some((conversation, peer, sender_device)) = wait else {
+        if candidates.is_empty() {
             tracing::warn!(from = ?relay, "dropping an unsolicited mailbox delivery");
             return;
-        };
-        match self
-            .service
-            .receive_token_mailbox_envelope(conversation, sender_device, &peer, item)
-        {
-            Ok(Some(content)) => {
-                self.hub.update(|s| {
-                    s.sendable.insert(conversation);
-                    s.record_incoming(conversation, item.id, item.created_at, content);
-                });
-                if self.hub.read(|s| s.selected) == Some(conversation) {
-                    self.advance_read(conversation);
-                }
-            }
-            Ok(None) => {} // already stored: a re-delivery, not a new message
-            Err(e) => tracing::warn!(error = %e, "couldn't accept a mailbox item"),
         }
+        for (conversation, peer, sender_device) in candidates {
+            match self.service.receive_token_mailbox_envelope(
+                conversation,
+                sender_device,
+                &peer,
+                item,
+            ) {
+                Ok(Some(content)) => {
+                    self.hub.update(|s| {
+                        s.sendable.insert(conversation);
+                        s.record_incoming(conversation, item.id, item.created_at, content);
+                    });
+                    if self.hub.read(|s| s.selected) == Some(conversation) {
+                        self.advance_read(conversation);
+                    }
+                    return;
+                }
+                Ok(None) => return, // already stored: a re-delivery, not a new message
+                Err(_) => {}        // not this contact's; try the next
+            }
+        }
+        tracing::debug!(from = ?relay, "a mailbox item matched none of the contacts asked about");
+    }
+
+    /// Collect from every configured relay, for a rotating slice of contacts.
+    async fn poll_mailboxes(self: &Arc<Self>) {
+        let relays = self
+            .mailbox_relays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let contacts = self.peers().all();
+        if relays.is_empty() || contacts.is_empty() {
+            return;
+        }
+        let take = contacts.len().min(MAILBOX_POLL_MAX_CONTACTS);
+        let start = self
+            .mailbox_cursor
+            .fetch_add(take, std::sync::atomic::Ordering::Relaxed)
+            % contacts.len();
+        for relay in &relays {
+            for i in 0..take {
+                let (conversation, peer) = &contacts[(start + i) % contacts.len()];
+                let sender_device = self
+                    .device_directory
+                    .device_at_endpoint(&peer.endpoint_addr.id)
+                    .map_or_else(|| stand_in_device(peer), |(d, _)| d);
+                self.expect_mailbox(
+                    relay.endpoint_addr.id,
+                    MailboxWait {
+                        conversation: *conversation,
+                        peer: peer.clone(),
+                        sender_device,
+                        until: std::time::Instant::now() + MAILBOX_WAIT,
+                    },
+                );
+                if let Err(e) = self.service.send_anonymous_check_in(peer, relay).await {
+                    // A relay that is down is routine, not something to show.
+                    tracing::debug!(error = %e, "scheduled mailbox check-in failed");
+                    break;
+                }
+                // Spread the requests out; a burst helps no one.
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+        }
+    }
+
+    /// Ask the power gate whether a scheduled poll may run now.
+    fn request_poll(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering::AcqRel;
+        if self.mailbox_poll_busy.swap(true, AcqRel) {
+            return; // one already queued or running
+        }
+        match self.power.admit(mailbox_work(), Parked::MailboxPoll) {
+            Admission::Run | Admission::RunThrottled => self.run_poll(),
+            Admission::Parked => {} // power_task resumes it; the flag stays set
+        }
+    }
+
+    fn run_poll(self: &Arc<Self>) {
+        let core = self.clone();
+        tokio::spawn(async move {
+            core.poll_mailboxes().await;
+            core.mailbox_poll_busy
+                .store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// Collect waiting relay-mailbox items on a schedule, from `relays`, every
+    /// `interval` (first poll shortly after start). Power-gated like other
+    /// background work: on low battery or saver a poll is deferred, never
+    /// dropped, and at most one is ever queued. Replaces any earlier schedule's
+    /// relay list; call it once at start-up.
+    pub fn start_mailbox_polling(self: &Arc<Self>, relays: Vec<PeerTicket>, interval: Duration) {
+        if relays.is_empty() {
+            return;
+        }
+        *self
+            .mailbox_relays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = relays;
+        let core = self.clone();
+        tokio::spawn(async move {
+            // Let the endpoint settle, then stay out of the start-up burst.
+            tokio::time::sleep(Duration::from_secs(20)).await;
+            let mut tick = tokio::time::interval(interval.max(Duration::from_secs(60)));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                core.request_poll();
+            }
+        });
     }
 
     fn safety_for(&self, device: DeviceId, ticket: &PeerTicket) -> ContactSafety {
@@ -1291,6 +1418,7 @@ async fn power_task(core: Arc<Core>) {
                     let c = core.clone();
                     tokio::spawn(async move { c.preload_history().await });
                 }
+                Parked::MailboxPoll => core.run_poll(),
             }
         }
     }

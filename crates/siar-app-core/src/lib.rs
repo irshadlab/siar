@@ -10,6 +10,7 @@ pub mod bootstrap;
 pub mod core;
 mod history;
 mod host;
+pub mod linking;
 mod peers;
 pub use peers::conversation_for;
 pub mod power_gate;

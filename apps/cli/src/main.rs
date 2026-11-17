@@ -29,6 +29,22 @@
 mod args;
 mod client;
 
+/// `println!` that treats a closed pipe (`siar … | head`) as "the reader has
+/// what it wanted" and stops quietly, instead of panicking.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        if let Err(e) = writeln!(std::io::stdout().lock(), $($arg)*) {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                std::process::exit(0);
+            }
+            // Any other failure (disk full, …) must not look like success.
+            eprintln!("siar: cannot write output: {e}");
+            std::process::exit(1);
+        }
+    }};
+}
+
 use std::time::Duration;
 
 use anyhow::Result;
@@ -49,16 +65,16 @@ async fn run(args: Args) -> Result<()> {
     let socket = socket_or_default(args.socket);
     let mut d = Daemon::connect(&socket, args.spawn).await?;
     match args.command {
-        Command::Status => println!("{}", d.status().await?),
-        Command::Ticket => println!("{}", d.query("ticket", "").await?),
-        Command::Identity => println!("{}", d.query("identity", "").await?),
-        Command::KeyPackage => println!("{}", d.query("key-package", "").await?),
+        Command::Status => out!("{}", d.status().await?),
+        Command::Ticket => out!("{}", d.query("ticket", "").await?),
+        Command::Identity => out!("{}", d.query("identity", "").await?),
+        Command::KeyPackage => out!("{}", d.query("key-package", "").await?),
         Command::Conversations => print_lines(&d.query("conversations", "").await?),
         Command::Groups => print_lines(&d.query("groups", "").await?),
         Command::Messages { conversation } => {
             print_lines(&d.query("messages", &conversation).await?);
         }
-        Command::Pair { ticket } => println!("{}", d.command("pair", &ticket).await?),
+        Command::Pair { ticket } => out!("{}", d.command("pair", &ticket).await?),
         Command::Send { target, text } => {
             let conversation = match classify_target(&target) {
                 Target::Conversation(id) => id.to_owned(),
@@ -67,7 +83,7 @@ async fn run(args: Args) -> Result<()> {
                 Target::Ticket(t) => d.command("pair", t).await?,
             };
             d.command("send", &format!("{conversation} {text}")).await?;
-            println!("queued for {conversation}");
+            out!("queued for {conversation}");
         }
         Command::SendFile { target, path } => {
             // The daemon reads the file, so it needs an absolute path.
@@ -82,7 +98,7 @@ async fn run(args: Args) -> Result<()> {
             }
             d.command("send-file", &format!("{conversation} {}", path.display()))
                 .await?;
-            println!("queued for {conversation}");
+            out!("queued for {conversation}");
         }
         Command::SendAnon {
             target,
@@ -95,7 +111,7 @@ async fn run(args: Args) -> Result<()> {
                 &format!("{conversation} {relay_ticket} {text}"),
             )
             .await?;
-            println!("left at the relay for {conversation}");
+            out!("left at the relay for {conversation}");
         }
         Command::CheckMailboxAnon {
             target,
@@ -114,12 +130,12 @@ async fn run(args: Args) -> Result<()> {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let now = lines_of(&d.query("messages", &conversation).await?);
                 for line in fresh_lines(&shown, &now) {
-                    println!("{line}");
+                    out!("{line}");
                 }
                 shown = now;
             }
             if shown == before {
-                println!("nothing waiting");
+                out!("nothing waiting");
             }
         }
         Command::Listen { conversation } => listen(&mut d, &conversation).await?,
@@ -130,7 +146,7 @@ async fn run(args: Args) -> Result<()> {
             for _ in 0..40 {
                 let now = d.query("groups", "").await?;
                 if let Some(new) = now.lines().find(|l| !before.lines().any(|b| b == *l)) {
-                    println!("{}", new.split('\t').next().unwrap_or(new));
+                    out!("{}", new.split('\t').next().unwrap_or(new));
                     return Ok(());
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -151,12 +167,12 @@ async fn run(args: Args) -> Result<()> {
                 ),
             )
             .await?;
-            println!("queued");
+            out!("queued");
         }
         Command::GroupSend { conversation, text } => {
             d.command("group-send", &format!("{conversation} {text}"))
                 .await?;
-            println!("queued");
+            out!("queued");
         }
     }
     Ok(())
@@ -176,7 +192,7 @@ fn lines_of(s: &str) -> Vec<String> {
 
 fn print_lines(s: &str) {
     if !s.is_empty() {
-        println!("{s}");
+        out!("{s}");
     }
 }
 
@@ -193,7 +209,7 @@ async fn listen(d: &mut Daemon, conversation: &str) -> Result<()> {
             .collect();
         // The first snapshot is history: show it, then only what follows.
         for line in fresh_lines(&last, &snapshot) {
-            println!("{line}");
+            out!("{line}");
         }
         if first {
             first = false;

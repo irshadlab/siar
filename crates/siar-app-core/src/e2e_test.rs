@@ -887,6 +887,21 @@ async fn a_restored_backup_is_the_same_working_account() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs loopback networking"]
+async fn a_new_node_lists_itself_as_this_device() {
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-thisdev-{}", std::process::id()));
+    let a = start_node(&tmp.join("a")).await;
+    let (device, listed) = a.hub.read(|s| {
+        (
+            s.identity.device,
+            s.devices.this_device().map(|d| (d.id, d.current_device)),
+        )
+    });
+    assert_eq!(listed, device.map(|d| (d, true)));
+    assert_eq!(a.hub.read(|s| s.devices.all().len()), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
 async fn a_restarted_device_keeps_its_address_and_its_peer_keeps_accepting_it() {
     use siar_messaging::PeerTicket;
     let tmp = std::env::temp_dir().join(format!("siar-e2e-address-{}", std::process::id()));

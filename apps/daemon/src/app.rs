@@ -136,6 +136,38 @@ impl DaemonApp {
                 }
                 _ => Err(RuntimeError::NotReady),
             })?,
+            // `<device-id>\t<name>\t<fingerprint>` per waiting link request.
+            "link-pending" => live
+                .core
+                .link_pending()
+                .iter()
+                .map(|p| format!("{}\t{}\t{}", p.device_id, p.name, p.fingerprint))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            // `restart-needed` once this device has joined an account.
+            "link-state" => {
+                if live.core.link_restart_needed() {
+                    "restart-needed".to_owned()
+                } else {
+                    "ok".to_owned()
+                }
+            }
+            // `<device-id>\t<name>\t<this|linked>`
+            "devices" => hub.read(|s| {
+                s.devices
+                    .all()
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "{}\t{}\t{}",
+                            d.id,
+                            d.display_name,
+                            if d.current_device { "this" } else { "linked" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
             "groups" => hub.read(|s| {
                 s.groups
                     .ordered()
@@ -329,6 +361,48 @@ impl DaemonApp {
     }
 }
 
+impl DaemonApp {
+    /// Device linking. `link-offer` returns `<code>\n<ticket>`; the rest
+    /// return a short word. Failures come back as readable errors.
+    async fn link_command(&self, name: &str, data: Vec<u8>) -> Result<Vec<u8>, RuntimeError> {
+        let live = self.live.get().ok_or(RuntimeError::NotReady)?;
+        let text = utf8(data)?;
+        let bad = RuntimeError::InvalidCommand;
+        let device = |t: &str| {
+            uuid::Uuid::parse_str(t.trim())
+                .map(siar_domain::DeviceId::from_uuid)
+                .map_err(|_| RuntimeError::InvalidCommand("not a valid device id".into()))
+        };
+        match name {
+            "link-offer" => {
+                let o = live.core.link_open_offer().map_err(bad)?;
+                Ok(format!("{}\n{}", o.code, o.ticket).into_bytes())
+            }
+            "link-approve" => {
+                live.core.link_approve(device(&text)?).await.map_err(bad)?;
+                Ok(b"approved".to_vec())
+            }
+            "link-reject" => {
+                let found = live.core.link_reject(device(&text)?).await;
+                Ok(if found {
+                    b"declined".to_vec()
+                } else {
+                    b"not found".to_vec()
+                })
+            }
+            // `<ticket> <code>`
+            "link-join" => {
+                let (ticket, code) = text.split_once(' ').ok_or_else(|| {
+                    RuntimeError::InvalidCommand("expected: <ticket> <code>".into())
+                })?;
+                live.core.link_join(ticket, code).await.map_err(bad)?;
+                Ok(b"requested".to_vec())
+            }
+            _ => Err(RuntimeError::InvalidCommand("unknown link command".into())),
+        }
+    }
+}
+
 impl AppService for DaemonApp {
     fn command<'a>(
         &'a self,
@@ -338,6 +412,9 @@ impl AppService for DaemonApp {
         Box::pin(async move {
             if name == "pairwise-open" {
                 return self.pairwise_open(data).await;
+            }
+            if name.starts_with("link-") {
+                return self.link_command(name, data).await;
             }
             self.run_command(name, data)
         })

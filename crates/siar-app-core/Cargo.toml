@@ -28,6 +28,7 @@ iroh.workspace = true
 rand_core = "0.9"
 base64.workspace = true
 postcard.workspace = true
+serde.workspace = true
 directories.workspace = true
 uuid.workspace = true
 blake3.workspace = true

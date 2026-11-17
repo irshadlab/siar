@@ -622,6 +622,7 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     let booted = Arc::new(Mutex::new(None));
     let (b1, b2) = (booted.clone(), booted.clone());
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(64);
+    let mailbox_cfg = config.mailbox.clone();
     let hub_tx = cmd_tx.clone();
     let live = app.live.clone();
     let (bus, lifecycle, supervisor) = (
@@ -650,6 +651,24 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
                 let boot = b2.lock().unwrap().take().ok_or("no bootstrap")?;
                 let hub = Arc::new(siar_ui_model::StateHub::new(hub_tx.clone()));
                 let core = siar_app_core::core::start(boot, hub).await;
+                // Scheduled relay-mailbox collection (off unless configured).
+                let relays: Vec<siar_messaging::PeerTicket> = mailbox_cfg
+                    .relays
+                    .iter()
+                    .filter_map(|t| match siar_messaging::PeerTicket::decode(t.trim()) {
+                        Ok(ticket) => Some(ticket),
+                        Err(_) => {
+                            tracing::warn!(
+                                "ignoring a [mailbox] relay ticket that does not decode"
+                            );
+                            None
+                        }
+                    })
+                    .collect();
+                core.start_mailbox_polling(
+                    relays,
+                    std::time::Duration::from_secs(mailbox_cfg.interval_secs),
+                );
                 // Part 16 §25: a window attaches to this — domain-level
                 // snapshot + deltas, never UI structs.
                 let sync = siar_ui_sync::UiSyncService::new(core.state(), bus.clone());

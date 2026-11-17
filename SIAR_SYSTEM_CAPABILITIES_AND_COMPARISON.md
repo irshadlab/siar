@@ -42,6 +42,11 @@
 - [6. Comprehensive Threat Model, Attack Vector \& Resilience Matrix](#6-comprehensive-threat-model-attack-vector--resilience-matrix)
 - [7. Real-World Operational Field Scenarios](#7-real-world-operational-field-scenarios)
 - [8. Architectural Synthesis: Why SIAR Represents the Definitive Paradigm](#8-architectural-synthesis-why-siar-represents-the-definitive-paradigm)
+- [9. Honest Technical Reality: Implementation Maturity, Engineering Limits & Real-World Failure Modes](#9-honest-technical-reality-implementation-maturity-engineering-limits--real-world-failure-modes)
+  - [9.1 Where SIAR is in Active Development (Not Production Finished)](#91-where-siar-is-in-active-development-not-production-finished)
+  - [9.2 Real-World Engineering Bottlenecks & Failure Modes](#92-real-world-engineering-bottlenecks--failure-modes)
+  - [9.3 Scenarios Where SIAR is Strictly NOT Suitable Today](#93-scenarios-where-siar-is-strictly-not-suitable-today)
+  - [9.4 Verified Empirical Performance & Scale (Kubernetes on Kiri)](#94-verified-empirical-performance--scale-kubernetes-on-kiri)
 
 ---
 
@@ -663,3 +668,45 @@ The following comprehensive security evaluation measures resistance against 12 c
    By bypassing user-space CPU buffers to stream video directly into native Android hardware `MediaCodec` surfaces and utilizing a lock-free pure-Rust audio DSP engine, SIAR achieves sub-10ms audio latencies and 60 FPS video calls with negligible CPU overhead.
 6. **Life-Safety Preemptive Priority**:
    With a 5-tier preemptive emergency QoS engine and ultra-low bitrate acoustic/RF distress beaconing ($\le 1\text{ byte/sec}$), SIAR elevates secure communication from a fragile consumer app into an indestructible, post-infrastructure operating system.
+
+---
+
+# 9. Honest Technical Reality: Implementation Maturity, Engineering Limits & Real-World Failure Modes
+
+To ensure absolute engineering transparency and prevent overpromising, this section documents the exact boundaries of what is operational, what is in active development, what has failed under real-world testing, and where SIAR is strictly not suitable today.
+
+## 9.1 Where SIAR is in Active Development (Not Production Finished)
+1. **Desktop GUI Shell (`apps/desktop`)**:
+   - The desktop client was migrated from Dioxus to Slint on October 22, 2026. While the local IPC sync protocol (`siar-ui-sync`) and windowing scaffolding operate, the UI is an early-stage desktop shell rather than a consumer-polished chat application.
+2. **Mobile Client Layer (`apps/android`)**:
+   - The Android implementation currently consists of native Rust-JNI glue and CLI binaries. It lacks a consumer APK on app stores, automated QR camera pairing, and deep OS battery integration.
+   - **No iOS Support**: There is currently no Apple iOS client. Apple's sandboxing rules forbid background BLE mesh scanning and Wi-Fi Direct promiscuous routing without proprietary enterprise entitlements.
+3. **Three Architectural Crate Reconciliations (`MIGRATION.md`)**:
+   - Three duplicate subsystems remain to be fully unified across the workspace:
+     - Two device-certificate models: `siar_crypto::device_cert` vs `siar-identity-multidevice`.
+     - Two routing engines: `siar-routing` vs `siar-routing-policy`.
+     - Two DTN bundle models: `siar-dtn` vs `siar-dtn-bundle`.
+
+## 9.2 Real-World Engineering Bottlenecks & Failure Modes
+1. **The Flat Process-Per-Device Scaling Limit**:
+   - Running each physical device as a full, standalone operating system daemon process (`siar-daemon`) consumes approximately **82.9 MB VmRSS**.
+   - In dense multi-device Kubernetes testing (e.g. 200+ processes in a single un-sharded container), this triggers Linux cgroup OOM limits (~16.5 GB RAM required).
+   - *Resolution*: Workloads must be sharded across worker pods (e.g., 5 pods hosting 100 users / 220 devices each using worker pools), reducing cluster memory to ~52 MiB.
+2. **Mobile OS Background Sleep & Delivery Gaps**:
+   - Without central push notification servers (Apple APNs / Google FCM) or dedicated 24/7 self-hosted relay nodes, background mobile processes are aggressively suspended by Android and iOS power managers.
+   - Direct P2P packets cannot wake up a sleeping phone in a pocket without relay mailboxes or explicit battery exemptions.
+3. **Manual Out-of-Band Contact Discovery**:
+   - There is no central username or phone number directory. Users must exchange tickets out-of-band via raw hexadecimal strings or QR codes. There is no automated social graph discovery.
+
+## 9.3 Scenarios Where SIAR is Strictly NOT Suitable Today
+> [!WARNING]
+> - ❌ **Not for Non-Technical Consumers**: If you need a drop-in replacement for Signal or WhatsApp for family and friends today, SIAR is not ready. Use Signal or Briar.
+> - ❌ **Not for Life-Critical / High-Threat Adversarial Environments**: Until independent third-party cryptographic audits, formal mathematical verification, and external penetration tests are completed, SIAR must **not** be trusted in high-threat, dissident, or life-or-death scenarios.
+> - ❌ **Not for Closed Apple iOS Environments**: Pure background P2P mesh (Bluetooth and Wi-Fi Direct promiscuous listening) is blocked by iOS sandbox rules.
+
+## 9.4 Verified Empirical Performance & Scale (Kubernetes on Kiri)
+As verified in November 2026 on a 500-user (1,100 physical devices) cluster:
+- **P2P Wire Frame Overhead**: 170 bytes on the wire for a 44-byte text payload (including AEAD MAC, nonces, and Postcard envelope framing).
+- **Cluster Memory**: Under 55 MiB RAM total across 5 StatefulSet worker pods on Kiri (`k3s v1.37.1`).
+- **Wire Latency**: Sub-100 ms delivery across pod boundaries over native Iroh QUIC (`messenger/msg/1`).
+

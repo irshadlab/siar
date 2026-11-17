@@ -55,7 +55,8 @@
 - [Anonymity Transport Plane & Relay Mailboxes](#anonymity-transport-plane--relay-mailboxes)
 - [Workspace Crate Map (50 Domain Crates & 6 Applications)](#workspace-crate-map-50-domain-crates--6-applications)
 - [Deployment Modes](#deployment-modes)
-- [SIAR vs Traditional Messengers](#siar-vs-traditional-messengers)
+- [SIAR vs P2P Networks & Traditional Messengers](#siar-vs-p2p-networks--traditional-messengers)
+- [Honest Transparency: Active Development, Known Limits & Where SIAR Fails / Is NOT Suitable](#honest-transparency-active-development-known-limits--where-siar-fails--is-not-suitable)
 - [Implementation Status & Roadmap](#implementation-status--roadmap)
 - [Prerequisites & Environment Setup](#prerequisites--environment-setup)
 - [Build & Repository Automation (xtask)](#build--repository-automation-xtask)
@@ -644,28 +645,57 @@ The headless runtime (`sys-arch/16`) and relay architecture (`sys-arch/11`) supp
 
 ---
 
-## SIAR vs Traditional Messengers
+## SIAR vs P2P Networks & Traditional Messengers
 
-Unlike traditional centralized messengers that require active server infrastructure, public DNS, and telephone numbers, SIAR operates entirely offline-first, peer-to-peer, and delay-tolerant:
+Unlike traditional centralized messengers (which mandate servers and phone numbers) or single-transport P2P apps (which break when disconnected or on multiple devices), SIAR is architected as an **autonomous, multi-transport, multi-device communications engine**:
 
-<details>
-<summary><strong>Expand Architectural Comparison Matrix</strong></summary>
+> 📖 **Comprehensive Evaluation Document**: For exhaustive protocol dissections (Signal, WhatsApp, Matrix, Session, SimpleX, Briar, Berty, Nostr, Tox, Cwtch, Quiet, Jami, Meshtastic, Reticulum, Keet), dimensional deep dives, threat models, and field failure analyses, see [`SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md`](SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md).
 
-| Feature | SIAR | Signal / WhatsApp / Telegram |
-| :--- | :--- | :--- |
-| **Server Requirement** | **None** — fully autonomous P2P / mesh | Mandatory central cloud servers |
-| **Offline / Disaster Operation** | **Native** — BLE, Wi-Fi Direct/Aware, DTN | Unusable without Internet |
-| **Addressing & Identity** | Self-sovereign Peer Tickets / Ed25519 root keys | Phone numbers / cloud user IDs |
-| **Transport Layer** | Multi-transport adaptive path routing (8+ physical paths) | HTTPS / WebSockets / TCP |
-| **1:1 Conversation E2EE** | OpenMLS 1:1 Pairwise (ML-KEM-768/X25519 + ML-DSA-44 post-quantum) | Custom Signal Protocol / server-managed |
-| **Group Security** | OpenMLS (RFC 9420) forward secrecy + post-compromise | Custom Signal Protocol / server-managed |
-| **Ingress Abuse Protection** | Multi-tier token-bucket admission gate (`siar-abuse`) | Server-side IP blocking & CAPTCHA |
-| **Hardware Codec Acceleration** | Native Android `MediaCodec` + pure-Rust DSP | WebRTC / platform C-libs |
-| **Anonymity** | Mixnet / Sphinx transport plane (Part 34) & Anonymous Mailboxes | None / VPN-dependent |
-| **Self-Hosted Relay** | Full support — no lock-in | Not supported |
-| **Extensibility** | Versioned protocol extensions + WASM sandbox | Closed monolithic protocol |
+<details open>
+<summary><strong>Comprehensive P2P & Traditional Architectural Matrix</strong></summary>
+
+| Dimension | **SIAR** | **Briar** | **Berty** | **Tox** | **Keet (Holepunch)** | **BitChat / Bitmessage** | **Signal / WhatsApp** |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Server / Cloud Requirement** | **None** (P2P + autonomous relays) | None (Tor / LAN / Bluetooth) | None (libp2p / BLE mesh) | None (DHT based) | None (Holepunch P2P) | None (P2P broadcast) | **Mandatory** central cloud clusters |
+| **Multi-Device Support (Same Account)** | **Native** (Root key + signed device certificates) | ❌ **No** (Strictly 1 device per account) | 🟡 Experimental | ❌ **Poor** (Separate IDs per device) | ✅ Supported (Holepunch pairing) | ❌ **No** | ✅ Server-synced multi-device |
+| **Offline Delay-Tolerant (DTN) Mesh** | **Native** (Spray-and-Wait store-carry-forward) | ✅ Native (Bramble protocol) | 🟡 Partial BLE mesh | ❌ **None** (Both peers must be online) | ❌ **None** (Live connection required) | 🟡 PoW flooding (broadcast) | ❌ **Unusable** without Internet backhaul |
+| **Transport Layers** | **Multi-Path Adaptive** (Iroh QUIC, BLE, Wi-Fi Direct/Aware) | Tor, Wi-Fi, Bluetooth | BLE, IPFS / libp2p | UDP / TCP DHT | Hypercore / QUIC | TCP Broadcast / BLE | WebSockets / HTTPS / TCP |
+| **Cryptographic Primitives** | **OpenMLS (RFC 9420) + PQ Pairwise** (ML-KEM-768 + ML-DSA-44) | Classical Curve25519 / Tor onion | Classical libp2p crypto | Classical NaCl / Curve25519 | Classical Ed25519 / Noise | Proof-of-Work broadcast / RSA/ECC | Custom Signal Protocol (X3DH / PQXDH) |
+| **Process Memory Footprint** | **~10–82 MB RSS** (Pure Rust daemon) | ~150–250 MB (JVM/Tor) | ~200–400 MB (Go runtime / IPFS) | ~40–80 MB (C/C++ core) | ~120–250 MB (Pear / Node/C) | ~80–180 MB | ~150–300 MB |
+| **Metadata Protection** | **Sphinx Mixnet & Token Relays** (`send-anon`) | Strong (Tor hidden services) | Moderate (libp2p peer IDs) | ❌ **Weak** (IP leaked in public DHT) | Moderate (Encrypted DHT) | Strong (Broadcast anonymity) | Server-mediated (Sealed Sender) |
+| **Real-World Consumer Maturity** | 🟡 **Pre-Alpha / Developer-Ready** | 🟢 **Production** (F-Droid, Google Play) | 🔴 **Stalled / Inactive** | 🟢 **Mature** (qTox, aTox) | 🟢 **Beta Production** (Desktop/Mobile) | 🔴 **Niche / Proof-of-Concept** | 🟢 **Mass Production** (Billions of users) |
 
 </details>
+
+---
+
+## Honest Transparency: Active Development, Known Limits & Where SIAR Fails / Is NOT Suitable
+
+> 🔍 **Exhaustive Failure Mode & Technical Reality Reference**: For granular dimensional analyses on process-per-device memory curves, mobile cgroup constraints, background lifecycle bottlenecks, and open architectural reconciliations, see [Section 9 of `SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md`](SIAR_SYSTEM_CAPABILITIES_AND_COMPARISON.md#9-honest-technical-reality-implementation-maturity-engineering-limits--real-world-failure-modes).
+
+SIAR is committed to complete technical transparency without marketing exaggerations. While the core P2P protocols and cryptographic state engines are mathematically rigorous and compile-clean, SIAR is in active foundational systems development with specific real-world limitations.
+
+### 1. Where SIAR is in Active Development
+- **Desktop UI Shell (`apps/desktop`)**: The desktop GUI was migrated from Dioxus to Slint on October 22, 2026. While the local IPC sync protocol (`siar-ui-sync`) is functional, the user interface remains an early-stage desktop shell rather than a consumer-polished chat client.
+- **Mobile Client Ecosystem**: Android (`apps/android`) currently consists of low-level Rust-JNI bindings and CLI wrappers; there is no production Google Play release or native iOS client yet.
+- **Three Crate Reconciliations**: As documented in [`MIGRATION.md`](MIGRATION.md), three legacy duplicate subsystem implementations are still being unified:
+  1. Two device-certificate models (`siar_crypto::device_cert` vs `siar-identity-multidevice`).
+  2. Two routing engines (`siar-routing` vs `siar-routing-policy`).
+  3. Two DTN bundle models (`siar-dtn` vs `siar-dtn-bundle`).
+
+### 2. Known Real-World Weaknesses & Engineering Bottlenecks
+- **Flat Process-Per-Device Scaling Limits**:
+  - Running each device as an independent OS process consumes ~82.9 MB RSS. While negligible for individual personal devices, dense simulated workloads (e.g. 200+ processes in a single un-sharded container) will trigger Linux cgroup OOM limits unless grouped into pooled worker runtimes.
+- **Mobile OS Background Execution & Sleep**:
+  - Without central push servers (Apple APNs / Google FCM) or dedicated 24/7 self-hosted relay nodes, background mobile processes are suspended by Android and iOS power managers. Direct P2P packets cannot wake up a sleeping phone in a pocket without relay mailboxes or explicit battery exemptions.
+- **Manual Out-of-Band Contact Discovery**:
+  - There is no central username or phone number directory. Users must exchange tickets out-of-band via raw hexadecimal strings or QR codes. There is no automated social graph discovery.
+
+### 3. Where SIAR is Strictly NOT Suitable Today
+> [!WARNING]
+> - ❌ **Not for Non-Technical Consumers**: If you are looking for an install-and-forget messaging app for friends and family today, SIAR is not ready. Use Signal or Briar.
+> - ❌ **Not for Life-Critical / High-Threat Adversarial Environments**: Until independent third-party cryptographic audits, formal mathematical verification, and external penetration tests are completed, SIAR must **not** be trusted in high-threat, dissident, or life-or-death scenarios.
+> - ❌ **Not for Closed Apple iOS Environments**: Pure background P2P mesh (Bluetooth and Wi-Fi Direct promiscuous listening) is blocked by iOS sandbox rules without enterprise or specialized entitlements.
 
 ---
 

@@ -761,6 +761,17 @@ impl MessageService {
         }
     }
 
+    /// Send any wire message to `to` over the authenticated transport. For
+    /// protocols that live outside chat (device linking).
+    pub async fn send_wire(
+        &self,
+        to: iroh::EndpointAddr,
+        message: &WireMessage,
+    ) -> Result<(), MessageServiceError> {
+        self.endpoint.send(to, message).await?;
+        Ok(())
+    }
+
     /// Ask `relay` for anything waiting for us from `peer` (an anonymous,
     /// token-addressed check-in). Deliveries come back later as
     /// `TokenMailboxDeposit` frames; hand each to

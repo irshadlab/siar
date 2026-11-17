@@ -57,6 +57,19 @@ pub enum Command {
         target: String,
         relay_ticket: String,
     },
+    /// List this account's devices.
+    Devices,
+    /// Open a one-time offer to add another device; prints the code and ticket
+    /// to give to it. Only the device that created the account can do this.
+    LinkOffer,
+    /// Devices waiting for you to approve them.
+    LinkPending,
+    /// Approve a waiting device (check its key fingerprint first).
+    LinkApprove { device_id: String },
+    /// Decline a waiting device.
+    LinkReject { device_id: String },
+    /// Join an account from a fresh device, with an offer's ticket and code.
+    LinkJoin { ticket: String, code: String },
     /// Follow a conversation and print new messages as they arrive.
     Listen { conversation: String },
     /// Create a new MLS group.

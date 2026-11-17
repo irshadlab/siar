@@ -649,8 +649,8 @@ Ticket-carried prekey bundle and the ingress gate in front of `handle_incoming`.
 MLS state and network identity. The window and the CLI are thin clients of its
 control socket. Nothing had shipped, so the embedded-core desktop path was removed.
 
-**Verified:** `siar-abuse` 31, `siar-runtime` 158, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 31 +
+**Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 32 +
 10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
 parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
 runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
@@ -695,6 +695,21 @@ window against a display; Windows named pipes.
   "handed to the relay", not delivered); an unpaired-by-message contact's stored
   sender device is a stand-in derived from its transport key; tickets are
   validated when the command arrives.
+* **Scheduled mailbox collection:** `[mailbox] relays = ["<relay ticket>"]`,
+  `interval_secs` (60 to 86 400, default 300; off while `relays` is empty; local
+  file only, restart to change). The core polls each relay for a rotating slice
+  of at most 32 contacts per poll, 150 ms apart, first poll ~20 s after start.
+  It is power-gated like other background work (`Relay` domain, background
+  priority): on low battery or saver a poll is deferred and resumed, never
+  dropped, and at most one is ever queued. The explicit `check-mailbox-anon` is
+  never gated. Several contacts may check one relay at once (each delivery is
+  tried against each contact asked about; decryption authenticates). Verified
+  live with a real relay and three daemons: Alice and Carol each left a message
+  for Bob; Bob, configured to poll, received both with no manual check.
+  Unverified: behaviour on a real battery (the power path is unit-tested only);
+  poll cost with many contacts and several relays.
+* **CLI output:** `siar … | head` no longer panics on a closed pipe; any other
+  write failure exits 1.
 * **Daemon app surface** gained identity, key-package, groups queries and
   pair (returns the conversation id), group-create/add/send commands.
 * **Window:** connect-first; starts the daemon if absent (binary looked up only

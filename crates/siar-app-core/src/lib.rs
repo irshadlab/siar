@@ -9,6 +9,7 @@ mod attach;
 pub mod bootstrap;
 pub mod core;
 mod history;
+mod host;
 mod peers;
 pub use peers::conversation_for;
 pub mod power_gate;

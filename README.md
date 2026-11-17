@@ -58,6 +58,7 @@
 - [SIAR vs P2P Networks & Traditional Messengers](#siar-vs-p2p-networks--traditional-messengers)
 - [Honest Transparency: Active Development, Known Limits & Where SIAR Fails / Is NOT Suitable](#honest-transparency-active-development-known-limits--where-siar-fails--is-not-suitable)
 - [Implementation Status & Roadmap](#implementation-status--roadmap)
+  - [Strategic Phased Roadmap: Technical Hardening (2026) → Nym Mixnet (2027+)](#strategic-phased-roadmap-technical-hardening-2026--nym-mixnet-2027)
 - [Prerequisites & Environment Setup](#prerequisites--environment-setup)
 - [Build & Repository Automation (xtask)](#build--repository-automation-xtask)
 - [Node Configuration & Operational Guide](#node-configuration--operational-guide)
@@ -788,7 +789,53 @@ SIAR maintains an honest, compile-and-test-verified tracking matrix per [`ROADMA
 
 </details>
 
-</details>
+### Strategic Phased Roadmap: Technical Hardening (2026) → Nym Mixnet (2027+)
+
+Governed by [`sys-arch/34`](sys-arch/34-mixnet-loopix-sphinx-nym-high-anonymity-transport-architecture.md) through [`39`](sys-arch/39-mixnet-directory-node-admission-identity-sybil-resistance-topology-governance-architecture.md).
+
+> [!IMPORTANT]
+> **Honest Timeline & Delay Reality Notice:**  
+> The phases below represent **milestone-driven engineering gates, not rigid calendar commitments**. We do not know how long it will take to achieve battle-tested reliability for SIAR's local daemon, multi-device synchronization, and crash recovery. Furthermore, stabilizing real-world mixnet communication with an external `nym-client` will take significant observation and testing before native in-tree crate embedding can be responsibly attempted. Timelines may stretch or experience delays. Core reliability for technical users takes strict precedence over prematurely rushing anonymity layers.
+
+```text
+Evolutionary Path:
+Phase 1 (Current / 2026): Pure P2P & Headless Hardening for Technical Users
+      │
+      ▼ (Gate: Zero state corruption, rock-solid multi-device sync & IPC)
+Phase 2A (Targeted 2027+, Flexible Schedule): Dual-Process Sidecar Model (siar-daemon + external nym-client)
+      │
+      ▼ (Gate: Months of proven mixnet reliability, mature nym-sdk upstream)
+Phase 2B (Future Long-Term): Unified Single Binary (siar-daemon embeds crates/siar-anonymity-nym)
+```
+
+#### Phase 1 (Current / 2026) — Core Reliability for Technical Users
+* **Target Audience:** Developers, sysadmins, homelab operators, server nodes, and headless Kubernetes clusters.
+* **Core Priorities:**
+  - **Deterministic Multi-Device Identity Consensus:** Fully operational pairwise device linking, revocation, and certificate verification via [`crates/siar-identity-multidevice`](crates/siar-identity-multidevice).
+  - **Daemon & IPC Stability:** Robust Unix domain socket / Windows named pipe protocol ([`crates/siar-daemon`](crates/siar-daemon)), enabling headless background operation and automation via the CLI ([`crates/siar-cli`](crates/siar-cli)).
+  - **Crash Resilience & Memory Bounding:** Complete integration of [`crates/siar-crash-recovery`](crates/siar-crash-recovery) and [`crates/siar-resource-limits`](crates/siar-resource-limits) so that abrupt power loss, crashes, or OOM events never corrupt the SQLite state or OpenMLS group ratchets.
+  - **Direct P2P & Relay Baseline:** Verified Iroh QUIC encrypted communication across variable network environments before introducing synthetic routing delays.
+* **Exit Gate:** All core messaging, storage outbox, and identity state machines run without data loss or deadlock under automated fault injection and sustained restart cycles.
+
+#### Phase 2A (Targeted 2027+, Milestone-Flexible) — Dual-Process Sidecar Model
+* **Operational Model:** The user runs two cooperating processes on their host: `siar-daemon` and the official upstream `nym-client` (managed via systemd, Podman/Docker, or shell script).
+* **Transport Interface:** `siar-daemon` routes anonymous-policy messages to `nym-client` via local loopback IPC:
+  - SOCKS5 proxy interface (`127.0.0.1:1080`), or
+  - WebSocket API (`ws://127.0.0.1:1977`) for explicit message envelope submission.
+* **Architectural Rationale:**
+  - **Clean `Cargo.lock` Boundary:** Prevents Nym's heavy Cosmos/Wasm/Substrate dependencies from polluting SIAR's lean Rust toolchain.
+  - **Upstream Agility:** Technical users can update `nym-client` immediately as Nymtech patches mixnet gateways, directory authorities, and validator endpoints, without waiting for SIAR rebuilds.
+  - **Empirical Mixnet Benchmarking:** Real-world observation of multi-hop Sphinx delays, message outbox retries, cover traffic battery drain, and offline mailbox polling before committing to in-tree code.
+* **Exit Gate:** Multi-month empirical proof that SIAR's asynchronous outbox and retry policies handle real mixnet latencies and gateway drops gracefully without user message loss.
+
+#### Phase 2B (Future Long-Term Target) — Native Embedded Crates (`crates/siar-anonymity-nym`)
+* **Operational Model:** Single unified binary (`siar` / `siar-daemon`). The user runs one command; the mixnet client is fully embedded in-process.
+* **Architectural Separation ([`sys-arch/34 §26 & §235-236`](sys-arch/34-mixnet-loopix-sphinx-nym-high-anonymity-transport-architecture.md)):**
+  - `crates/siar-anonymity-core`: Defines provider-neutral traits (`AnonymousTransport`, `AnonymousMailbox`, `CoverTrafficGenerator`). Core messaging and routing crates NEVER depend directly on Nym types.
+  - `crates/siar-anonymity-nym`: The adapter crate that compiles `nym-sdk` internally, managing gateway handshakes, Sphinx packet framing, and loopback cover traffic in-process.
+* **Prerequisites for Phase 2B:**
+  - Upstream `nym-sdk` stabilizes its Rust C-ABI/crate APIs and trims extraneous blockchain/Wasm dependencies.
+  - In-tree build benchmarks confirm that compiling `crates/siar-anonymity-nym` does not degrade SIAR's CI turnaround times or bloat lightweight embedded targets.
 
 ---
 

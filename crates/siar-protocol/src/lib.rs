@@ -11,6 +11,7 @@
 mod blob;
 mod codec;
 mod limits;
+pub mod link;
 mod mailbox;
 mod mesh;
 mod route_advertisement;
@@ -67,4 +68,6 @@ pub enum WireMessage {
     TokenMailboxDeposit(TokenMailboxEnvelope),
     AnonymousMailboxCheckIn(AnonymousMailboxCheckIn),
     RouteAdvertisement(RouteAdvertisement),
+    /// Linking a new device to an account (see [`link`]).
+    Link(link::LinkMessage),
 }

@@ -35,6 +35,8 @@ use tokio::sync::Semaphore;
 pub enum Parked {
     Preview(Box<PreviewJob>),
     Preload,
+    /// A scheduled relay-mailbox collection.
+    MailboxPoll,
 }
 
 /// Everything needed to (re)start one attachment-preview fetch.
@@ -191,6 +193,21 @@ pub fn preview_work(reference: &AttachmentReference) -> PowerAwareWork {
         .user_initiated()
 }
 
+/// Work descriptor for a scheduled relay-mailbox collection: a few tiny
+/// network requests, background priority. Deferred on low battery or saver
+/// and resumed later; nothing is lost because the relay keeps the items.
+/// (A message the user is *waiting for* is collected by the explicit
+/// `CheckRelayMailbox` command, which is never gated.)
+#[must_use]
+pub fn mailbox_work() -> PowerAwareWork {
+    PowerAwareWork::new(
+        WorkDomain::Relay,
+        WorkPriority::Background,
+        EnergyClass::Low,
+    )
+    .with_durable(true)
+}
+
 /// Work descriptor for the start-up history preload (local reads only).
 #[must_use]
 pub fn preload_work() -> PowerAwareWork {
@@ -254,6 +271,24 @@ mod tests {
             g.admit(preview_work(&reference(500_000)), Parked::Preload) != Admission::Parked,
             "the user is looking at that image — saver must not block it"
         );
+    }
+
+    #[test]
+    fn a_scheduled_mailbox_poll_runs_on_mains_and_waits_on_low_battery() {
+        let g = PowerGate::new(Deployment::Desktop);
+        g.observe(&reading(100, ChargingState::Full, ThermalState::Nominal));
+        assert_eq!(g.admit(mailbox_work(), Parked::MailboxPoll), Admission::Run);
+        let low = PowerGate::new(Deployment::Desktop);
+        low.observe(&reading(
+            15,
+            ChargingState::NotCharging,
+            ThermalState::Nominal,
+        ));
+        assert_eq!(
+            low.admit(mailbox_work(), Parked::MailboxPoll),
+            Admission::Parked
+        );
+        assert_eq!(low.parked_len(), 1, "held, not lost");
     }
 
     #[test]

@@ -650,7 +650,7 @@ MLS state and network identity. The window and the CLI are thin clients of its
 control socket. Nothing had shipped, so the embedded-core desktop path was removed.
 
 **Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 34 +
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 55 (incl. 11 linking + real two-core e2e), `siar-messaging` lib 62; was 34 +
 10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
 parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
 runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
@@ -708,6 +708,27 @@ window against a display; Windows named pipes.
   for Bob; Bob, configured to poll, received both with no manual check.
   Unverified: behaviour on a real battery (the power path is unit-tested only);
   poll cost with many contacts and several relays.
+* **Anonymous send retry:** `send-anon` retries the deposit (0.5 s, 2 s, 6 s
+  pauses, 4 attempts) with the same envelope before marking the message
+  `Failed`. A message that is still `Failed` after that is not retried later,
+  not even after a restart.
+* **Whole-workspace check:** `cargo check --workspace --all-targets` passes with
+  zero warnings (needs `libasound2-dev cmake libopus-dev libdav1d-dev
+  libssl-dev libgtk-3-dev nasm pkg-config` on the build machine).
+  `siar-ui-slint` headless interaction tests pass (15 + 27 + 8). **Not done:**
+  the window on a real display (no display and too little disk in the sandbox).
+* **Device linking: engine only** (`siar-app-core::linking`, 11 tests): one-time
+  code (80 bits, 5 min, single use, 5 wrong tries destroys it, constant-time
+  compare, forgiving input), at most 4 waiting requests (10 min), nothing issued
+  until a person approves, approval signs a `DeviceCertificate` with the
+  account root key, the new device accepts only a certificate for *its own* id
+  and key signed by the root key it was given. **Not built, and the reason the
+  devices list still shows only this device:** (1) the core has no account root
+  key: `RootIdentityKey` has no export/import, so it cannot be stored or
+  backed up yet; (2) wire messages for request/approval (a `WireMessage`
+  addition plus the relay's match and the admission mapping); (3) the new
+  device adopting the account id; (4) `AppCommand`s + sync + CLI + a UI to show
+  the code and approve; (5) telling contacts about the new device.
 * **CLI output:** `siar … | head` no longer panics on a closed pipe; any other
   write failure exits 1.
 * **Daemon app surface** gained identity, key-package, groups queries and

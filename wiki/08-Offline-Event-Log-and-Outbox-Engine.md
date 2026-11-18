@@ -345,3 +345,33 @@ impl TransactionalOutboxManager {
 │                        │ historic event packets  │ sequence numbers drop stale duplicates│
 └────────────────────────┴─────────────────────────┴─────────────────────────────────────┘
 ```
+
+---
+
+## 8. Spec 04 Production Engine & Relational Schema Architecture
+
+The offline event log implementation in [`crates/siar-event-log`](../crates/siar-event-log) satisfies all architectural phases defined in [`sys-arch/04-offline-event-log-architecture.md`](../sys-arch/04-offline-event-log-architecture.md):
+
+### 8.1. Phased Architecture & Event Processing
+- **Phases 1–4**: Core event log definitions, payload sealers, schema evolution, and monotonic stream appenders.
+- **Phase 5 (Outbox & Reconciliation)**: Persistent outbox effects, deterministic retry schedules, and causal reconciliation across partitions.
+- **Phase 6 (Scopes & Cursors)**: Scoped stream iteration, logical checkpoints, and multi-stream causal reassembly.
+- **Phase 7 (Lifecycle & Archival)**: Snapshot compaction, retention enforcement, secure deletion, transactional backup integration, and event upcasting.
+- **Phase 8 (Formal Foundations & Hardening)**:
+  - **Hybrid Logical Clocks (HLC)**: §27 physical-logical ordering pairing physical time with monotonic logical increments.
+  - **`BlobRef`**: §43 Merkle-addressed payload references linking large attachments to event streams without bloating the log.
+  - **Search Projections**: §44 deterministic projections for local BM25 indexing.
+  - **Concurrency Controls**: §73–76 reader/appender synchronization with single-writer (`SoleWriter`) transactional isolation.
+  - **Storage Schema Stamping**: §91 schema version tracking across upgrades.
+
+### 8.2. Strictly-Increasing Message Sequences
+To eliminate ordering ambiguities when multiple messages are dispatched or received within the same millisecond:
+- The messaging engine enforces strictly-increasing monotonic sequence numbers (`next_sequence` in [`siar-messaging`](../crates/siar-messaging)).
+- When historical chats are reloaded from disk (`open_stored_payload`), both sending and receiving sides reconstruct identical, deterministic conversation timelines.
+
+### 8.3. Stoolap Embedded Relational Storage
+Alongside the raw append-only event log, [`crates/siar-storage`](../crates/siar-storage) maintains transactional relational tables in embedded Stoolap:
+- `messages`: Historical encrypted payloads, timestamps, monotonic sequences, and delivery states.
+- `outbox`: Pending outbound message tickets and retry metadata.
+- `security_events`: Durable cryptographic alert log (key changes, unverified devices, security reviews).
+- `peer_directory`: Learned network addresses and discovery records surviving process restarts.

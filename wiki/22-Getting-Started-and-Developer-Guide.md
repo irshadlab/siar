@@ -82,30 +82,29 @@ cd siar
 
 ---
 
-## 2. Workspace Organization & Architecture Map (39 Domain Crates)
+## 2. Workspace Organization & Architecture Map (48 Domain Crates & 6 Applications)
 
-The repository is structured into a clean monorepo comprising 39 domain crates and 4 application targets:
+The repository is structured into a monorepo comprising 48 domain crates and 6 application targets:
 
 ```text
 siar/
 ├── apps/
-│   ├── android/                          # Android Native App & JNI Bridges
-│   │   ├── app/                          # Jetpack Compose UI (Chat, Groups, Settings, Radar)
-│   │   ├── messaging-jni/                # Rust JNI cdylib surface (siar-android-messaging)
-│   │   ├── rust-jni-glue/                # Shared JNI glue, memory safety, and JVM callbacks
-│   │   └── build-native.sh               # Multi-ABI cargo-ndk build automation script
-│   ├── cli/                              # Interactive Terminal Messenger & Diagnostics Node
-│   ├── desktop/                          # Desktop GUI Application (Dioxus 0.7 Desktop UI)
-│   └── emergency-node/                   # Headless Emergency DTN Relay & Booster Daemon
+│   ├── daemon/                           # Headless daemon (`siar-daemon run|ctl|unit`) owning DB, keys, networking
+│   ├── cli/                              # Interactive/scriptable CLI (`siar`) client over daemon IPC
+│   ├── desktop/                          # Desktop GUI application shell (`siar-desktop`) hosting Slint UI
+│   ├── emergency-node/                   # Headless Emergency DTN Relay & Booster Daemon (supervised child)
+│   ├── root-ceremony/                    # Multi-party FROST root key ceremony CLI (`siar-root`)
+│   └── android/                          # Android Native App & JNI Bridges (`rust-jni-glue`, `messaging-jni`)
 ├── crates/
-│   ├── [Core Domain, Identity & Trust]
+│   ├── [Core Domain, Identity & Advanced Cryptography]
 │   │   ├── siar-domain/                  # Core entities: AccountId, DeviceId, Ticket, SafetyFingerprint
 │   │   ├── siar-crypto/                  # Ed25519, X25519, ChaCha20-Poly1305, zeroize primitives
 │   │   ├── siar-crypto-mls/              # IETF MLS (RFC 9420) Tree-KEM 1:1 and group E2EE engine
+│   │   ├── siar-crypto-advanced/         # FROST threshold root, composite ML-DSA-65 signatures, BLS audit, BBS+
 │   │   ├── siar-identity-multidevice/    # Multi-device authority, device certs, trust store, SAS pairing
 │   │   └── siar-identity-audit-recorder/ # Monotonic append-only audit trail for identity lifecycle & revocations
 │   ├── [Protocols, Capability & Extension Engine]
-│   │   ├── siar-protocol/                # Wire envelopes, Postcard binary codec, frame types
+│   │   ├── siar-protocol/                # Wire envelopes, Postcard binary codec, frame types, LinkMessage
 │   │   ├── siar-protocol-ext/            # Extensible protocol engine: FairScheduler, BoundedQueue, health
 │   │   └── siar-capability/              # Two-phase capability negotiation & codec matrices
 │   ├── [Mesh Routing, Policy & Dynamic Connectivity]
@@ -118,25 +117,35 @@ siar/
 │   │   ├── siar-transport-bluetooth-classic/ # High-throughput RFCOMM Bluetooth Classic transport
 │   │   ├── siar-transport-wifi-direct/   # High-bandwidth Wi-Fi Direct P2P ad-hoc transport
 │   │   └── siar-transport-wifi-aware/    # Wi-Fi Aware (NAN — Neighbor Awareness Networking) transport
-│   ├── [DTN, Emergency Priority & Life-Safety Services]
+│   ├── [DTN, Power Scheduling & Emergency Priority]
 │   │   ├── siar-dtn-bundle/              # Bundle framing, custody receipts & Spray-and-Wait forwarding
 │   │   ├── siar-dtn-bundle-service/      # Background daemon service orchestrating DTN bundle sync
+│   │   ├── siar-power/                   # Battery-aware scheduling, thermal classes, host telemetry
 │   │   ├── siar-emergency/               # 5-tier priority class queuing (P0 Life-Safety to P4 Bulk)
 │   │   └── siar-emergency-service/       # Autonomous SOS beacon broadcaster & triage packet engine
 │   ├── [Storage, Blobs, Event Logging & Reliability]
-│   │   ├── siar-storage/                 # Pure-Rust Stoolap embedded relational SQL (Messages, Outbox)
-│   │   ├── siar-event-log/               # Monotonic append-only event log & causal gap detection
+│   │   ├── siar-storage/                 # Pure-Rust Stoolap embedded relational SQL (Messages, Outbox, Security)
+│   │   ├── siar-event-log/               # Spec 04 append-only event log (Phases 1-8, HLC, BlobRef, cursors)
 │   │   ├── siar-event-notify/            # Internal reactive pub-sub event notification dispatcher
 │   │   ├── siar-event-registry/          # Global schema registry of system events and audit subscribers
 │   │   ├── siar-blob-manifest/           # SIMD BLAKE3 Merkle DAG blob chunking & AEAD encryption
+│   │   ├── siar-files/                   # File transfer service over QUIC (`files/1`), chunked AEAD v2
 │   │   ├── siar-file-transfer-service/   # Peer-assisted swarm blob chunk distribution coordinator
 │   │   ├── siar-resource-limits/         # Token-bucket backpressure, ring buffers & queue drop policies
 │   │   ├── siar-crash-recovery/          # WAL recovery, transactional checkpoints & corrupt state isolation
 │   │   ├── siar-startup-recovery/        # Cold-boot consistency verification & orphaned ticket repair
+│   │   ├── siar-backup/                  # Argon2id + XChaCha20-Poly1305 encrypted archives & restore
 │   │   └── siar-remote-ingestion/        # Ingestion gateway for external telemetry and bridge adapters
-│   ├── [Messaging Orchestration & UI State Machines]
+│   ├── [Application Core, Headless Runtime & Sync]
+│   │   ├── siar-app-core/                # Headless core message loop, device linking flow, power gating
+│   │   ├── siar-runtime/                 # Daemon supervisor, lifecycle, binary IPC, hash-chained audit log
+│   │   ├── siar-admin/                   # Remote admin over Iroh QUIC (`comm-admin/1`), 4-tier RBAC
+│   │   ├── siar-abuse/                   # Admission guard, per-peer & stranger token bucket quotas
 │   │   ├── siar-messaging/               # MessageService, GroupService, Ticket manager, multi-node tests
-│   │   └── siar-ui-state/                # Framework-agnostic UI state machines & Security Center
+│   │   ├── siar-ui-model/                # Headless UI state slices (`Slices`, `StateHub`)
+│   │   ├── siar-ui-sync/                 # Domain-level snapshot + delta synchronization over IPC
+│   │   ├── siar-ui-state/                # Platform-agnostic UI state machines, Security Center models
+│   │   └── siar-ui-slint/                # Native Slint presentation shell (Theme, AppState, MainWindow, UiHub)
 │   ├── [Realtime Media, Voice/Video & Hardware Codecs]
 │   │   ├── siar-media-core/              # Media traits, raw video/audio buffers, sample clocks
 │   │   ├── siar-media-audio/             # Pure-Rust lock-free audio DSP (Opus, AEC, NS, AGC, <10ms latency)
@@ -156,13 +165,13 @@ siar/
 All engineering contributions to SIAR must strictly map to one of two authoritative specification corpora:
 
 1. **Core Engine & Platform Development (`sys-arch/`)**:
-   - Dictates all 39 domain crates in `crates/`, headless daemons (`apps/emergency-node`), CLI tools (`apps/cli`), and native JNI bridge layers.
+   - Dictates all 48 domain crates in `crates/`, headless daemons (`siar-daemon`, `apps/emergency-node`), CLI tools (`apps/cli`), and native JNI bridge layers.
    - Authoritative chapters cover wire framing (`sys-arch/01`), identity & root keys (`sys-arch/02`), multi-metric routing (`sys-arch/03`), DTN bundles (`sys-arch/06`), capability negotiation (`sys-arch/07`), daemon lifecycle (`sys-arch/16`), and end-to-end security (`sys-arch/28`).
    - Invariant: Core runtime code must remain pure-Rust, zero-external-infrastructure-dependent, and panic-free.
 
 2. **Frontend & UI/UX Development (`ui-ux/`)**:
-   - Dictates all client UI applications (`apps/desktop` via Dioxus 0.7, `apps/android` via Jetpack Compose), and reactive UI state machines in `crates/siar-ui-state`.
-   - Authoritative chapters cover application shells (`ui-ux-01..03`), message timelines & composer (`ui-ux-04..06`), Security Center & key ceremonies (`ui-ux-15`), emergency SOS mesh UX (`ui-ux-17`), design tokens (`ui-ux-22`), and degraded offline states (`ui-ux-24`).
+   - Dictates all client UI applications (`apps/desktop` via Slint 1.16, `apps/android` via Jetpack Compose), and reactive UI state machines in `crates/siar-ui-state`.
+   - Authoritative chapters cover application shells (`ui-ux-01..03`), message timelines & composer (`ui-ux-04..06`), Security Center & device linking (`ui-ux-15`), emergency SOS mesh UX (`ui-ux-17`), design tokens (`ui-ux-22`), and degraded offline states (`ui-ux-24`).
    - Invariant: UI is strictly a decoupled, stateless client of the runtime daemon (`sys-arch/16`); UI layers never initiate raw network sockets, manage cryptographic ratchets, or implement ad-hoc transport failover.
 
 ---
@@ -170,7 +179,7 @@ All engineering contributions to SIAR must strictly map to one of two authoritat
 ## 3. Compiling & Testing the Workspace
 
 ```bash
-# 1. Fast compile-check across all 39 crates and test targets
+# 1. Fast compile-check across all crates and test targets
 cargo check --workspace --tests
 
 # 2. Run unit tests across all crates
@@ -190,23 +199,37 @@ cargo build --release --workspace
 
 ## 4. Running Applications Locally
 
-### 1. Desktop GUI (Dioxus 0.7)
+### 1. Headless Runtime Daemon (`siar-daemon`)
 ```bash
-# Launch native desktop application with hardware acceleration
+# Launch the primary daemon runtime (owns DB, keys, and networking)
+cargo run --bin siar-daemon -- run
+
+# Query daemon status and subsystem health via control CLI
+cargo run --bin siar-daemon -- ctl status
+```
+
+### 2. Desktop GUI (`siar-desktop` via Slint)
+```bash
+# Launch native desktop application (auto-connects or spawns siar-daemon)
 cargo run --bin siar-desktop
 ```
 
-### 2. Interactive Terminal Messenger (`siar-cli`)
+### 3. Command-Line Client (`siar`)
 ```bash
-# Launch interactive terminal UI (Ratatui TUI)
-cargo run --bin siar-cli
-
-# Run one-off diagnostic commands
-cargo run --bin siar-cli -- peers list
-cargo run --bin siar-cli -- send --to <ACCOUNT_ID> --msg "Hello over mesh"
+# Check status, pair, and send messages through running daemon
+cargo run --bin siar -- status
+cargo run --bin siar -- ticket
+cargo run --bin siar -- pair <PEER_TICKET>
+cargo run --bin siar -- send <CONVERSATION_ID> "Hello over mesh"
 ```
 
-### 3. Headless Emergency Repeater Daemon
+### 4. Root Key Ceremony CLI (`siar-root`)
+```bash
+# Run multi-party FROST threshold root ceremony steps
+cargo run --bin siar-root -- --help
+```
+
+### 5. Headless Emergency Repeater Daemon
 ```bash
 # Launch autonomous background node with in-memory storage
 cargo run --bin siar-emergency-node -- --config config/emergency-node.toml

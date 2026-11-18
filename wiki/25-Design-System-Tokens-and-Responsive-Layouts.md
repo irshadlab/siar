@@ -11,7 +11,7 @@
 A mission-critical emergency communication system cannot rely on generic, ad-hoc CSS styles, haphazard layout frameworks, or uncalibrated color palettes. In high-stress field scenarios (first responders navigating smoke-filled rooms, tactical operators running under night-vision goggles, or human rights advocates operating under surveillance), the user interface must guarantee:
 1. **Absolute Visual Clarity**: High contrast ratios compliant with WCAG 2.1 AAA standards ($7.0:1$ for normal text, $4.5:1$ for large headings) across glaring direct sunlight and pitch-black nocturnal conditions.
 2. **Deterministic Information Density**: Vital telemetry (battery percentage, mesh neighbor count, encryption verification status, and network backhaul mode) remains visible without layout occlusion or scroll clipping.
-3. **Harmonious Cross-Platform Parity**: The desktop Dioxus GUI and Android Jetpack Compose native shell derive their spatial metrics, color semantics, and motion physics from a single mathematical source of truth.
+3. **Harmonious Cross-Platform Parity**: The desktop Slint GUI and Android Jetpack Compose native shell derive their spatial metrics, color semantics, and motion physics from a single mathematical source of truth.
 4. **Touch Ergonomics Under Duress**: Compliant with Fitts' Law and optimized for gloved operation in tactical or freezing wilderness conditions.
 
 ```text
@@ -30,7 +30,7 @@ A mission-critical emergency communication system cannot rely on generic, ad-hoc
 │                                       │                                                │
 │                 ┌─────────────────────┴─────────────────────┐                          │
 │                 ▼                                           ▼                          │
-│     [Dioxus Desktop CSS Classes]                [Android Material 3 Theme]             │
+│     [Slint Theme Global Tokens]                 [Android Material 3 Theme]             │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 

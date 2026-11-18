@@ -14,6 +14,7 @@ pub mod client;
 pub mod commands;
 pub mod engine;
 pub mod groups;
+pub mod link;
 pub mod profile;
 pub mod security;
 pub mod server;

@@ -266,3 +266,22 @@ impl AriesRecoveryEngine {
 │                        │ migration Wi-Fi tunnel  │ authenticated via out-of-band QR.   │
 └────────────────────────┴─────────────────────────┴─────────────────────────────────────┘
 ```
+
+---
+
+## 8. Spec 09 Crash Recovery & Live Daemon Backup Subsystem
+
+SIAR implements comprehensive crash recovery and persistent backup architectures in [`crates/siar-crash-recovery`](../crates/siar-crash-recovery) and [`crates/siar-backup`](../crates/siar-backup):
+
+### 8.1. Spec 09 Crash Recovery Architecture
+- **`RecoveryFailure` Enums**: Formalized 10-variant failure categorization mapping root causes across corruption, IO, resource exhaustion, and sequence inconsistencies.
+- **Transactional Consistency**: Cold-boot recovery inspects Stoolap logs, validates CRC32C frame invariants, rolls back uncommitted dirty pages, and verifies ticket table integrity without operator intervention.
+
+### 8.2. Authenticated Backup Vaults (`crates/siar-backup`)
+- **Key Derivation & AEAD**: Password-protected archives utilize memory-hard **Argon2id** key derivation bound to **XChaCha20-Poly1305** authenticated symmetric encryption.
+- **AAD Header Binding**: The archive header (metadata, schema versions, timestamps) is bound as Authenticated Associated Data (AAD); tampering with any header or content byte triggers immediate rejection before decompression or disk writes.
+- **Single-Instance Safety**: A durable advisory lock (`siar.lock`) guarantees that multiple running instances or simultaneous backup/restore operations cannot corrupt active databases.
+
+### 8.3. Live Daemon Backup & Staged Restore (`apps/daemon`)
+- **Hot Snapshots**: `ctl backup <dir>` runs against a live daemon by holding the data-folder lock, acquiring a consistent database snapshot via `create_snapshot()`, and archiving only immutable snapshots and root keys (`root.key`, `linked_devices.bin`, `joined_account.bin`, `account_id.txt`, `admin/endpoint.key`, `relay/identity.bin`). Active WAL files are filtered out prior to archiving.
+- **Two-Phase Staged Restore**: `ctl restore` stages decrypted state into a staging directory. On the subsequent restart, the runtime swaps the restored state atomically, preserving the prior dataset in `<data>.pre-restore-<ms>` for rollback safety. If verification fails, the node reverts state cleanly and fails closed.

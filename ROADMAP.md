@@ -650,7 +650,7 @@ MLS state and network identity. The window and the CLI are thin clients of its
 control socket. Nothing had shipped, so the embedded-core desktop path was removed.
 
 **Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 59 (incl. 11 linking, 4 link_flow, real two-core e2e), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-messaging` lib 62; was 34 +
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 60 (incl. 11 linking, 4 link_flow, real two-core e2e incl. linking), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-backup` 20, `siar-ui-sync` 29 + 5, `siar-ui-slint` 29 interaction + 8 render, `siar-messaging` lib 62; was 34 +
 10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
 parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
 runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
@@ -739,13 +739,31 @@ window against a display; Windows named pipes.
     between devices is a separate design); a joined device cannot link more.
   - Joining replaces the account id on disk; the running core keeps the old id
     until it restarts (the CLI says so). Only a *fresh* device may join.
-  - `root.key` is **not in the identity backup yet**: restoring the first
-    device from a backup loses the ability to link new devices.
-  - No window screen/sync section for linking yet (the `Core` methods exist;
-    wiring them as `AppCommand`s + a Slint screen is UI work, untested here).
   - Contacts are not told about the new device, so messages from the new device
-    are not yet attributed to the account by others.
+    are not attributed to the account by others. This is a data-model change,
+    not a notification: a conversation is keyed by the peer's *ticket*, so a
+    second device of the same contact would open a second conversation, and
+    sending would need to fan out to every device of a contact (one outbox row
+    per message id today). Design it as "contact = account, with N devices"
+    before building it.
   - A wrong code is refused silently on the new device's CLI, which just waits.
+* **Backup covers linking (verified):** `root.key`, `linked_devices.bin`,
+  `joined_account.bin` and `account_id.txt` are archived by both the offline
+  and the live (daemon) backup; a restore writes them owner-only (tested in
+  `siar-backup` and `siar-daemon`). Before this round that was true by
+  construction but unproven.
+* **Window screen for linking:** Security → Devices now has "Add a device"
+  (one-time code + this device's ticket, copyable), "Devices waiting for
+  approval" (name, key fingerprint, Decline/Approve), "Join an existing
+  account" (ticket + code) and a "restart to finish" notice. New commands
+  `LinkOpenOffer/LinkApprove/LinkReject/LinkJoin`, a synced `Link` section
+  (offer code, waiting requests; no keys), and the core refreshes the picture
+  every 5 s so an expired code disappears. Verified: a two-core test drives the
+  flow through the same commands the window sends (wrong code refused, request
+  waits, code single-use, approval lists both sides, joiner needs restart);
+  headless UI tests for the callbacks and a rendered screenshot reviewed by eye
+  (`device_linking_renders`). **Not done:** the window on a real display, and
+  the joiner's *own* screen guiding the person through the restart.
 * **CLI output:** `siar … | head` no longer panics on a closed pipe; any other
   write failure exits 1.
 * **Daemon app surface** gained identity, key-package, groups queries and

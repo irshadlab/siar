@@ -164,6 +164,8 @@ pub fn capture(s: &Slices) -> Vec<(SectionKey, Section)> {
         Section::Devices(crate::profile::devices_for_wire(s.devices.all())),
     ));
 
+    out.push((SectionKey::Link, Section::Link((&s.link).into())));
+
     // One section per preview (a section is size-bounded on its own), the
     // lowest ids first so the same set is chosen every time.
     let mut previews: Vec<_> = s

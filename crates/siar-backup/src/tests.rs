@@ -69,6 +69,41 @@ fn backup(data: &Path, out_dir_name: &str) -> PathBuf {
     out
 }
 
+/// Device linking keeps the account's root key and the link records in the
+/// data folder. A backup that dropped them would make a restored first device
+/// unable to link anything, and a restore that loosened their permissions
+/// would expose the root key to other local users.
+#[test]
+fn the_account_root_key_and_link_records_survive_a_restore_privately() {
+    let data = data_dir("linkfiles");
+    for (name, bytes) in [
+        ("root.key", vec![9u8; 32]),
+        ("linked_devices.bin", vec![1, 2, 3]),
+        ("joined_account.bin", vec![4, 5]),
+    ] {
+        fs::write(data.join(name), &bytes).unwrap();
+    }
+    let archive = backup(&data, "link-out");
+    let target = scratch("link-target").join("restored");
+    restore_backup(&archive, PASS, &target).unwrap();
+    for name in ["root.key", "linked_devices.bin", "joined_account.bin"] {
+        assert_eq!(
+            fs::read(target.join(name)).unwrap(),
+            fs::read(data.join(name)).unwrap(),
+            "{name} must round-trip"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(target.join(name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "{name} must not be readable by others");
+        }
+    }
+}
+
 #[test]
 fn a_backup_restores_every_file_byte_for_byte() {
     let data = data_dir("roundtrip");

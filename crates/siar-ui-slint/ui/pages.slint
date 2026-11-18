@@ -636,12 +636,121 @@ export component SecurityPage inherits PageBody {
                 height: 220px * Theme.ui-scale;
                 icon: @image-url("icons/laptop.svg");
                 title: "No device list yet";
-                body: "Your linked devices will appear here once device linking is available on this build.";
+                body: "This device is listed here once Siar has finished starting.";
             }
             for d in AppState.devices: VerticalLayout {
                 spacing: Theme.sp-sm;
                 if d.section-title != "": SectionTitle { text: d.section-title.to-uppercase(); }
                 DeviceItem { item: d; }
+            }
+
+            if AppState.link-restart-needed: Card {
+                heading: "Restart to finish";
+                Text {
+                    text: "This device has joined your account. Restart Siar to finish.";
+                    wrap: word-wrap;
+                    color: Theme.text-secondary;
+                }
+            }
+
+            if AppState.link-pending.length > 0: Card {
+                heading: "Devices waiting for approval";
+                VerticalLayout {
+                    spacing: Theme.sp-md;
+                    for p in AppState.link-pending: VerticalLayout {
+                        spacing: Theme.sp-sm;
+                        Text {
+                            text: p.name + " wants to join your account.";
+                            wrap: word-wrap;
+                            color: Theme.text-primary;
+                        }
+                        Text {
+                            text: "Its key starts with " + p.fingerprint + ". Approve only if that is your own device.";
+                            wrap: word-wrap;
+                            color: Theme.text-secondary;
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.sp-sm;
+                            alignment: start;
+                            Button {
+                                text: "Decline";
+                                clicked => { AppState.link-reject(p.device-id); }
+                            }
+                            Button {
+                                text: "Approve";
+                                kind: "primary";
+                                clicked => { AppState.link-approve(p.device-id); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Card {
+                heading: "Add a device";
+                VerticalLayout {
+                    spacing: Theme.sp-md;
+                    if AppState.link-code == "": VerticalLayout {
+                        spacing: Theme.sp-sm;
+                        Text {
+                            text: "Create a one-time code, then enter it with your ticket on the other device. The code works once and expires in five minutes.";
+                            wrap: word-wrap;
+                            color: Theme.text-secondary;
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            Button {
+                                text: "Create a link code";
+                                kind: "primary";
+                                enabled: AppState.ready;
+                                clicked => { AppState.link-open-offer(); }
+                            }
+                        }
+                    }
+                    if AppState.link-code != "": VerticalLayout {
+                        spacing: Theme.sp-sm;
+                        CopyField {
+                            label: "One-time code";
+                            value: AppState.link-code;
+                            copied => {
+                                AppState.notice-kind = NoticeKind.success;
+                                AppState.notice-text = "Code copied";
+                            }
+                        }
+                        CopyField {
+                            label: "This device’s ticket";
+                            value: AppState.link-ticket;
+                            copied => {
+                                AppState.notice-kind = NoticeKind.success;
+                                AppState.notice-text = "Ticket copied";
+                            }
+                        }
+                    }
+                    SectionTitle { text: "JOIN AN EXISTING ACCOUNT"; }
+                    link-ticket-in := TextField {
+                        label: "Ticket from your other device";
+                        placeholder: "Paste its ticket";
+                        mono: true;
+                    }
+                    link-code-in := TextField {
+                        label: "One-time code";
+                        placeholder: "ABCD-EFGH-JKMN-PQRS";
+                        mono: true;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: "Join account";
+                            enabled: AppState.ready;
+                            clicked => {
+                                if (AppState.link-join(link-ticket-in.text, link-code-in.text)) {
+                                    link-ticket-in.clear-text();
+                                    link-code-in.clear-text();
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

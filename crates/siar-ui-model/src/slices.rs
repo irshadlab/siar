@@ -99,6 +99,7 @@ pub struct Slices {
     pub contacts: ContactListState,
     pub selected_contact: Option<DeviceId>,
     pub groups: GroupListState,
+    pub link: siar_ui_state::LinkState,
     pub selected_group: Option<ConversationId>,
     pub pending_invites: PendingInviteState,
     pub attachment_previews: AttachmentPreviewState,

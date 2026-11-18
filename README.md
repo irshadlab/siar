@@ -1539,7 +1539,7 @@ SIAR stands on the shoulders of giants. We express our deepest gratitude and app
 | **Postcard** (`postcard`) | **James Munns** | Zero-overhead, `#![no_std]` binary serialization format for wire envelopes | [jamesmunns.com](https://jamesmunns.com) | [GitHub](https://github.com/jamesmunns/postcard) |
 | **BLAKE3** (`blake3`) | **Jack O'Connor et al.** | Cryptographic tree hashing, key derivation, and content-addressed blobs | [blake3.io](https://blake3.io) | [GitHub](https://github.com/BLAKE3-team/BLAKE3) |
 | **Serde** (`serde`) | **Erick Tryzelaar & David Tolnay** | Zero-copy serialization & deserialization framework | [serde.rs](https://serde.rs) | [GitHub](https://github.com/serde-rs/serde) |
-| **Stoolap** (`stoolap`) | **Guregu** | Serverless, pure-Rust transactional embedded SQL storage engine | [crates.io/stoolap](https://crates.io/crates/stoolap) | [GitHub](https://github.com/guregu/stoolap) |
+| **Stoolap** (`stoolap`) | **Stoolap** | Serverless, pure-Rust transactional embedded SQL storage engine | [crates.io/stoolap](https://crates.io/crates/stoolap) | [GitHub](https://github.com/stoolap/stoolap) |
 | **Anyhow & Thiserror** | **David Tolnay** | Ergonomic, composable domain error handling across all 50 crates | [github.com/dtolnay](https://github.com/dtolnay) | [GitHub](https://github.com/dtolnay/anyhow) |
 
 <details>

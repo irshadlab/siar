@@ -15,12 +15,13 @@ The SIAR cryptographic engine is designed around zero-trust sovereign primitives
 |                        SIAR Cryptographic Engine Pipeline                         |
 +-----------------------------------------------------------------------------------+
 |  1. Post-Quantum Hybrid KEM: ML-KEM-768 (Kyber) + X25519 (ECDH)                  |
-|  2. Digital Signatures: Ed25519 (EdDSA) + ML-DSA-65 (Dilithium) Hybrid State     |
+|  2. Digital Signatures: Ed25519 + ML-DSA-65 (Dilithium) Hybrid Composite State   |
 |  3. Group Ratchet: IETF MLS (RFC 9420) TreeKEM with Copath Ratcheting            |
-|  4. Pairwise Messaging: Double Ratchet with Encrypted Header Envelopes            |
-|  5. Symmetric AEAD: ChaCha20-Poly1305 (IETF RFC 8439) / AES-256-GCM Hardware Accel|
-|  6. Hashing & Merkle Trees: BLAKE3 (SIMD-accelerated, tree-hashable)              |
-|  7. Memory Hygiene: Zeroize on Drop + mlock memory page pinning                   |
+|  4. Pairwise Messaging: OpenMLS 1:1 PQ Hybrid Ratchet (ML-KEM-768 + ML-DSA-44)    |
+|  5. Advanced Crypto: FROST Ed25519 Threshold Root, BLS12-381 Audit, BBS+ Passes  |
+|  6. Symmetric AEAD: ChaCha20-Poly1305 (RFC 8439) / XChaCha20-Poly1305 Backups    |
+|  7. Hashing & Merkle Trees: BLAKE3 (SIMD-accelerated, tree-hashable)              |
+|  8. Memory Hygiene: Zeroize on Drop + mlock memory page pinning                   |
 +-----------------------------------------------------------------------------------+
 ```
 
@@ -82,53 +83,23 @@ If $\text{KEM}_{\text{classic}}$ or $\text{KEM}_{\text{pq}}$ is IND-CCA2 secure,
 
 ---
 
-## 3. Pairwise Messaging: Double Ratchet with Encrypted Header Envelopes
+## 3. Pairwise Messaging: OpenMLS 1:1 Sessions & Forward Secrecy
 
-For direct 1-on-1 conversations, SIAR implements the **Double Ratchet** protocol combined with sealed header encryption:
+For direct 1-on-1 conversations, SIAR implements two complementary messaging security layers:
 
-```
-        +------------------------------------------------------------+
-        |                 Root Diffie-Hellman Ratchet                |
-        |  Advances upon receiving new ephemeral DH public key       |
-        +------------------------------+-----------------------------+
-                                       |
-                +----------------------+----------------------+
-                |                                             |
-     +----------v-----------+                      +----------v-----------+
-     |  Sending Chain (CK_s)|                      | Receiving Chain(CK_r)|
-     |  Advances per packet |                      | Advances per packet  |
-     +----------+-----------+                      +----------+-----------+
-                 |                                             |
-     +----------v-----------+                      +----------v-----------+
-     | Message Key (MK_s)   |                      | Message Key (MK_r)   |
-     | AEAD Payload Encrypt |                      | AEAD Payload Decrypt |
-     +----------------------+                      +----------------------+
-```
+### 3.1. OpenMLS 1:1 Pairwise Ratchet (`siar-crypto-mls::pairwise`)
+SIAR adapts IETF MLS (RFC 9420) for two-member direct sessions using the post-quantum draft ciphersuite:
+$$\text{MLS\_128\_MLKEM768X25519\_CHACHA20POLY1305\_SHA384\_MLDSA44}$$
 
-### Ratchet Step Equations
+- **Hybrid Quantum Resilience**: Combines ML-KEM-768 with classical X25519 for key exchange, signed with ML-DSA-44.
+- **DTN Adaptation**: In delay-tolerant mesh conditions where peers cannot coordinate real-time commit ordering, sessions enforce **alternating commit turns**: the session creator commits at even epochs and the responder commits at odd epochs, eliminating commit collisions.
+- **Epoch Windowing**: Out-of-order message tolerance up to 512 frames and deferred delivery of up to 4 past epochs ensure robust operation across volatile wireless links.
 
-1. **Symmetric Chain Advance**:
-   $$MK_{i, j} = \text{HMAC-BLAKE3}(CK_{i, j}, \text{"message-key"})$$
-   $$CK_{i, j+1} = \text{HMAC-BLAKE3}(CK_{i, j}, \text{"chain-advance"})$$
-
-2. **Diffie-Hellman Root Step**:
-   $$DH_{\text{secret}} = \text{X25519}(sk_{\text{local}}, PK_{\text{remote}})$$
-   $$(RK_{i+1}, CK_{r, i+1}) = \text{HKDF-BLAKE3}(RK_i, DH_{\text{secret}}, \text{"ratchet-root-step"})$$
-
-### Encrypted Header Envelopes
-To prevent traffic analysis and metadata reconstruction by intermediaries, the message header (carrying the current DH public key $E$, previous chain length $PN$, and message index $N$) is not sent in plaintext:
-- The header is encrypted using an ephemeral header key $HK$ derived from the root ratchet.
-- Relay nodes observe only a fixed-length opaque byte vector.
-
-```rust
-pub struct EncryptedEnvelope {
-    pub ephemeral_routing_id: [u8; 16],
-    pub encrypted_header: [u8; 48],     // ChaCha20-Poly1305 encrypted metadata
-    pub header_tag: [u8; 16],
-    pub encrypted_payload: Vec<u8>,     // Message ciphertext + padding
-    pub payload_tag: [u8; 16],
-}
-```
+### 3.2. Static Pairwise Session & Chronological Sequencing
+- Direct pairwise sessions (`siar_crypto::Session`) use ChaCha20-Poly1305 with domain-separated pairwise keys derived from reciprocal device tickets.
+- Stored payloads at rest are decrypted on demand via `MessageService::open_stored_payload`.
+- Outgoing message sequences use strictly-increasing monotonic counters per device (`next_sequence`), ensuring that messages dispatched within the same millisecond retain deterministic, non-flapping chronological order when reloaded from disk.
+- Transport identities derive secret keys from persistent device identities using a domain-separated KDF (`DeviceIdentity::derive_secret`), ensuring addresses remain stable across client restarts and backup restores.
 
 ---
 
@@ -262,3 +233,30 @@ In embedded and mobile hardware, software cache timing attacks and memory disclo
 2. **Strict Zeroization**: All structs containing sensitive cryptographic material implement the `Zeroize` and `ZeroizeOnDrop` traits from the audited `zeroize` crate.
 3. **No Dynamic String Formatting**: Secrets and private keys are never formatted into strings, logs, or error traces (`Debug` implementations redact sensitive fields as `[REDACTED]`).
 4. **Memory Locking**: On POSIX systems, `libc::mlock` pins sensitive memory regions, ensuring that operating system swap daemons cannot dump plaintext keys to unencrypted swap partitions during low-memory conditions.
+
+---
+
+## 8. Advanced Cryptographic Primitives (`siar-crypto-advanced`) & Storage Vaults
+
+SIAR integrates [`crates/siar-crypto-advanced`](../crates/siar-crypto-advanced) and [`crates/siar-backup`](../crates/siar-backup) for specialized institutional, operational, and disaster resilience needs:
+
+### 1. FROST Threshold Ed25519 Root Signatures (`frost_root`)
+- Implements IETF RFC 9591 Flexible Round-Optimized Schnorr Threshold signatures over Ed25519 via `frost-ed25519`.
+- Supports dealerless distributed key generation (DKG) and threshold signature aggregation.
+- Emits standard Ed25519 signatures verified cleanly by standard `RootPublicKey::verify`.
+
+### 2. Post-Quantum Composite Signatures (`hybrid`)
+- Dual-signature composite scheme combining ML-DSA-65 (NIST FIPS 204) and classical Ed25519 per IETF `draft-ietf-lamps-pq-composite-sigs`.
+- Signs canonical device certificate bytes with domain-separated composite framing, requiring both signatures to verify.
+
+### 3. Compact BLS12-381 Audit Aggregation (`bls_audit`)
+- Multi-signature threshold aggregation using `blst` min-pk and IETF Proof-of-Possession (POP) ciphersuite.
+- Aggregates signatures from up to 200 distributed nodes into a single 96-byte signature with a 25-byte bitmap for verifiable, immutable audit log commitments.
+
+### 4. BBS+ Anonymous Relay Passes (`bbs_relay`)
+- Zero-knowledge attribute credentials based on `zkryptium` 0.8 (IETF BBS draft-14).
+- Issues blind access passes with hidden random identifiers and selective disclosure of epoch/tier, bound to single-use relay nonces.
+
+### 5. Encrypted Backup Vaults (`siar-backup`)
+- Backup archives are encrypted using Argon2id password-based key derivation combined with XChaCha20-Poly1305 authenticated symmetric encryption.
+- Archive headers are bound as Authenticated Associated Data (AAD), ensuring that any single-bit tampering across headers, metadata, or ciphertext payloads is cryptographically detected.

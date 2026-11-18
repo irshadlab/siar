@@ -82,6 +82,8 @@ pub struct Core {
     pub(crate) link_endpoints: Mutex<std::collections::HashMap<DeviceId, iroh::EndpointId>>,
     /// Set while this (new) device waits to be approved by another.
     pub(crate) link_join: Mutex<Option<crate::link_flow::JoinWait>>,
+    /// The code and ticket of the open offer, for the window to show.
+    pub(crate) link_shown: Mutex<Option<(String, String)>>,
 }
 
 /// At most this many contacts are checked per relay per poll; the rest follow
@@ -169,6 +171,7 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
         link_offers: Mutex::new(crate::linking::LinkOffers::new()),
         link_endpoints: Mutex::new(std::collections::HashMap::new()),
         link_join: Mutex::new(None),
+        link_shown: Mutex::new(None),
     });
 
     // ---- seed the UI -----------------------------------------------------------
@@ -292,6 +295,18 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
         tokio::spawn(async move { preload.preload_history().await });
     }
     tokio::spawn(power_task(core.clone()));
+    // An offer that expires (or a request that times out) changes what the
+    // window should show without any event; look every few seconds.
+    {
+        let core = core.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                tick.tick().await;
+                core.refresh_link_state();
+            }
+        });
+    }
 
     tokio::spawn(retry_scheduler(core.service.clone()));
     tokio::spawn(delivery_poller(core.clone()));
@@ -1037,6 +1052,29 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                         core.advance_read(conversation); // replying means you read it
                     }
                     Err(e) => core.fail("Your message couldn’t be sent", e),
+                }
+            }
+            AppCommand::LinkOpenOffer => {
+                if let Err(why) = core.link_open_offer() {
+                    core.hub.notify(NoticeLevel::Warning, why);
+                }
+            }
+            AppCommand::LinkApprove { device } => match core.link_approve(device).await {
+                Ok(()) => core
+                    .hub
+                    .notify(NoticeLevel::Info, "Device approved and linked."),
+                Err(why) => core.hub.notify(NoticeLevel::Warning, why),
+            },
+            AppCommand::LinkReject { device } => {
+                core.link_reject(device).await;
+            }
+            AppCommand::LinkJoin { ticket_text, code } => {
+                match core.link_join(&ticket_text, &code).await {
+                    Ok(()) => core.hub.notify(
+                        NoticeLevel::Info,
+                        "Request sent. Approve it on your other device.",
+                    ),
+                    Err(why) => core.hub.notify(NoticeLevel::Warning, why),
                 }
             }
             AppCommand::SendAttachment { conversation, path } => {

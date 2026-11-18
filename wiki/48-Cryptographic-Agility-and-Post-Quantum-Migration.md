@@ -315,5 +315,25 @@ impl HybridKeyExchange {
 }
 ```
 
-```
+---
+
+## 7. Advanced Post-Quantum Primitives (`siar-crypto-advanced`)
+
+In addition to X-Wing KEM, SIAR implements production post-quantum signatures and advanced cryptography in [`crates/siar-crypto-advanced`](../crates/siar-crypto-advanced):
+
+### 7.1. Composite Hybrid Signatures (ML-DSA-65 + Ed25519)
+Per IETF `draft-ietf-lamps-pq-composite-sigs`:
+- Device certificates and high-security commitments are countersigned by a composite keypair.
+- Verification requires both the classical Ed25519 signature and the lattice-based ML-DSA-65 signature to verify independently against the same canonical bytes.
+- If either classical elliptic curves or module lattices suffer a cryptanalytic breakthrough, the composite signature remains secure.
+
+### 7.2. OpenMLS Post-Quantum Pairwise Suite
+SIAR's 1:1 forward-secret messaging engine utilizes OpenMLS configured with:
+$$\text{MLS\_128\_MLKEM768X25519\_CHACHA20POLY1305\_SHA384\_MLDSA44}$$
+- Ephemeral TreeKEM key exchanges are encapsulated via ML-KEM-768 and X25519.
+- Member commitments are authenticated using ML-DSA-44 lattice signatures.
+
+### 7.3. FROST Threshold Root Authority
+- Multi-party threshold identity anchoring ($t$-of-$n$) using `frost-ed25519` (RFC 9591).
+- Provides quantum-resilient operational resilience by decentralizing root key custody across geographically isolated hardware nodes without single points of failure.
 

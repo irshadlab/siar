@@ -887,6 +887,62 @@ async fn a_restored_backup_is_the_same_working_account() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs loopback networking"]
+async fn a_second_device_links_through_the_same_commands_the_window_sends() {
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let a = start_node(&tmp.join("a")).await;
+    let b = start_node(&tmp.join("b")).await;
+
+    // A's window opens an offer and shows the code.
+    a.hub.dispatch(AppCommand::LinkOpenOffer);
+    wait_until("the offer is shown", || {
+        a.hub.read(|s| s.link.offer.is_some())
+    })
+    .await;
+    let offer = a.hub.read(|s| s.link.offer.clone()).unwrap();
+
+    // A wrong code is refused: nothing waits for approval.
+    b.hub.dispatch(AppCommand::LinkJoin {
+        ticket_text: offer.ticket.clone(),
+        code: "AAAA-AAAA-AAAA-AAAA".into(),
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(a.hub.read(|s| s.link.pending.is_empty()));
+
+    // The right code: the request waits for a person.
+    b.hub.dispatch(AppCommand::LinkJoin {
+        ticket_text: offer.ticket.clone(),
+        code: offer.code.clone(),
+    });
+    wait_until("the request waits on A", || {
+        a.hub.read(|s| !s.link.pending.is_empty())
+    })
+    .await;
+    let waiting = a.hub.read(|s| s.link.pending[0].clone());
+    assert_eq!(waiting.fingerprint.len(), 8);
+    assert_eq!(
+        a.hub.read(|s| s.devices.all().len()),
+        1,
+        "nothing before approval"
+    );
+    assert!(
+        a.hub.read(|s| s.link.offer.is_none()),
+        "the code is single-use: it is gone once a request used it"
+    );
+
+    // A person approves; both sides then list each other.
+    a.hub.dispatch(AppCommand::LinkApprove {
+        device: waiting.device_id,
+    });
+    wait_until("B lists A", || b.hub.read(|s| s.devices.all().len() == 2)).await;
+    wait_until("A lists B", || a.hub.read(|s| s.devices.all().len() == 2)).await;
+    assert!(a.hub.read(|s| s.link.pending.is_empty()));
+    assert!(b.hub.read(|s| s.link.restart_needed));
+    assert!(!a.hub.read(|s| s.link.restart_needed));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
 async fn a_new_node_lists_itself_as_this_device() {
     let tmp = std::env::temp_dir().join(format!("siar-e2e-thisdev-{}", std::process::id()));
     let a = start_node(&tmp.join("a")).await;

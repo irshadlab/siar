@@ -81,6 +81,12 @@ export struct EventRow {
 
 // kind-icon: 0 = desktop/laptop, 1 = phone/tablet, 2 = server, 3 = unknown
 // status: 0 = trusted, 1 = pending, 2 = revoked, 3 = compromised, 4 = unknown
+export struct PendingLinkRow {
+    device-id: string,
+    name: string,
+    fingerprint: string,
+}
+
 export struct DeviceRow {
     id: string,
     name: string,
@@ -162,6 +168,11 @@ export global AppState {
     // ---- security -------------------------------------------------------
     in property <[EventRow]> events;
     in property <[DeviceRow]> devices;
+    // ---- linking another device ------------------------------------------
+    in property <string> link-code;
+    in property <string> link-ticket;
+    in property <[PendingLinkRow]> link-pending;
+    in property <bool> link-restart-needed: false;
     in-out property <int> event-filter: 0;   // 0 all, 1 unresolved, 2 critical
     in property <int> unresolved-events: 0;
     in property <int> critical-count: 0;
@@ -191,6 +202,10 @@ export global AppState {
     callback accept-invite(string, string) -> bool;          // conversation, pasted group state
     callback decline-invite(string);
     callback resolve-event(string);
+    callback link-open-offer() -> bool;
+    callback link-approve(string);
+    callback link-reject(string);
+    callback link-join(string, string) -> bool;     // ticket, code
     callback dismiss-banner(string);
     callback review-security();
     callback set-contact-verified(string, bool);

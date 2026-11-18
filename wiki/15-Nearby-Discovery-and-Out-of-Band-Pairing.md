@@ -330,3 +330,21 @@ impl LubyFountainEncoder {
 }
 ```
 
+---
+
+## 7. Out-of-Band Device Linking Flow (`WireMessage::Link`)
+
+Pairing secondary desktop and mobile devices to an existing account relies on an out-of-band mutual authorization exchange:
+
+### 7.1. Ephemeral 80-Bit Pairing Tokens
+1. **Creation**: The primary device runs `siar link-offer` or clicks *Add a device* in the Security Center.
+2. **Entropy & Expiration**: Generates an 80-bit random pairing code valid for 5 minutes.
+3. **Brute-Force Lockout**: After 5 incorrect code attempts from joining peers, the offer is permanently revoked.
+4. **Transport Independence**: The one-time code and device ticket can be displayed as a QR code, transmitted via local BLE, or communicated verbally over voice or visual out-of-band channels.
+
+### 7.2. Cryptographic Approval Handshake
+1. **Join Submission**: The joining device calls `siar link-join <ticket> <code>`.
+2. **Admission Guard**: Link frames are throttled under strict handshake rate-limit quotas; emergency relays drop linking frames by design to avoid relay abuse.
+3. **Certificate Generation**: Upon user confirmation (`siar link-approve <device_id>`), the primary device signs a `DeviceCertificate` bound to the joining device's public key using its `RootIdentityKey`.
+4. **Restart Enactment**: The joining device writes the linked account metadata and displays a global `LinkRestartBanner` until the process is restarted to adopt the new account identity.
+

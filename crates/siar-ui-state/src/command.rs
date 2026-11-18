@@ -11,7 +11,8 @@
 
 use crate::group_list::AddMemberInput;
 use siar_domain::{
-    AccountId, AttachmentReference, ConversationId, MessageContent, MessageId, MessageText,
+    AccountId, AttachmentReference, ConversationId, DeviceId, MessageContent, MessageId,
+    MessageText,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,20 @@ pub enum AppCommand {
     SendAttachment {
         conversation: ConversationId,
         path: String,
+    },
+    /// Open a one-time offer to add another device to this account.
+    LinkOpenOffer,
+    /// A person approved a waiting device (after comparing its fingerprint).
+    LinkApprove {
+        device: DeviceId,
+    },
+    LinkReject {
+        device: DeviceId,
+    },
+    /// Join an account from this (fresh) device with an offer's ticket + code.
+    LinkJoin {
+        ticket_text: String,
+        code: String,
     },
     /// Send text through a relay's anonymous token mailbox instead of
     /// directly (the peer collects it later with `CheckRelayMailbox`).

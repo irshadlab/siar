@@ -361,4 +361,23 @@ impl StagedBlobManager {
 }
 ```
 
+---
+
+## 7. Spec 05 Production File & Blob Subsystem (27 Engineering Rounds)
+
+The file and blob subsystem across [`crates/siar-blob-manifest`](../crates/siar-blob-manifest), [`crates/siar-files`](../crates/siar-files), and [`crates/siar-file-transfer-service`](../crates/siar-file-transfer-service) integrates 27 rounds of architectural specifications:
+
+### 7.1. Chunked AEAD v2 & Wire Framing
+- Wire framing enforces chunked AEAD v2 authenticated encryption with authenticated associated data (AAD) binding parent blob IDs and chunk indices.
+- Direct QUIC transport over protocol ALPN `files/1` provides high-throughput multiplexed chunk streams with flow control and sub-millisecond congestion feedback.
+
+### 7.2. Multi-Recipient Key Wrapping & Access Control
+- Encryption keys are wrapped individually for each authorized recipient using hybrid public keys.
+- **Revocation**: Senders can selectively revoke key packages without re-encrypting the underlying storage chunks.
+
+### 7.3. Swarm Coordination & Local Storage Management
+- **Pull/Push Protocols**: Nodes can proactively push emergency documents or opportunistically pull missing chunks from local radio peers.
+- **Garbage Collection & Compression**: Staged and unreferenced blobs are automatically pruned via mark-and-sweep GC with zstd compression on compressible payloads.
+- **Durable Paging & Crash Safety**: Paged transfer journals survive abrupt power loss and kernel restarts, resuming transfers from the exact chunk offset.
+
 

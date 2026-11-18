@@ -141,3 +141,27 @@ fn invite_cards_render_with_and_without_the_group_record() {
     h.app().set_page(Page::Groups);
     assert_drawn(&h.shot("groups-invites"));
 }
+
+#[test]
+fn device_linking_renders() {
+    use siar_ui_state::{LinkOffer, PendingLinkRow};
+    let h = Harness::new(1180, 1500);
+    populate(&h.hub);
+    h.ui.window().global::<Theme>().set_mode(ThemeMode::Light);
+    h.hub.update(|s| {
+        s.link.offer = Some(LinkOffer {
+            code: "7K2D-9QWM-X4PT-H8ZB".into(),
+            ticket: "b2fcd45e68a1c0".repeat(6),
+        });
+        s.link.pending = vec![PendingLinkRow {
+            device_id: siar_domain::DeviceId::new(),
+            name: "Irshad’s phone".into(),
+            fingerprint: "ab12cd34".into(),
+        }];
+    });
+    h.flush();
+    h.app().set_page(Page::Security);
+    h.app()
+        .set_security_tab(siar_ui_slint::SecurityTab::Devices);
+    assert_drawn(&h.shot("security-devices-linking"));
+}

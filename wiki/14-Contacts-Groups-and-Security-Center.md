@@ -120,7 +120,7 @@ The **Security Center** provides users complete visibility and granular control 
 │                                                                                        │
 │  Active Devices:                                                                       │
 │    📱 Primary Phone (Android 14)       • Gen 1 • Active Now (This Device)              │
-│    💻 Tactical Laptop (Linux Dioxus)   • Gen 2 • Last seen 5m ago                      │
+│    💻 Tactical Workstation (Linux Slint) • Gen 2 • Last seen 5m ago                    │
 │    📟 Mesh Repeater Node (OpenWrt)     • Gen 3 • Relay Only (No Local DB)  [Revoke]    │
 │                                                                                        │
 │  Cryptographic Key Management:                                                         │
@@ -378,4 +378,26 @@ fn gf256_div(a: u8, b: u8) -> u8 {
     gf256_mul(a, gf256_inv(b))
 }
 ```
+
+---
+
+## 7. Production Security Center & Device Management (`ui-ux-15`)
+
+The desktop Security Center implemented in [`crates/siar-ui-slint`](../crates/siar-ui-slint) translates cryptographic trust into intuitive visual controls:
+
+### 7.1. Contact Safety Number Verification
+- Both communication partners compute identical safety numbers using `SafetyFingerprint::compute`.
+- Verified status persists in Stoolap DB as `device=<key>`.
+- If a contact adds a device or rotates signing keys, their state transitions to `KeyChanged`, raising an `IdentityChanged` security event.
+- Top-level security banners offer **Review** and **Dismiss** options (Dismissing is local only and does not silently mark the event resolved).
+
+### 7.2. Device Linking Cards (Security → Devices)
+- **Add a Device**: Generates an 80-bit one-time pairing code with a 5-minute countdown and provides the host device's transport ticket.
+- **Devices Waiting for Approval**: Lists pending requests from joiners displaying requester device labels and public key fingerprints, with *Approve* and *Decline* controls.
+- **Join an Existing Account**: Accepts the host's ticket and one-time code to submit an authorization request.
+- **Global Link Restart Banner (`LinkRestartBanner`)**: When a device completes a join flow, a persistent banner spans all UI pages instructing the user to restart the application to complete identity adoption.
+
+### 7.3. Persistent Security Event Log
+- Security alerts, key changes, and verification milestones persist in Stoolap's `security_events` table.
+- A seen key-change warning is never redundantly re-raised upon restart, while new changes trigger immediate visual alerts.
 

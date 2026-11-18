@@ -29,6 +29,17 @@ pub enum WireCommand {
         conversation: ConversationId,
         path: String,
     },
+    LinkOpenOffer,
+    LinkApprove {
+        device: DeviceId,
+    },
+    LinkReject {
+        device: DeviceId,
+    },
+    LinkJoin {
+        ticket_text: String,
+        code: String,
+    },
     SendViaRelay {
         conversation: ConversationId,
         relay_ticket_text: String,
@@ -118,6 +129,13 @@ impl TryFrom<&AppCommand> for WireCommand {
                 text: text.clone(),
             },
             A::OpenConversation(id) => Self::OpenConversation(*id),
+            A::LinkOpenOffer => Self::LinkOpenOffer,
+            A::LinkApprove { device } => Self::LinkApprove { device: *device },
+            A::LinkReject { device } => Self::LinkReject { device: *device },
+            A::LinkJoin { ticket_text, code } => Self::LinkJoin {
+                ticket_text: ticket_text.clone(),
+                code: code.clone(),
+            },
             A::SendViaRelay {
                 conversation,
                 relay_ticket_text,
@@ -223,6 +241,12 @@ impl WireCommand {
             Self::PairWithTicket { ticket_text } => {
                 !ticket_text.is_empty() && ticket_text.len() <= MAX_TICKET
             }
+            Self::LinkJoin { ticket_text, code } => {
+                !ticket_text.is_empty()
+                    && ticket_text.len() <= MAX_TICKET
+                    && !code.is_empty()
+                    && code.len() <= 64
+            }
             Self::SendViaRelay {
                 relay_ticket_text,
                 text,
@@ -292,6 +316,10 @@ impl WireCommand {
             Self::SendAttachment { conversation, path } => {
                 AppCommand::SendAttachment { conversation, path }
             }
+            Self::LinkOpenOffer => AppCommand::LinkOpenOffer,
+            Self::LinkApprove { device } => AppCommand::LinkApprove { device },
+            Self::LinkReject { device } => AppCommand::LinkReject { device },
+            Self::LinkJoin { ticket_text, code } => AppCommand::LinkJoin { ticket_text, code },
             Self::SendViaRelay {
                 conversation,
                 relay_ticket_text,
@@ -390,12 +418,20 @@ mod tests {
     #[test]
     fn supported_commands_round_trip_through_the_wire_form() {
         let c = ConversationId::new();
+        let dev = DeviceId::new();
         for app in [
             AppCommand::SendMessage {
                 conversation: c,
                 text: text("hi"),
             },
             AppCommand::OpenConversation(c),
+            AppCommand::LinkOpenOffer,
+            AppCommand::LinkApprove { device: dev },
+            AppCommand::LinkReject { device: dev },
+            AppCommand::LinkJoin {
+                ticket_text: "t".into(),
+                code: "c".into(),
+            },
             AppCommand::SendViaRelay {
                 conversation: c,
                 relay_ticket_text: "relay".into(),

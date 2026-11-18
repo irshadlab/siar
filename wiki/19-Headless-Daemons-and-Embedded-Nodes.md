@@ -103,46 +103,105 @@ $$\text{PowerProfile}(V_{\text{bat}}) = \begin{cases}
 
 ---
 
-## 4. Headless Daemon IPC: Unix Domain Socket & JSON-RPC 2.0
+## 4. Headless Daemon Runtime & Binary IPC Architecture (`siar-daemon`)
 
-Headless nodes expose an asynchronous control plane over a local Unix domain socket (`/run/siar/siar.sock`) implementing **JSON-RPC 2.0** with length-delimited framing:
+SIAR's headless daemon ([`apps/daemon`](../apps/daemon)) is powered by [`crates/siar-runtime`](../crates/siar-runtime) and acts as the sole custodian of active databases, crypto keys, and network transports:
 
+### 4.1. Binary IPC Protocol (`comm-ipc/1`)
+Clients (`apps/cli` and `apps/desktop`) communicate with `siar-daemon` over local IPC:
+- **Unix**: Unix Domain Socket (`/run/siar/siar.sock` or `~/.local/share/siar/daemon.sock`).
+- **Windows**: Named pipes (`\\.\pipe\siar-daemon`) via the cross-platform `interprocess` crate.
+- **Framing & Serialization**: Length-delimited Postcard/serde binary frames with strict invariant re-validation.
+- **Command Idempotency**: Every mutating operation carries a `CommandId` evaluated against an in-memory command ledger, preventing duplicate executions upon client reconnections or retries.
+
+### 4.2. Daemon Control Plane (`siar-daemon ctl`)
+Operators and management scripts control the running daemon via `ctl` subcommands:
+```bash
+# Check daemon health and subsystem statuses
+siar-daemon ctl status
+
+# Output lossless machine-readable state in RON format
+siar-daemon ctl --ron status
+
+# Toggle maintenance and read-only modes
+siar-daemon ctl maintenance on
+siar-daemon ctl maintenance off
+
+# Trigger hot snapshot backup or staged restore
+siar-daemon ctl backup /var/backups/siar
+siar-daemon ctl restore /var/backups/siar/snapshot.tar.gz
+
+# Inspect live audit events
+siar-daemon ctl audit
 ```
-+------------------------------------------------------------------------------------+
-|                         JSON-RPC 2.0 Socket Framing                                |
-+------------------------------------------------------------------------------------+
-| Wire Format: [4-byte Big-Endian Length Prefix] [JSON Payload UTF-8]               |
-|                                                                                    |
-| Request:                                                                           |
-| {"jsonrpc": "2.0", "id": 1, "method": "mesh.list_peers", "params": {}}           |
-|                                                                                    |
-| Response:                                                                          |
-| {                                                                                  |
-|   "jsonrpc": "2.0",                                                                |
-|   "id": 1,                                                                         |
-|   "result": {                                                                      |
-|     "peer_count": 3,                                                               |
-|     "power_mode": "DynamicThrottled",                                              |
-|     "battery_voltage": 12.78,                                                      |
-|     "peers": [                                                                     |
-|       {"id": "e2a1b9..", "transport": "WIFI_DIRECT", "rssi_dbm": -52, "rtt_ms": 6},|
-|       {"id": "84c0f2..", "transport": "BLE_L2CAP",  "rssi_dbm": -78, "rtt_ms": 42}|
-|     ]                                                                              |
-|   }                                                                                |
-| }                                                                                  |
-+------------------------------------------------------------------------------------+
-```
-
-### Supported Remote Management Methods
-- `mesh.list_peers`: Returns active radio interfaces, link qualities, RSSI, and round-trip times.
-- `dtn.get_storage`: Returns custody buffer occupancy, pending bundles, and storage limits.
-- `radio.set_mode`: Manually forces a radio interface into listen-only, scan, or dormant states.
-- `system.get_telemetry`: Emits real-time solar battery voltage, CPU temperature, and uptime.
-- `system.emergency_lockdown`: Triggers duress memory zeroization and re-keys local caches.
 
 ---
 
-## 5. Linux Service Deployment (Systemd & OpenWrt Procd)
+## 5. Supervised Role Launcher & Emergency Relays (`apps/daemon/src/roles.rs`)
+
+`siar-daemon` provisions and manages node capabilities according to its designated `NodeRole`:
+
+| Node Role | Features Enabled | Process Execution Model |
+| :--- | :--- | :--- |
+| **`PersonalDevice`** | Messaging, Identity, Stoolap DB, MLS | Single process hosting `siar-app-core`. |
+| **`RelayGateway`** | DTN, Iroh Relay, SOS Broadcasting | Runs `siar-emergency-node` as a supervised child process. |
+| **`DtnNode`** | Store-Carry-Forward, Bundle Sync | Supervised child relay with bounded storage quotas. |
+| **`OrganizationNode`** | Dual Messaging + Emergency Relay | Runs chat core alongside supervised child relay. |
+| **`StorageNode`** | Distributed Blob Manifests | Dedicated high-capacity chunk store. |
+
+### Process Supervision Invariants
+- **Strict Binary Path Isolation**: Child binaries (`siar-emergency-node`) are discovered strictly beside the daemon's own executable; `PATH` lookups are disallowed to prevent binary planting attacks.
+- **Lifecycle Guarantees**: Started with `kill_on_drop`. Unexpected exits trigger bounded restart policies (5 restarts / 60 seconds with exponential backoff). Shutdown dispatches graceful SIGTERM with a 10-second escalation grace period.
+
+---
+
+## 6. Remote Administration over Iroh QUIC (`crates/siar-admin`)
+
+Headless field nodes deployed on mountaintops or remote facilities are managed securely over authenticated Iroh QUIC connections (`comm-admin/1`):
+
+### 6.1. Role-Based Access Control (RBAC)
+Operations enforce an exhaustive 4-tier hierarchy:
+$$\text{Viewer} < \text{Operator} < \text{SecurityAdmin} < \text{Owner}$$
+
+- **Viewer**: Health, metrics, link diagnostics, battery power status, provisioning state.
+- **Operator**: Maintenance mode toggling, read-only mode, hot snapshot backups.
+- **SecurityAdmin**: Durable audit log inspection and security policy configuration.
+- **Owner**: Disaster restore, remote graceful shutdown.
+
+### 6.2. Administrative Security Invariants
+- **No Remote Shell**: There is zero command execution, shell pass-through, or message content inspection by design.
+- **Strict Operator Allowlist**: Connecting QUIC endpoints authenticate via Ed25519 public keys listed in local daemon configuration. Unlisted keys are disconnected before parsing any wire bytes.
+- **Per-Operator Rate Limiting**: Token-bucket rate limiting prevents brute-force denial of service.
+
+---
+
+## 7. Durable Hash-Chained Audit Logging (`siar-runtime::audit_file`)
+
+Every administrative and security-critical action is appended to `<data>/audit/audit.log` (mode `0600`):
+
+### 7.1. Mathematical BLAKE3 Hash Chaining
+Each log line forms an authenticated chain link:
+$$\text{Chain}_0 = \text{BLAKE3}(\text{Genesis})$$
+$$\text{Chain}_i = \text{BLAKE3}(\text{Chain}_{i-1} \parallel \text{LogBody}_i)$$
+
+- Single-byte tampering, deleted lines, or reordered entries invalidate all subsequent hash links.
+- **Tamper Quarantine**: If the daemon detects hash chain corruption on startup, it moves the corrupted evidence to `audit.corrupt-<ms>/` intact, emits a visible alert, and initializes a fresh chain starting with `audit:chain-restarted`.
+- **Offline Verifier**: Operators verify log integrity on air-gapped forensic machines using:
+  ```bash
+  siar-daemon audit-verify /var/lib/siar/audit
+  ```
+
+---
+
+## 8. Headless Provisioning & FROST Enrolment
+
+Unattended nodes boot in an unprovisioned state running only a local `BootstrapListener` until provisioned:
+- **Challenge-Response Provisioning**: The node generates an ephemeral QR challenge. The operator signs a `ProvisionPayload` specifying node roles, admin public keys, and network parameters using an authorized Ed25519 key or a 2-of-3 threshold **FROST** signature.
+- **Exit 75 Restart**: Upon successful signature verification, the daemon writes the provisioned state atomically to disk (mode `0600`) and exits with **code 75**, prompting Systemd unit managers to restart into its active operational role.
+
+---
+
+## 9. Linux Service Deployment (Systemd & OpenWrt Procd)
 
 ### 1. Systemd Service Unit (`/etc/systemd/system/siar-node.service`)
 
@@ -199,7 +258,7 @@ service_triggers() {
 
 ---
 
-## 6. Production Rust Implementation: Hardware Watchdog & Power Governor
+## 10. Production Rust Implementation: Hardware Watchdog & Power Governor
 
 The following production-grade Rust implementation drives the unattended embedded daemon lifecycle, managing `/dev/watchdog` hardware pings, thermal monitoring, and battery telemetry:
 
@@ -342,30 +401,44 @@ impl SolarPowerGovernor {
 
 ---
 
-## 7. Command-Line Interface (`apps/cli`) & Terminal Dashboard
+## 11. Command-Line Interface (`apps/cli` — `siar`)
 
-The `siar-cli` provides an interactive terminal user interface (TUI) powered by `ratatui` for tactical operators:
+The `siar` CLI acts as a client connected to the local `siar-daemon` IPC socket, supporting scriptable administration, headless messaging, and field diagnostics:
 
 ```bash
-# Display real-time radio link telemetry and active peers
-$ siar-cli peers list
-ID         TRANSPORT       RSSI     RTT    STATE     CAPABILITIES
-----------------------------------------------------------------------
-a8f9c1..   BLE_L2CAP       -68dBm   45ms   Active    [TEXT, DTN, SOS]
-3e02b7..   WIFI_DIRECT     -54dBm   8ms    Active    [TEXT, CALL, VIDEO, BLOB]
-f1092a..   LAN_MULTICAST   -42dBm   2ms    Active    [ALL]
+# Daemon management & auto-spawning
+$ siar --spawn status          # Spawns background daemon if not already running
+$ siar identity               # Displays local AccountId and Root Public Key
+$ siar ticket                 # Generates/prints local transport ticket for pairing
+$ siar key-package            # Fetches/generates MLS KeyPackage for group invites
 
-# Send an urgent off-grid command across the mesh
-$ siar-cli send --to a8f9c1.. --priority high --msg "Basecamp logistics update"
-[+] Message enqueued to outbox (Seq: 1492) -> Dispatched over WIFI_DIRECT in 12ms.
+# Direct messaging & file transfers
+$ siar pair <ticket>          # Pairs with a peer ticket and establishes conversation
+$ siar conversations          # Lists all active 1:1 and group conversations
+$ siar send <conv-id> "Message over mesh"
+$ siar send-file <conv-id> /path/to/intel.pdf
+$ siar listen                 # Streams incoming messages and delivery ACKs
 
-# Monitor real-time packet throughput, power draw, and watchdog status
-$ siar-cli stats --watch
+# Anonymous relay mailboxes
+$ siar send-anon <relay-ticket> <dest-pubkey> "Secret via relay"
+$ siar check-mailbox-anon <relay-ticket> <dest-pubkey>
+
+# Multi-device linking
+$ siar link-offer             # Generates 80-bit code and prints ticket
+$ siar link-join <ticket> <code>  # Submits join request from fresh device
+$ siar link-pending           # Lists join requests waiting for approval
+$ siar link-approve <device-id> # Approves device and signs certificate
+$ siar devices                # Lists all linked devices and status
+
+# Group management
+$ siar group-create "Alpha Team"
+$ siar group-add <group-id> <key-package>
+$ siar group-send <group-id> "Situation report"
 ```
 
 ---
 
-## 8. Cross-Compilation & Target Triples Matrix
+## 12. Cross-Compilation & Target Triples Matrix
 
 SIAR daemons compile to static standalone binaries using `musl-libc` with zero shared library dependencies:
 

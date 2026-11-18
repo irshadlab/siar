@@ -339,3 +339,26 @@ impl OliaMultipathRouter {
 }
 ```
 
+---
+
+## 7. Ingress Admission Guard, Anonymous Relays & Abuse Protection
+
+Routing policy in SIAR extends beyond path cost calculation into transport ingress protection and anonymous relay scheduling:
+
+### 7.1. Ingress Admission Guard (`crates/siar-abuse`)
+To defend against Sybil attacks and denial-of-service in ad-hoc and relay networks:
+- **`IngressGuard`**: Placed in front of the application receive loop in [`siar-messaging`](../crates/siar-messaging) and [`apps/emergency-node`](../apps/emergency-node).
+- **Endpoint Key Binding**: Rate limits are keyed to the QUIC-authenticated endpoint identity, not forgeable application envelope headers.
+- **Hierarchical Token Buckets**:
+  - Contacts and verified peers receive generous throughput allowances.
+  - Unknown peers share a **global stranger budget** (e.g., 10,000 strangers share a unified rate limit of ~3 frames/second), ensuring that spawning thousands of ephemeral identities cannot starve legitimate traffic.
+- **Cheap-Validation-First**: Frame length, version, blocklist, and rate-limit checks occur *before* allocating memory or invoking expensive signature verification or cryptographic decryption.
+
+### 7.2. Anonymous Relay Mailboxes & Retry Policy
+- **Anonymous Relay Deposits (`send-anon`)**: Messages destined for offline peers are sealed in anonymous envelopes and deposited with trusted relays. The client retries deposits automatically (0.5s, 2s, 6s backoff across 4 attempts) before flagging state as `Failed`.
+- **Anonymous Mailbox Checks (`check-mailbox-anon`)**: Nodes check relay mailboxes without disclosing device identity, receiving token-mailbox deliveries and authenticating payloads via trial decryption against known peer keys.
+- **Power-Gated Scheduled Polling**: Background daemon polling (`[mailbox] relays = [...]`) distributes requests across relays, power-gated by [`siar-power`](../crates/siar-power) to defer checks during low battery states without losing messages.
+
+### 7.3. Nym Mixnet & High-Anonymity Transport Roadmap
+In addition to direct Iroh QUIC connections and local radio mesh paths, SIAR's architectural roadmap incorporates integration with the decentralized **Nym mixnet** to provide post-infrastructure anonymous routing with Poisson delay packet mixing and synthetic cover traffic.
+

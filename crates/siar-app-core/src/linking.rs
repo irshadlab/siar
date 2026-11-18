@@ -157,6 +157,14 @@ impl LinkOffers {
         code
     }
 
+    /// Whether a code is currently usable (open, not expired).
+    #[must_use]
+    pub fn has_open_offer(&self, now_millis: u64) -> bool {
+        self.offer
+            .as_ref()
+            .is_some_and(|o| o.expires_at_millis > now_millis)
+    }
+
     /// Check a request's code. On success the offer is consumed and the
     /// request waits for approval; the returned `PendingLink` is what to show.
     pub fn submit(

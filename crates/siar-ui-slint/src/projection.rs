@@ -20,7 +20,7 @@ use crate::slices::{EventView, NoticeLevel, Slices, VerificationState};
 use crate::text;
 use crate::ui::{
     AppState, ContactRow, ConversationRow, DeviceRow, EventRow, GroupRow, InviteRow, MainWindow,
-    MessageRow, NoticeKind,
+    MessageRow, NoticeKind, PendingLinkRow,
 };
 
 /// Longest edge, in logical px, an inline preview is drawn at.
@@ -34,6 +34,7 @@ struct Models {
     invites: Rc<VecModel<InviteRow>>,
     events: Rc<VecModel<EventRow>>,
     devices: Rc<VecModel<DeviceRow>>,
+    link_pending: Rc<VecModel<PendingLinkRow>>,
 }
 
 #[derive(Default)]
@@ -56,6 +57,7 @@ pub(crate) fn install(window: &MainWindow) {
         invites: Rc::new(VecModel::default()),
         events: Rc::new(VecModel::default()),
         devices: Rc::new(VecModel::default()),
+        link_pending: Rc::new(VecModel::default()),
     };
     let app = window.global::<AppState>();
     app.set_conversations(ModelRc::from(models.conversations.clone()));
@@ -65,6 +67,7 @@ pub(crate) fn install(window: &MainWindow) {
     app.set_invites(ModelRc::from(models.invites.clone()));
     app.set_events(ModelRc::from(models.events.clone()));
     app.set_devices(ModelRc::from(models.devices.clone()));
+    app.set_link_pending(ModelRc::from(models.link_pending.clone()));
     MODELS.with(|m| *m.borrow_mut() = Some(models));
 }
 
@@ -466,6 +469,31 @@ fn project(s: &mut Slices, m: &Models, app: &AppState<'_>) {
         &mut device_rows,
     );
     sync_model(&m.devices, device_rows);
+
+    // ---- linking another device --------------------------------------------------------
+    match &s.link.offer {
+        Some(o) => {
+            app.set_link_code(o.code.clone().into());
+            app.set_link_ticket(o.ticket.clone().into());
+        }
+        None => {
+            app.set_link_code(SharedString::default());
+            app.set_link_ticket(SharedString::default());
+        }
+    }
+    app.set_link_restart_needed(s.link.restart_needed);
+    sync_model(
+        &m.link_pending,
+        s.link
+            .pending
+            .iter()
+            .map(|p| PendingLinkRow {
+                device_id: p.device_id.to_string().into(),
+                name: p.name.clone().into(),
+                fingerprint: p.fingerprint.clone().into(),
+            })
+            .collect(),
+    );
 
     // ---- identity & diagnostics -------------------------------------------------------
     match &s.own_identity {

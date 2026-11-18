@@ -98,7 +98,58 @@ Upon receiving any `DeviceCert` over mesh or relay links:
 
 ---
 
-## 4. Short Authentication String (SAS) & Out-of-Band Pairing
+## 4. Device Linking Engine, Wire Protocol & Out-of-Band Pairing
+
+SIAR implements an end-to-end device linking flow orchestrated across [`crates/siar-app-core`](../crates/siar-app-core) (`linking`, `link_flow`), [`crates/siar-protocol`](../crates/siar-protocol) (`WireMessage::Link`, `LinkMessage`), [`crates/siar-ui-state`](../crates/siar-ui-state), and [`crates/siar-ui-slint`](../crates/siar-ui-slint).
+
+### 4.1. The One-Time Cryptographic Linking Offer
+To add a new device to an existing account:
+1. **Offer Generation**: The primary device holding custody of the `RootIdentityKey` creates a one-time offer (`siar link-offer` or UI *Add a device*).
+2. **High-Entropy Ephemeral Code**: The system generates an 80-bit random pairing code formatted for human transmission.
+3. **Safety Constraints**:
+   - The code expires after **5 minutes** (TTL 300s).
+   - **Single-Use**: The offer is consumed upon the first successful approval.
+   - **Brute-Force Lockout**: 5 failed submission attempts permanently destroy the offer and revoke the pairing window.
+   - Only the device holding the original `RootIdentityKey` may issue offers and sign device certificates.
+
+### 4.2. Wire Protocol & Join Flow (`WireMessage::Link`)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Primary Device (Account Root)
+    actor Bob as Fresh Device (To Join)
+
+    Alice->>Alice: siar link-offer -> generates 80-bit code & displays ticket
+    Bob->>Bob: siar link-join <Alice-Ticket> <code>
+    Bob->>Alice: WireMessage::Link(LinkRequest { code, device_id, device_pubkey, label })
+    Note over Alice: Rate-limited handshake quota protects ingress
+    Alice->>Alice: Validates code hash & attempts counter
+    Alice->>Alice: Displays in siar link-pending / UI "Devices waiting for approval"
+    Alice->>Alice: User confirms: siar link-approve <device_id>
+    Alice->>Alice: Signs DeviceCertificate with RootIdentityKey
+    Alice->>Bob: WireMessage::Link(LinkApproved { cert, account_id, root_pubkey })
+    Bob->>Bob: Verifies cert matches its own device_id & key
+    Bob->>Bob: Persists linked_devices.bin, joined_account.bin, account_id.txt (0600)
+    Note over Bob: Requires restart to reinitialize under new AccountId
+    Bob->>Bob: Global LinkRestartBanner displayed until app is restarted
+```
+
+### 4.3. State Durability & Backup Protection
+- All linked device metadata and root authority keys (`root.key`, `linked_devices.bin`, `joined_account.bin`, `account_id.txt`) are written with owner-only permissions (`0600`).
+- Both offline and live daemon backups (`crates/siar-backup`) archive and restore these files securely under authenticated encryption.
+- Freshness Rule: Only a completely fresh device with zero message history may join an existing account, preventing accidental state clobbering or conversation orphaning.
+
+### 4.4. Multi-Device Contacts Architecture Roadmap
+As documented in [`docs/MULTI_DEVICE_CONTACTS.md`](../docs/MULTI_DEVICE_CONTACTS.md):
+- **Today's Baseline**: Conversations and tickets are 1:1 transport mappings between pairs of device endpoints.
+- **Target Architecture**: Contacts transition to an account-level entity:
+  $$\text{Contact} = \langle \text{AccountId}, \, \text{RootPublicKey}, \, \{\text{Device}_1, \dots, \text{Device}_k\} \rangle$$
+- **Sync & Fan-Out**: Outbox dispatch will fan out message envelopes across all active registered devices of a contact, and incoming device certificates will be gossip-synchronized to prevent split-brain delivery.
+
+---
+
+## 5. Short Authentication String (SAS) & Out-of-Band Pairing
 
 When a user links a secondary device (e.g., adding a desktop app to an existing phone account), they execute a zero-knowledge, out-of-band mutual authentication protocol designed to eliminate MITM vectors even if the transport channel is controlled by an active adversary.
 
@@ -143,7 +194,7 @@ $$\text{Index}_i = \text{u16::from\_be\_bytes}(\text{OKM}[2i..2i+2]) \pmod{2048}
 
 ---
 
-## 5. Safety Fingerprints & Asynchronous Contact Verification
+## 6. Safety Fingerprints & Asynchronous Contact Verification
 
 To defend against man-in-the-middle attacks across asynchronous contacts, SIAR computes a canonical `SafetyFingerprint`. Because peer identities may be compared across disparate networks and timeframes, the fingerprint calculation is strictly symmetric and deterministic:
 
@@ -207,7 +258,7 @@ If a contact provisions a new secondary device or rotates keys, the state transi
 
 ---
 
-## 6. Revocation Architecture & Tombstone Gossip Mechanics
+## 7. Revocation Architecture & Tombstone Gossip Mechanics
 
 When a physical device is lost, stolen, or decommissioned, the account root key issues a signed `RevocationTombstone`:
 
@@ -241,7 +292,7 @@ Revocation tombstones are marked with the highest transport priority (`Priority:
 
 ---
 
-## 7. Social & Threshold Disaster Recovery (Shamir Secret Sharing)
+## 8. Social & Threshold Disaster Recovery (Shamir Secret Sharing)
 
 To ensure account recoverability if a user loses all active physical devices without relying on centralized phone numbers or cloud backup servers, SIAR implements a sovereign **Threshold Social Recovery Scheme** using Shamir's Secret Sharing ($k$-of-$n$):
 
@@ -274,9 +325,26 @@ graph TD
 
 ---
 
-## 8. Guided Loss & Security Center Integration (`ui-ux-15`)
+## 9. Guided Loss & Security Center Integration (`ui-ux-15`)
 
 SIAR integrates a dedicated **Security Center** client subsystem ([`ui-ux/ui-ux-15-security-center-devices-keys-recovery-architecture.md`](../ui-ux/ui-ux-15-security-center-devices-keys-recovery-architecture.md)):
 - **Granular Revocation Capabilities** (`RevocationCapabilities`): Evaluates whether a target device can be remotely signed out (`sign_out_copy`), explicitly informing the user that remote revocation invalidates cryptographic trust and network access but cannot physically scrub offline plaintext if the disk is unencrypted.
 - **Duress PIN & Panic Wipe**: Entering a secondary panic PIN zeroizes all local private keys, purges SQLite/Stoolap databases, and transmits a silent `DeviceCompromised` tombstone to the mesh network before terminating the process.
 - **Compromise Response Playbook**: A guided, step-by-step wizard prompting the user to re-verify affected contacts (`ReVerifyAffectedContacts`), rotate shared group TreeKEM epochs, and export a fresh encrypted disaster recovery vault.
+
+---
+
+## 10. Root Identity Custody: Seed Recovery & FROST Threshold Authority
+
+In addition to single-device root keys, SIAR provides dual paths for institutional, high-threat, and sovereign disaster resilience:
+
+### 10.1. Deterministic Root Seed Import/Export
+The `RootIdentityKey` supports deterministic 32-byte secret seed extraction and reconstruction (`RootIdentityKey::seed()` and `RootIdentityKey::from_seed()`):
+- Users can export standard BIP-39 mnemonic seed phrases or QR paper backups.
+- Restoring from seed deterministically reproduces the exact root public key and account identity without requiring active guardian coordination.
+
+### 10.2. Multi-Party FROST Threshold Root Authority (`siar-crypto-advanced`)
+For operational security teams, organizations, and mutual defense pacts, accounts can be anchored by a **FROST (Flexible Round-Optimized Schnorr Threshold)** signature scheme over Ed25519 (IETF RFC 9591):
+- **Dealerless Distributed Key Generation (DKG)**: $t$-of-$n$ participants generate the joint public root key without any single party ever learning the collective private key.
+- **Threshold Device Provisioning**: Signing a new `DeviceCertificate` requires threshold co-signing by $t$ distinct trustees using `siar-root` (`apps/root-ceremony`).
+- **Standard Ed25519 Compatibility**: Verifiers validate certificates using standard Ed25519 signature checks (`RootPublicKey::verify`), maintaining complete backwards compatibility across the entire mesh.

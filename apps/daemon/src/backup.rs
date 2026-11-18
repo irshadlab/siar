@@ -670,4 +670,20 @@ mod tests {
             db.close().unwrap();
         }
     }
+
+    #[test]
+    fn a_live_backup_keeps_the_account_key_and_link_files() {
+        for rel in [
+            "root.key",
+            "linked_devices.bin",
+            "joined_account.bin",
+            "account_id.txt",
+            "identity.bin",
+        ] {
+            assert!(include_in_live_backup(rel), "{rel} must be archived");
+        }
+        // The live database volume and bookkeeping stay out, as before.
+        assert!(!include_in_live_backup("siar.db/wal/000001.log"));
+        assert!(!include_in_live_backup(LOCK_FILE));
+    }
 }

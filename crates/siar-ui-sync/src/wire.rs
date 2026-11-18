@@ -36,6 +36,7 @@ pub enum SectionKey {
     OwnIdentity,
     Diagnostics,
     Devices,
+    Link,
     Preview(MessageId),
     Timeline(ConversationId),
 }
@@ -57,6 +58,7 @@ impl SectionKey {
             Self::OwnIdentity => (5, 4),
             Self::Diagnostics => (5, 5),
             Self::Devices => (5, 6),
+            Self::Link => (5, 7),
             Self::Preview(id) => (7, id.as_uuid().as_u128()),
             Self::Timeline(id) => (6, id.as_uuid().as_u128()),
         }
@@ -179,6 +181,7 @@ pub enum Section {
     OwnIdentity(Option<crate::profile::OwnIdentityDto>),
     Diagnostics(Option<crate::profile::DiagnosticsDto>),
     Devices(Vec<crate::profile::DeviceDto>),
+    Link(crate::link::LinkDto),
     Preview(crate::profile::PreviewDto),
     Timeline(TimelineDto),
 }

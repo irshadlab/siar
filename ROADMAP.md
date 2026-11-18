@@ -740,7 +740,9 @@ window against a display; Windows named pipes.
   - Joining replaces the account id on disk; the running core keeps the old id
     until it restarts (the CLI says so). Only a *fresh* device may join.
   - Contacts are not told about the new device, so messages from the new device
-    are not attributed to the account by others. This is a data-model change,
+    are not attributed to the account by others. **Design written:
+    `docs/MULTI_DEVICE_CONTACTS.md`** (constraints in today's code, the product
+    decisions needed, a 7-step plan). This is a data-model change,
     not a notification: a conversation is keyed by the peer's *ticket*, so a
     second device of the same contact would open a second conversation, and
     sending would need to fan out to every device of a contact (one outbox row
@@ -762,8 +764,14 @@ window against a display; Windows named pipes.
   flow through the same commands the window sends (wrong code refused, request
   waits, code single-use, approval lists both sides, joiner needs restart);
   headless UI tests for the callbacks and a rendered screenshot reviewed by eye
-  (`device_linking_renders`). **Not done:** the window on a real display, and
-  the joiner's *own* screen guiding the person through the restart.
+  (`device_linking_renders`). A device that has joined an account now shows a
+  global banner on every page ("close Siar completely and open it again to
+  finish; until then it still uses its old identity, so don't start new
+  chats"), rendered and reviewed by eye. **Not done:** the window on a real
+  display (still not possible in the sandbox: no display and too little disk to
+  build the daemon next to the UI; the headless render + interaction tests and
+  the two-core command test are the evidence), and an in-app "restart now"
+  button (the window cannot restart the daemon it is attached to).
 * **CLI output:** `siar … | head` no longer panics on a closed pipe; any other
   write failure exits 1.
 * **Daemon app surface** gained identity, key-package, groups queries and

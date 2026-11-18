@@ -165,3 +165,15 @@ fn device_linking_renders() {
         .set_security_tab(siar_ui_slint::SecurityTab::Devices);
     assert_drawn(&h.shot("security-devices-linking"));
 }
+
+#[test]
+fn a_joined_device_is_told_to_restart_on_every_page() {
+    let h = Harness::new(1180, 760);
+    populate(&h.hub);
+    h.hub.update(|s| s.link.restart_needed = true);
+    h.flush();
+    // The notice is global, not tied to the Devices tab.
+    h.app().set_page(Page::Chats);
+    assert!(h.app().get_link_restart_needed());
+    assert_drawn(&h.shot("joined-restart-banner"));
+}

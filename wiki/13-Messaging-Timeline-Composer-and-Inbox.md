@@ -314,3 +314,28 @@ impl OutboxEngine {
 }
 ```
 
+---
+
+## 7. Persistent Chat History, Paging & Read State
+
+In [`apps/desktop`](../apps/desktop) and [`crates/siar-messaging`](../crates/siar-messaging), chat history, read marks, and group sessions are engineered for robust survival across application restarts:
+
+### 7.1. Restart-Safe 1:1 History Decryption (`open_stored_payload`)
+- Messages are stored as authenticated ciphertext under static pairwise session keys in Stoolap DB.
+- On cold boot or paging, `MessageService::open_stored_payload` reconstructs conversation history on demand.
+- **Pure Paging (`history.rs`)**: A conversation's timeline is formed by merging the user's outbound stream with the peer's inbound stream. Foreign rows that fail to decrypt under the pairwise key are skipped deterministically.
+- **Scroll Anchoring**: The "Load earlier messages" action computes height deltas and adjusts the viewport anchor in the same frame, preventing UI jumping.
+
+### 7.2. Strictly-Increasing Monotonic Sequences
+- Rather than relying on wall-clock timestamps (which collide during high-speed batch sends or clock regress), each device generates strictly-increasing sequence numbers (`next_sequence`).
+- When both peers reload history, messages appear in identical chronological order.
+
+### 7.3. Persistent Read Marks (`read-marks.txt`)
+- Unread badge tracking persists the highest incoming sequence number seen by the user per conversation.
+- At start-up, unread counts are recomputed dynamically from stored messages above the mark, eliminating drift without requiring fragile per-message update transactions.
+
+### 7.4. MLS Group Session & Invite Persistence
+- Group cryptographic states persist in SQLite (`openmls_sqlite_storage`) under `<data_dir>/mls` with a durable `index.txt` mapping conversation IDs to group epochs.
+- **Versioned Welcome Bundles (`WelcomeBundle` v2)**: Group invites embed the full roster and directory addresses (`DirectoryEntry`). The invitee accepts with a single click—no manual copying required.
+- **Roster Updates (`CommitBundle`)**: Member additions automatically broadcast new peer addresses, which existing members persist into Stoolap's `peer_directory`.
+

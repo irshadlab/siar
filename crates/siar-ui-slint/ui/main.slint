@@ -168,6 +168,34 @@ component CriticalBanner inherits Rectangle {
     }
 }
 
+// Joining an account rewrites this device's account id on disk; the running
+// core keeps the old one until it restarts, so until then the app must say so,
+// on every page, not only where the person happened to start.
+component LinkRestartBanner inherits Rectangle {
+    visible: AppState.link-restart-needed;
+    height: AppState.link-restart-needed ? restart-row.preferred-height : 0px;
+    background: Theme.status-security;
+    accessible-role: none;
+    restart-row := HorizontalLayout {
+        padding: Theme.sp-md;
+        spacing: Theme.sp-md;
+        Icon {
+            source: @image-url("icons/alert.svg");
+            tint: Theme.text-inverse;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: "This device joined your account. Close Siar completely and open it again to finish — until then it still uses its old identity, so don’t start new chats.";
+            color: Theme.text-inverse;
+            font-size: Theme.ty-body-md;
+            font-weight: 700;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+    }
+}
+
 component StatusBar inherits Rectangle {
     height: 26px * Theme.ui-scale;
     background: Theme.surface-rail;
@@ -277,6 +305,7 @@ export component MainWindow inherits Window {
 
     if AppState.startup-error == "": VerticalLayout {
         CriticalBanner { }
+        LinkRestartBanner { }
         HorizontalLayout {
             Rail { }
             if root.show-sidebar: Rectangle {

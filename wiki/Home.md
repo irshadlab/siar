@@ -45,7 +45,7 @@ mindmap
       17. Local Knowledge & Search
       25. Design Tokens & Layouts
       26. UI Quality Gates & 120 FPS
-      46. UI State Machines & Dioxus
+      46. UI State Machines & Reactive Runtimes
     Part V: Extensibility & Field Ops
       18. Protocol Extensions Engine
       19. Headless Daemons & Routers
@@ -100,7 +100,7 @@ sys-arch/ & ui-ux/ (176 Specifications · 514k+ lines · 875k+ words)
 │
 ├── 2. UI/UX & Cross-Platform Shells (Parts ui-ux-01 – ui-ux-27)
 │      72,610 lines · 27 Specs
-│      Focus: Dioxus 0.7 desktop shells, Android Compose shells, design tokens,
+│      Focus: Slint desktop client shell, Android Compose shells, design tokens,
 │      virtualized message lists, composer, call surfaces, pairing, security center.
 │
 └── 3. The Anonymous Network & Cloud Operating Ecosystem (Parts 34 – 150)
@@ -147,41 +147,41 @@ sys-arch/ & ui-ux/ (176 Specifications · 514k+ lines · 875k+ words)
 ## 📚 Complete Table of Contents by Domain (50 Chapters)
 
 ### 🏛️ Part I: Core Architecture, Identity & Cryptography
-* **[[01-System-Overview-and-Architecture]]**: High-level design, survivability invariants, workspace topology (39 Rust domain crates, 4 apps, 2 Android JNI bridges), and the 3-Tier architecture.
-* **[[02-Multi-Device-Identity-and-Trust]]**: Ed25519 root authority, monotonic certificates, device tree revocation, SAS out-of-band verification.
-* **[[03-Cryptographic-Engine-and-Key-Management]]**: IETF MLS (RFC 9420) tree ratchets, pairwise Double Ratchet, BLAKE3 convergent chunk encryption, memory zeroization, post-quantum hybrid KEM roadmap.
-* **[[48-Cryptographic-Agility-and-Post-Quantum-Migration]]**: Formal ML-KEM-768 hybrid KEM, PQXDH ratcheting, stateful hash-based signatures (XMSS/LMS), dynamic cipher suite negotiation.
+* **[[01-System-Overview-and-Architecture]]**: High-level design, survivability invariants, workspace topology (48 Rust domain crates, 6 apps, 2 Android JNI bridges), daemon-centric client architecture, and the 3-Tier architecture.
+* **[[02-Multi-Device-Identity-and-Trust]]**: Ed25519 root authority, monotonic certificates, device tree revocation, out-of-band device linking engine, SAS verification, and multi-device contacts roadmap.
+* **[[03-Cryptographic-Engine-and-Key-Management]]**: IETF MLS (RFC 9420) tree ratchets, OpenMLS post-quantum pairwise sessions, `siar-crypto-advanced` (FROST RFC 9591 root threshold DKG/signing, hybrid ML-DSA-65 signatures, BLS audit aggregation, BBS+ passes), BLAKE3 convergent chunk encryption, memory zeroization, and `siar-backup` cipher vaults.
+* **[[48-Cryptographic-Agility-and-Post-Quantum-Migration]]**: Formal ML-KEM-768 hybrid KEM, PQXDH ratcheting, composite ML-DSA-65 + Ed25519 signatures, stateful hash-based signatures, dynamic cipher suite negotiation.
 
 ### 🌐 Part II: Mesh Networking, Delay-Tolerant Networking (DTN) & Proximity
-* **[[04-Autonomous-Routing-and-Policy-Engine]]**: Cost-aware multi-metric scoring, dynamic link health probes, heterogeneous path selection, hysteresis.
+* **[[04-Autonomous-Routing-and-Policy-Engine]]**: Cost-aware multi-metric scoring, dynamic link health probes, heterogeneous path selection, `siar-abuse` ingress gate admission, anonymous relay mailboxes, and Nym mixnet roadmap.
 * **[[05-Proximity-and-Hardware-Transports]]**: Pure Rust BLE GATT, Bluetooth Classic RFCOMM, Wi-Fi Direct (P2P), Wi-Fi Aware (NAN), multicast LAN rendezvous.
 * **[[06-Delay-Tolerant-Networking-and-Bundle-Forwarding]]**: Store-Carry-Forward bundles, Spray-and-Wait replication, PRoPHET routing, custody transfer receipts.
 * **[[07-Battery-Aware-Scheduling-and-Emergency-Mesh]]**: Five-tier QoS priority engine, emergency broadcast flood, duty cycle throttling, sub-1 byte/sec SOS beacons.
 * **[[47-Tactical-Field-Operations-Emergency-SOS-and-Acoustic-Beacons]]**: Acoustic chirp audio modems, unassociated Wi-Fi Aware NAN & BLE advertisements, solar repeater deployment.
 
 ### 💾 Part III: Storage Engine, Event Log & Media Pipeline
-* **[[08-Offline-Event-Log-and-Outbox-Engine]]**: Monotonic sequence outbox queue, Stoolap SQL storage, outbox delivery state machine, causal gap detection, "No One-Database Dogma".
-* **[[09-Robust-Blob-Storage-and-Chunk-Transfers]]**: Merkle DAG content addressing, ChaCha20-Poly1305 chunk encryption, resumable transfers, local swarm caching (150–450 MB/s).
-* **[[10-Crash-Recovery-and-Data-Portability]]**: Write-ahead logging, transactional atomicity, encrypted backup export/import, cryptographic erasure.
+* **[[08-Offline-Event-Log-and-Outbox-Engine]]**: Monotonic sequence outbox queue, Spec 04 full event-log engine (Phases 5-8: HLC, BlobRef, search projection, reader/writer locks), Stoolap SQL storage, outbox delivery state machine, strictly-increasing sequences.
+* **[[09-Robust-Blob-Storage-and-Chunk-Transfers]]**: Merkle DAG content addressing, Spec 05 `siar-files` service, ChaCha20-Poly1305 chunk encryption v2 over QUIC (`files/1`), resumable transfers, local swarm caching (150–450 MB/s).
+* **[[10-Crash-Recovery-and-Data-Portability]]**: Write-ahead logging, transactional atomicity, Spec 09 crash recovery engine, `siar-backup` Argon2id + XChaCha20-Poly1305 archives, live daemon snapshot backup/restore, single-instance file lock.
 * **[[11-Realtime-Audio-Video-Calling-Architecture]]**: AV1 hardware codec bridge (zero-copy surfaces), Opus DSP (AEC, NS, AGC), P2P signaling state machine.
 
 ### 📱 Part IV: UI/UX State, Client Frontends & Mobile Runtimes
-* **[[12-Cross-Platform-Client-Architecture]]**: Desktop GUI (Dioxus 0.7 + Rust) and Android Mobile (Jetpack Compose + JNI glue).
-* **[[13-Messaging-Timeline-Composer-and-Inbox]]**: Virtualized message timeline, rich attachments, voice note recorder, optimistic UI state.
-* **[[14-Contacts-Groups-and-Security-Center]]**: Key verification, MLS group membership management, security center and recovery codes.
-* **[[15-Nearby-Discovery-and-Out-of-Band-Pairing]]**: Dynamic QR exchange, NFC bootstrap, zero-configuration local mesh pairing.
+* **[[12-Cross-Platform-Client-Architecture]]**: Daemon-centric client architecture (`siar-daemon`), Desktop GUI (Slint native UI via `siar-ui-slint` + IPC sync via `siar-ui-sync`), Android Mobile (Jetpack Compose + JNI glue), and CLI client (`apps/cli`).
+* **[[13-Messaging-Timeline-Composer-and-Inbox]]**: Virtualized message timeline, rich attachments, voice note recorder, optimistic UI state, restart-safe history paging, strictly-increasing sequences, and persistent read marks.
+* **[[14-Contacts-Groups-and-Security-Center]]**: Key verification with safety numbers, MLS group membership management, versioned `WelcomeBundle` invites with directory sync, device linking UI cards, and global link restart banners.
+* **[[15-Nearby-Discovery-and-Out-of-Band-Pairing]]**: Dynamic QR exchange, NFC bootstrap, out-of-band device linking protocol (80-bit one-time code + tickets), zero-configuration local mesh pairing.
 * **[[16-Notifications-Presence-and-Background-Lifecycle]]**: Ephemeral presence, typing indicators, push notification triggers, OS background service management.
 * **[[17-Local-Knowledge-Retrieval-and-Search]]**: Privacy-first offline BM25 full-text indexing, vector embeddings, local knowledge retrieval.
-* **[[25-Design-System-Tokens-and-Responsive-Layouts]]**: Cross-platform design tokens, theme hierarchy, multi-window adaptive layouts.
+* **[[25-Design-System-Tokens-and-Responsive-Layouts]]**: Cross-platform design tokens, Slint `Theme` global tokens, theme hierarchy, multi-window adaptive layouts.
 * **[[26-UI-UX-Performance-Testing-and-Quality-Gates]]**: Onboarding wizards, empty states, 120 FPS virtualization, snapshot regression quality gates.
-* **[[46-Cross-Platform-UI-State-Machines-and-Reactive-Runtimes]]**: `siar-ui-state` platform-agnostic business logic, Dioxus reactive desktop signals, Jetpack Compose lifecycle bridges.
+* **[[46-Cross-Platform-UI-State-Machines-and-Reactive-Runtimes]]**: `siar-ui-state` platform-agnostic business logic, Slint reactive UI model projections, domain-level sync engine (`siar-ui-sync`), Jetpack Compose lifecycle bridges.
 
 ### ⚙️ Part V: Extensibility, Operations & Guides
 * **[[18-Protocol-Extensions-and-WASM-Plugins]]**: Capability negotiation engine, dynamic extension registry, Wasm sandboxing.
-* **[[19-Headless-Daemons-and-Embedded-Nodes]]**: Command-line interface, `emergency-node` solar repeater daemon, OpenWrt/Raspberry Pi targets.
+* **[[19-Headless-Daemons-and-Embedded-Nodes]]**: `siar-daemon` architecture (`siar-runtime`), binary IPC (`comm-ipc/1`), remote administration (`siar-admin` over QUIC `comm-admin/1`), durable hash-chained audit logging, headless provisioning, supervised role launcher (`apps/emergency-node`).
 * **[[20-C-ABI-FFI-and-Native-Language-Bindings]]**: Zero-copy C-ABI headers, Android JNI glue, memory safety isolation.
-* **[[21-Testing-Fuzzing-and-Network-Diagnostics]]**: Simulated multi-hop `siar-testkit`, AFL/cargo-fuzz suites, dynamic path visualizer.
-* **[[22-Getting-Started-and-Developer-Guide]]**: Workspace setup, compilation, unit/property testing, coding standards.
+* **[[21-Testing-Fuzzing-and-Network-Diagnostics]]**: Simulated multi-hop `siar-testkit`, deterministic seeded mutation-fuzzing suite, multi-node end-to-end integration tests, headless Slint UI tests.
+* **[[22-Getting-Started-and-Developer-Guide]]**: Workspace setup, compilation, running `siar`, `siar-daemon`, `siar-desktop`, and `siar-root`, unit/property/fuzz testing.
 * **[[23-Off-Grid-Survival-and-Field-Operations-Guide]]**: Tactical field deployment, solar mesh setups, emergency response playbook.
 
 ### 📊 Part VI: Deep Evaluation & Architectural Benchmarks
@@ -230,7 +230,7 @@ sys-arch/ & ui-ux/ (176 Specifications · 514k+ lines · 875k+ words)
 | **2. Multi-Transport Agility** | Seamlessly hop between Internet, LAN, Wi-Fi Direct, Wi-Fi Aware, Bluetooth Classic, and BLE. | `siar-connectivity`, `siar-routing-policy` |
 | **3. Cryptographic Sovereignty** | Ed25519 master root keys with multi-device certificate trees and MLS group encryption. | `siar-crypto`, `siar-identity-multidevice`, `siar-crypto-mls` |
 | **4. Delay-Tolerant Dissemination** | Messages survive complete network partitions via physical mule carry and hop-by-hop spray forwarding. | `siar-dtn-bundle`, `siar-blob-manifest` |
-| **5. Native Rust Performance** | Memory-safe, high-concurrency Rust core with zero-copy JNI and Dioxus desktop UI. | `crates/`, `apps/` |
+| **5. Native Rust Performance** | Memory-safe, high-concurrency Rust core with zero-copy JNI, daemon-centric architecture, and Slint desktop UI. | `crates/`, `apps/` |
 | **6. Whole-Stack Anonymity** | Anonymity treated as an explicit routing property via Loopix mixnets, Sphinx framing, and PIR search. | `sys-arch/34-150`, `crates/` |
 | **7. Life-Safety Preemption** | Strict 5-tier QoS with sub-1 byte/sec acoustic chirps and unassociated beaconing. | `siar-emergency`, `sys-arch/17` |
 | **8. Zero-Trust Cloud & Hardware**| TPM 2.0 measured boot, sub-millisecond chassis tamper zeroization, and "No One-Database Dogma". | `sys-arch/71-81`, `sys-arch/117` |

@@ -124,7 +124,7 @@ Duty-cycled radio sleep alignment synchronizes discovery windows with OS sleep s
 Write-Ahead Logging (WAL) and signed append-only event logs ensure dead batteries or OS kills never corrupt history. Causal gap detection merges conversations cleanly without merge conflicts.
 
 ### 8. Universal Deployment: Apps, Daemons, Routers & Headless Nodes
-100% memory-safe pure Rust 2021 core compiles to Android (NDK/JNI), Desktop (Dioxus 0.7), CLI tools, headless router daemons (`apps/emergency-node`), OpenWrt, Raspberry Pi solar repeaters, and sandboxed WebAssembly plugins.
+100% memory-safe pure Rust 2021 core compiles to Android (NDK/JNI), Desktop (Slint Native UI), CLI tools (`siar`), headless daemons (`siar-daemon`, `apps/emergency-node`), OpenWrt, Raspberry Pi solar repeaters, and sandboxed WebAssembly plugins.
 
 ---
 
@@ -243,7 +243,7 @@ Desktop Client Idle RAM Footprint:
 | :--- | :--- | :--- | :--- | :--- |
 | **Engine Cold-Boot Startup Latency** | ~850 ms – 2.1 s | ~400 ms – 1.2 s | ~1.5 s – 4.5 s (Tor circuit setup) | **< 45 ms** (Native Rust machine code) |
 | **Idle Memory Footprint (Mobile)** | ~95 MB – 210 MB | ~80 MB – 160 MB | ~120 MB – 300 MB | **~14 MB – 28 MB** (Bounded ring buffers) |
-| **Idle Memory Footprint (Desktop)** | ~480 MB – 1.1 GB | ~160 MB – 320 MB | ~180 MB – 350 MB | **~18 MB – 35 MB** (Native Dioxus / Core) |
+| **Idle Memory Footprint (Desktop)** | ~480 MB – 1.1 GB | ~160 MB – 320 MB | ~180 MB – 350 MB | **~18 MB – 35 MB** (Native Slint / Core) |
 | **Cryptographic Hashing Speed** | ~350 MB/s (SHA-256) | ~650 MB/s (BLAKE2b) | ~350 MB/s (SHA-256) | **~4,800 MB/s** (BLAKE3 SIMD AVX-512/NEON) |
 | **Local 1 GB File Transfer Speed** | 4.2 – 8.8 MB/s (Cloud WAN) | 120 – 160 MB/s (Direct P2P LAN)| 0.15 MB/s (Tor) / 2 MB/s (BLE) | **180 – 450 MB/s** (Direct Wi-Fi Direct/LAN) |
 | **Audio Frame Processing Latency** | 30 ms – 65 ms | 25 ms – 50 ms | N/A (No audio calling) | **< 10 ms** (Pure-Rust lock-free DSP) |

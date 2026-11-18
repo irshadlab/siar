@@ -26,6 +26,7 @@ mod diagnostics;
 mod empty_states;
 mod group_list;
 mod identity_verification;
+mod link_state;
 mod network;
 mod presentation_api;
 mod privacy_and_lock;
@@ -67,6 +68,7 @@ pub use identity_verification::{
     ContactVerificationIssue, ContactVerificationIssueKind, ContactVerificationSummary,
     IdentityKeyHealth, IdentityResetConfirmation, OwnIdentityView,
 };
+pub use link_state::{LinkOffer, LinkState, PendingLinkRow};
 pub use network::{NetworkState, NetworkStatus, PeerReachability};
 pub use presentation_api::{
     DeviceSecurityCapabilities, DeviceSecurityPresentation, ReauthProof, RecoveryCapabilities,

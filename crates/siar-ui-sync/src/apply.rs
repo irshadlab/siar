@@ -120,6 +120,7 @@ fn reset_synced(s: &mut Slices) {
     s.own_identity = None;
     s.diagnostics = None;
     s.devices = siar_ui_state::DeviceListState::new();
+    s.link = siar_ui_state::LinkState::default();
     s.attachment_previews = siar_ui_state::AttachmentPreviewState::new();
 }
 
@@ -260,6 +261,9 @@ fn apply_update(s: &mut Slices, u: &SectionUpdate) {
             let mut devices = siar_ui_state::DeviceListState::new();
             devices.set_devices(list.iter().map(Into::into).collect());
             s.devices = devices;
+        }
+        (SectionKey::Link, Section::Link(l)) => {
+            s.link = l.into();
         }
         (SectionKey::Preview(m), Section::Preview(p)) => {
             use crate::profile::PreviewDto;

@@ -349,3 +349,24 @@ impl DiscreteEventMeshSimulator {
 │                        │ physical hop counts     │ mask intermediate transit hops.     │
 └────────────────────────┴─────────────────────────┴─────────────────────────────────────┘
 ```
+
+---
+
+## 8. Deterministic Mutation Fuzzing & Live Verification Harnesses
+
+SIAR complements LLVM `cargo-fuzz` with a deterministic, seeded **mutation fuzzing suite** that executes under standard `cargo test` on stable Rust:
+
+### 8.1. Untrusted Input Mutation Sweeps
+- **Admin RPC Parsing**: Evaluates 20,000+ malformed requests against live admin endpoints (`siar-admin`) under unauthorized, corrupt, and oversized payloads; ensures zero panics, strict RBAC enforcement, and re-encodability.
+- **Provisioning Payloads**: Injects 6,000+ bit mutations into node provisioning certificates; asserts that invalid signatures fail closed without crashing daemon state machines.
+- **Durable Audit Verification**: Performs exhaustive single-byte mutations (flip, overwrite, insert, delete) at every byte position of `audit.log` files; asserts 100% detection rate.
+- **Cryptographic Envelopes**: Mutates sealed FROST ceremony files, BLS12-381 attestations, and hybrid PQ signatures to guarantee strict rejection without panics.
+
+### 8.2. Headless UI Verification (`siar-ui-slint`)
+- **Interaction Testing**: UI callbacks, AppCommand generation, and state model projections are exercised without physical display hardware.
+- **Render Snapshot Testing**: Renders UI components to off-screen framebuffers and asserts pixel/layout constraints, verifying complex screens such as the Device Linking wizard and `LinkRestartBanner`.
+
+### 8.3. Multi-Node Real-Core End-to-End Tests
+- Real in-process and socket-connected daemon cores (`siar-app-core`, `siar-daemon`) execute full conversational and administrative lifecycles:
+  - Account generation → Out-of-band ticket exchange → Direct messaging → Disconnect/Restart → Stored history recovery.
+  - Multi-device linking → Code generation → Approval → Certificate verification → State synchronization.

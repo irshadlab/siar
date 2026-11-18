@@ -12,21 +12,23 @@ Multi-platform client applications frequently fail by attempting to write cross-
 
 SIAR strictly enforces a **Single Sovereign Core, Native Presentation Shell** architecture:
 
-```
+```text
 +------------------------------------------------------------------------------------+
-|             Desktop UI (Dioxus 0.7)            Android UI (Jetpack Compose)        |
+|             Desktop UI (Slint 1.16)            Android UI (Jetpack Compose)        |
 |           100% Pure-Rust Native View                Kotlin Material 3 / NDK        |
+|             (apps/desktop, siar-ui-slint)            (apps/android, rust-jni-glue)  |
 +------------------------------------+-----------------------------------------------+
-                                     | (Direct In-Memory / JNI Zero-Copy DirectBuffer)
+                                     | (Daemon IPC / JNI DirectBuffer)
 +------------------------------------v-----------------------------------------------+
-|                      SIAR Reactive UI State Engine (siar-ui-state)                  |
-|    - Unidirectional Data Flow (UDF)            - Optimistic State Mutators         |
-|    - Caching & Viewport Virtualization State   - Reactive Subscription Event Bus   |
+|                      SIAR UI Synchronization & State Engine                         |
+|    - Domain-Level Snapshots & Deltas (siar-ui-sync)                                 |
+|    - Headless State Slices & Models (siar-ui-model)                                 |
+|    - Platform-Agnostic State Machines (siar-ui-state)                              |
 +------------------------------------+-----------------------------------------------+
                                      |
 +------------------------------------v-----------------------------------------------+
-|                        Underlying Rust Workspace Services                          |
-|  (siar-storage, siar-messaging, siar-routing-policy, siar-crypto, siar-calls)     |
+|                        Sovereign Daemon Core (siar-daemon)                          |
+|  (siar-app-core, siar-runtime, siar-storage, siar-messaging, siar-crypto-mls)       |
 +------------------------------------------------------------------------------------+
 ```
 
@@ -57,8 +59,8 @@ State transitions follow a strict Unidirectional Data Flow (UDF) pattern managed
 ```mermaid
 graph LR
     UserAction["User Action / UI Intent"] --> Mutator["Optimistic Mutator (siar-ui-state)"]
-    Mutator -->|Optimistic Update| StateSlice["Active State Slice (Signals / Flows)"]
-    StateSlice -->|Sub-8ms Render| UI["Native UI Shell (Dioxus / Compose)"]
+    Mutator -->|Optimistic Update| StateSlice["Active State Slice (Slint Models / Flows)"]
+    StateSlice -->|Sub-8ms Render| UI["Native UI Shell (Slint / Compose)"]
     
     Mutator -->|Async Job| CoreEngine["Rust Core Workspace (I/O, Crypto, Net)"]
     CoreEngine -->|Event Envelope| EventBus["Internal Event Bus"]
@@ -102,38 +104,47 @@ impl UiStateStore {
 
 ---
 
-## 4. Desktop Presentation Shell: Dioxus 0.7 Architecture
+## 4. Desktop Presentation Shell: Native Slint & Daemon Client Architecture
 
-The desktop application ([`apps/desktop`](../apps/desktop)) compiles to native machine code on Linux, Windows, and macOS using **Dioxus 0.7**:
+The desktop application ([`apps/desktop`](../apps/desktop)) compiles to native machine code on Linux, Windows, and macOS using **Slint 1.16** ([`crates/siar-ui-slint`](../crates/siar-ui-slint)) operating as a thin IPC client of [`siar-daemon`](../apps/daemon):
 
-```rust
-#[component]
-pub fn DesktopAppRoot() -> Element {
-    let active_route = use_signal(|| AppRoute::Inbox);
-    let mesh_telemetry = use_signal(|| MeshStatus::Scanning);
+### 4.1. The Daemon-Centric Client Invariant
+SIAR enforces strict single-ownership of mutable cryptographic and database state:
+- **`siar-daemon`**: The sole process that opens the Stoolap database, SQLite MLS tables, Ed25519 root keys, and Iroh networking endpoint.
+- **`apps/desktop`**: A lightweight presentation shell that connects to the daemon's local IPC socket (`comm-ipc/1` via `interprocess`). If no daemon is running, the desktop launcher automatically spawns `siar-daemon` in the background.
+- **Domain State Synchronization (`siar-ui-sync`)**: High-level domain sections (`Core`, `Identity`, `Conversations`, `Contacts`, `Link`, `Groups`, `SecurityEvents`, `Timeline`) synchronize via idempotent snapshots and bounded delta packets.
 
-    rsx! {
-        div { class: "desktop-app-layout dark-theme",
-            SidebarNavigationRail { active_route }
-            div { class: "content-pane-container",
-                match *active_route.read() {
-                    AppRoute::Inbox => rsx! { InboxSplitView {} },
-                    AppRoute::Calls => rsx! { ActiveCallView {} },
-                    AppRoute::Security => rsx! { SecurityCenterView {} },
-                    AppRoute::MeshMap => rsx! { MeshTopologyVisualizer {} },
-                }
-            }
-            StatusBarDiagnostics { status: mesh_telemetry }
+### 4.2. Slint Component & Global Architecture
+
+```slint
+import { Theme } from "theme.slint";
+import { AppState } from "state.slint";
+import { NavigationRail } from "components/navigation_rail.slint";
+import { ChatView } from "views/chat_view.slint";
+import { SecurityView } from "views/security_view.slint";
+
+export component MainWindow inherits Window {
+    title: "Siar";
+    min-width: 720px;
+    min-height: 520px;
+    background: Theme.palette.surface;
+
+    HorizontalLayout {
+        NavigationRail {
+            current-page <=> AppState.current-page;
         }
+        
+        if AppState.current-page == Page.Chats: ChatView {}
+        if AppState.current-page == Page.Security: SecurityView {}
     }
 }
 ```
 
-### Desktop Shell Capabilities
-- **Multi-Pane Adaptive Split-View**: Smooth resizing with persistent panel ratios stored in local configuration.
-- **Hardware-Accelerated Canvas**: Interactive topological mesh maps and radio graphs rendered via WGPU/Canvas.
-- **Native OS Integration**: System notification tray icon, badge counts, global push-to-talk hotkeys, and window minimizing.
-- **Low Memory Overhead**: Native desktop runtime consumes $< 60\text{ MB}$ RSS at idle, compared to $> 450\text{ MB}$ for Electron-based messengers.
+### 4.3. Desktop Presentation Capabilities
+- **Native GPU & Software Rendering**: Native FemtoVG/Skia or pure software backends render without WebView or Chromium bloat.
+- **Strictly-Typed Design System**: Global tokens (`Theme`) define semantic roles, light/dark/high-contrast palettes, density levels, and UI scaling.
+- **Sub-35MB Idle RAM**: Replaces heavy web runtimes with a sub-35 MB native resident memory footprint.
+- **Headless Testability**: The UI supports headless interaction testing and automated screenshot assertions without requiring a physical X11/Wayland display server.
 
 ---
 
@@ -204,7 +215,7 @@ Rust emits asynchronous state events into an internal unbounded ring buffer. A d
 
 ## 7. Unidirectional Data Flow (UDF) & Deterministic State Reducer
 
-Across all UI presentation shells (Dioxus, Compose, SwiftUI), the user interface is a pure, deterministic function of state:
+Across all UI presentation shells (Slint, Compose, SwiftUI), the user interface is a pure, deterministic function of state:
 
 $$\text{View} = f(\text{State})$$
 

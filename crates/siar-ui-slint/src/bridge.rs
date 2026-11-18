@@ -380,6 +380,52 @@ pub(crate) fn install(window: &MainWindow, hub: &UiHub) {
         });
     }
 
+    // ---- linking another device --------------------------------------------------------
+    {
+        let hub = hub.clone();
+        app.on_link_open_offer(move || hub.dispatch(AppCommand::LinkOpenOffer));
+    }
+    {
+        let hub = hub.clone();
+        app.on_link_approve(move |id| {
+            if let Some(device) = parse_id::<DeviceId>(&id) {
+                hub.dispatch(AppCommand::LinkApprove { device });
+            }
+        });
+    }
+    {
+        let hub = hub.clone();
+        app.on_link_reject(move |id| {
+            if let Some(device) = parse_id::<DeviceId>(&id) {
+                hub.dispatch(AppCommand::LinkReject { device });
+            }
+        });
+    }
+    {
+        let hub = hub.clone();
+        app.on_link_join(move |ticket, code| {
+            let (ticket, code) = (ticket.trim().to_string(), code.trim().to_string());
+            if ticket.is_empty() || code.is_empty() {
+                hub.notify(
+                    NoticeLevel::Warning,
+                    "Enter the ticket and the code from your other device.",
+                );
+                return false;
+            }
+            if (hub.0.validate_ticket)(&ticket).is_err() {
+                hub.notify(
+                    NoticeLevel::Error,
+                    "That doesn’t look like a valid ticket. Copy it again from your other device.",
+                );
+                return false;
+            }
+            hub.dispatch(AppCommand::LinkJoin {
+                ticket_text: ticket,
+                code,
+            })
+        });
+    }
+
     // ---- security ---------------------------------------------------------------------
     {
         let hub = hub.clone();

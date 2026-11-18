@@ -635,3 +635,84 @@ fn power_card_projects_headline_and_details_and_hides_when_unknown() {
         "Battery is low\nLarge transfers are paused"
     );
 }
+
+#[test]
+fn linking_shows_the_code_and_waiting_devices_and_sends_only_the_persons_decision() {
+    use siar_ui_state::{LinkOffer, PendingLinkRow};
+    let mut h = Harness::new(1180, 760);
+    let dev = DeviceId::new();
+
+    // Nothing yet: no code, nothing waiting.
+    h.flush();
+    assert_eq!(h.app().get_link_code(), "");
+    assert_eq!(h.app().get_link_pending().row_count(), 0);
+
+    // The daemon opened an offer and a device asked to join.
+    h.hub.update(|s| {
+        s.link.offer = Some(LinkOffer {
+            code: "ABCD-EFGH-JKMN-PQRS".into(),
+            ticket: "ticket-mine".into(),
+        });
+        s.link.pending = vec![PendingLinkRow {
+            device_id: dev,
+            name: "Phone".into(),
+            fingerprint: "ab12cd34".into(),
+        }];
+        s.link.restart_needed = true;
+    });
+    h.flush();
+    assert_eq!(h.app().get_link_code(), "ABCD-EFGH-JKMN-PQRS");
+    assert_eq!(h.app().get_link_ticket(), "ticket-mine");
+    let row = h.app().get_link_pending().row_data(0).unwrap();
+    assert_eq!(
+        (row.name.as_str(), row.fingerprint.as_str()),
+        ("Phone", "ab12cd34")
+    );
+    assert!(h.app().get_link_restart_needed());
+
+    // The person's decisions become exactly these commands, nothing more.
+    h.app().invoke_link_approve(dev.to_string().into());
+    h.app().invoke_link_reject(dev.to_string().into());
+    h.app().invoke_link_approve("not-an-id".into()); // ignored, never a panic
+    assert!(h.app().invoke_link_open_offer());
+    assert_eq!(
+        format!("{:?}", h.commands()),
+        format!(
+            "{:?}",
+            vec![
+                AppCommand::LinkApprove { device: dev },
+                AppCommand::LinkReject { device: dev },
+                AppCommand::LinkOpenOffer,
+            ]
+        )
+    );
+
+    // The offer is consumed: the code disappears from the screen.
+    h.hub.update(|s| s.link.offer = None);
+    h.flush();
+    assert_eq!(h.app().get_link_code(), "");
+}
+
+#[test]
+fn joining_validates_before_anything_is_sent() {
+    let mut h = Harness::new(1180, 760);
+    // Missing fields and a bad ticket never reach the daemon.
+    assert!(!h.app().invoke_link_join("".into(), "ABCD".into()));
+    assert!(!h.app().invoke_link_join("ticket-x".into(), "".into()));
+    assert!(!h.app().invoke_link_join("garbage".into(), "ABCD".into()));
+    assert!(h.commands().is_empty());
+    // A good pair is sent, trimmed.
+    assert!(h
+        .app()
+        .invoke_link_join(" ticket-x ".into(), " ABCD-EFGH ".into()));
+    assert_eq!(
+        format!("{:?}", h.commands()),
+        format!(
+            "{:?}",
+            vec![AppCommand::LinkJoin {
+                ticket_text: "ticket-x".into(),
+                code: "ABCD-EFGH".into(),
+            }]
+        )
+    );
+}

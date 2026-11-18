@@ -200,10 +200,54 @@ impl Core {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .new_offer(millis_now());
-        Ok(LinkOfferView {
+        let view = LinkOfferView {
             code,
             ticket: self.hub.read(|s| s.identity.ticket.clone()),
-        })
+        };
+        *self
+            .link_shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some((view.code.clone(), view.ticket.clone()));
+        self.refresh_link_state();
+        Ok(view)
+    }
+
+    /// Bring the window's picture of linking up to date (cheap; the hub only
+    /// notifies when something actually changed).
+    pub(crate) fn refresh_link_state(&self) {
+        let now = millis_now();
+        let open = self
+            .link_offers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .has_open_offer(now);
+        let offer = if open {
+            self.link_shown
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+                .map(|(code, ticket)| siar_ui_state::LinkOffer { code, ticket })
+        } else {
+            None
+        };
+        let pending = self
+            .link_pending()
+            .into_iter()
+            .map(|p| siar_ui_state::PendingLinkRow {
+                device_id: p.device_id,
+                name: p.name,
+                fingerprint: p.fingerprint,
+            })
+            .collect();
+        let next = siar_ui_state::LinkState {
+            offer,
+            pending,
+            restart_needed: self.link_restart_needed(),
+        };
+        if self.hub.read(|s| s.link != next) {
+            self.hub.update(|s| s.link = next);
+        }
     }
 
     #[must_use]
@@ -270,6 +314,7 @@ impl Core {
             .send_wire(iroh::EndpointAddr::new(endpoint), &WireMessage::Link(msg))
             .await
             .map_err(|e| format!("the new device couldn’t be reached: {e}"))?;
+        self.refresh_link_state();
         Ok(())
     }
 
@@ -467,6 +512,7 @@ impl Core {
                 );
             }
         }
+        self.refresh_link_state();
     }
 
     /// Consume the join wait if `from` is the device we asked and it has not

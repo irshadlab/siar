@@ -13,7 +13,7 @@ In modern cross-platform applications, asynchronous events from diverse sources 
 2. **Race Conditions & Frozen UIs**: User taps causing duplicate message dispatches or missing UI delivery ticks.
 3. **Inconsistent Cross-Platform Behavior**: The desktop client behaving differently from the Android client under identical network conditions.
 
-SIAR models all UI workflows as **Pure Mathematical Finite State Machines (FSM)** residing in [`crates/siar-ui-state`](../crates/siar-ui-state). The presentation shells (Dioxus 0.7 and Jetpack Compose) function strictly as deterministic, read-only renderers of these state machines.
+SIAR models all UI workflows as **Pure Mathematical Finite State Machines (FSM)** residing in [`crates/siar-ui-state`](../crates/siar-ui-state). The presentation shells (Slint 1.16 and Jetpack Compose) function strictly as deterministic, read-only renderers of these state machines.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -24,8 +24,8 @@ SIAR models all UI workflows as **Pure Mathematical Finite State Machines (FSM)*
 │                                        ▼                                               │
 │ [Pure State Reducer: T(S, Intent)] ──> [Immutable State Slice: S_(t+1)]                │
 │                                        │                                               │
-│                                        ├──> Emits to Reactive Signal Engine            │
-│                                        │      ├── Desktop: Dioxus Signals              │
+│                                        ├──> Emits to Reactive Engine                   │
+│                                        │      ├── Desktop: Slint Model Projections    │
 │                                        │      └── Android: Jetpack StateFlow           │
 │                                        │                                               │
 │                                        ▼                                               │
@@ -135,32 +135,25 @@ impl CallUiState {
 
 ---
 
-## 4. Reactive Runtime Engine: Dioxus Signals & Android Flows
+## 4. Reactive Runtime Engine: Slint Projections & Android Flows
 
 UI state propagates reactively into native presentation trees with zero polling:
 
-### 1. Desktop Shell (Dioxus 0.7 Signals)
+### 1. Desktop Shell (Native Slint 1.16 & `UiHub` Projections)
+On desktop, `crates/siar-ui-slint` binds domain state via `UiHub` and projects immutable slices into Slint Models:
+
 ```rust
-#[component]
-pub fn ActiveCallModal(call_state: ReadOnlySignal<CallUiState>) -> Element {
-    match *call_state.read() {
-        CallUiState::ActiveCall { peer_id, duration_sec, is_muted, .. } => rsx! {
-            div { class: "call-overlay active-call",
-                h2 { "In Call" }
-                p { class: "timer", "{duration_sec / 60}:{:02}", duration_sec % 60 }
-                button { 
-                    class: if is_muted { "btn-muted" } else { "btn-unmuted" },
-                    onclick: move |_| dispatch_ui(CallIntent::ToggleMute),
-                    "Mute"
-                }
-                button { class: "btn-danger", onclick: move |_| dispatch_ui(CallIntent::Hangup), "Hang Up" }
-            }
-        },
-        CallUiState::OutgoingRinging { .. } => rsx! {
-            div { class: "call-overlay ringing", "Calling peer..." }
-        },
-        _ => rsx! { div {} },
-    }
+// State projections into Slint globals (crates/siar-ui-slint)
+pub fn project_call_state(ui: &MainWindow, state: &CallUiState) {
+    ui.global::<AppState>().set_is_in_call(matches!(state, CallUiState::ActiveCall { .. }));
+    ui.global::<AppState>().set_call_status_text(match state {
+        CallUiState::ActiveCall { duration_sec, .. } => {
+            format!("{}:{:02}", duration_sec / 60, duration_sec % 60).into()
+        }
+        CallUiState::OutgoingRinging { .. } => "Ringing...".into(),
+        CallUiState::IncomingPrompt { .. } => "Incoming Call".into(),
+        _ => "".into(),
+    });
 }
 ```
 

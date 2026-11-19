@@ -761,6 +761,32 @@ impl MessageService {
         }
     }
 
+    /// Record a message that one of this person's *other* devices sent to
+    /// `peer`, so this device's chat is complete. Encrypted under this device's
+    /// session with `peer` like any stored message and shown as sent by this
+    /// account. `Ok(true)` if it was new, `Ok(false)` if already stored.
+    pub fn store_synced_outgoing(
+        &self,
+        conversation: ConversationId,
+        peer: &PeerTicket,
+        message_id: MessageId,
+        text: MessageText,
+        sent_at_millis: u64,
+    ) -> Result<bool, MessageServiceError> {
+        let plaintext = postcard::to_allocvec(&MessageContent::Text(text))
+            .expect("MessageContent always serializes");
+        let payload = self.session_for(peer).encrypt(&plaintext)?;
+        Ok(self.messages.insert_if_new(&StoredMessage {
+            message_id,
+            conversation_id: conversation,
+            sender_device: self.device_id,
+            sequence: next_sequence(&self.last_sequence, sent_at_millis),
+            timestamp_millis: sent_at_millis,
+            delivery_state: DeliveryState::Delivered,
+            payload,
+        })?)
+    }
+
     /// Send any wire message to `to` over the authenticated transport. For
     /// protocols that live outside chat (device linking).
     pub async fn send_wire(

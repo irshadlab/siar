@@ -46,6 +46,11 @@ pub struct LinkedDevice {
     pub name: String,
     pub public_key: [u8; 32],
     pub added_at_millis: u64,
+    /// That device's ticket (how contacts and this device reach it).
+    pub ticket: String,
+    /// Its certificate (postcard), kept so it can be announced again later;
+    /// empty on the joined device's record of the approver.
+    pub certificate: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -104,6 +109,22 @@ fn root_key_for_offers(dir: &Path) -> Result<RootIdentityKey, String> {
     write_private(&dir.join(ROOT_KEY_FILE), &*key.seed(), true)
         .map_err(|e| format!("couldn’t store the account key: {e}"))?;
     Ok(key)
+}
+
+const IMPORTED_FILE: &str = "imported_contacts.bin";
+
+pub(crate) fn load_imported(dir: &Path) -> Vec<String> {
+    std::fs::read(dir.join(IMPORTED_FILE))
+        .ok()
+        .and_then(|b| postcard::from_bytes::<Vec<String>>(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_imported(dir: &Path, tickets: &[String]) -> std::io::Result<()> {
+    let bytes = postcard::to_allocvec(tickets).expect("strings always serialize");
+    let tmp = dir.join(format!("{IMPORTED_FILE}.tmp"));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(tmp, dir.join(IMPORTED_FILE))
 }
 
 pub(crate) fn load_linked(dir: &Path) -> Vec<LinkedDevice> {
@@ -167,6 +188,7 @@ fn millis_now() -> u64 {
 /// A joining device waiting for the answer to its request.
 pub(crate) struct JoinWait {
     pub(crate) approver: iroh::EndpointId,
+    pub(crate) approver_ticket: String,
     pub(crate) until: std::time::Instant,
 }
 
@@ -266,7 +288,11 @@ impl Core {
     }
 
     /// A person approved `device`: issue its certificate and send it.
-    pub async fn link_approve(&self, device: DeviceId) -> Result<(), String> {
+    ///
+    /// With `share_contacts`, the new device also receives this device's
+    /// contact tickets (so it can reach them without re-pairing). Either way,
+    /// every contact is told the account has a new device.
+    pub async fn link_approve(&self, device: DeviceId, share_contacts: bool) -> Result<(), String> {
         let root = root_key_for_offers(&self.data_dir)?;
         let now = millis_now();
         let (pending, cert) = {
@@ -293,11 +319,14 @@ impl Core {
             .ok_or_else(|| "that device is no longer connected".to_owned())?;
         let mut linked = load_linked(&self.data_dir);
         linked.retain(|l| l.device_id != device);
+        let certificate = postcard::to_allocvec(&cert).map_err(|e| e.to_string())?;
         linked.push(LinkedDevice {
             device_id: device,
             name: pending.request.display_name.clone(),
             public_key: pending.request.device_public_key,
             added_at_millis: now,
+            ticket: pending.request.ticket.clone(),
+            certificate: certificate.clone(),
         });
         save_linked(&self.data_dir, &linked)
             .map_err(|e| format!("couldn’t save the device: {e}"))?;
@@ -305,17 +334,86 @@ impl Core {
         let msg = LinkMessage::Approved {
             account_id: self.local_account,
             root_public_key: root.root_public_key().0,
-            certificate: postcard::to_allocvec(&cert).map_err(|e| e.to_string())?,
+            certificate: certificate.clone(),
             approver_device: self.my_device,
             approver_public_key: self.local_key,
             approver_name: self.this_device_view().display_name,
+            contact_tickets: if share_contacts {
+                self.contact_ticket_texts()
+            } else {
+                Vec::new()
+            },
         };
         self.service
             .send_wire(iroh::EndpointAddr::new(endpoint), &WireMessage::Link(msg))
             .await
             .map_err(|e| format!("the new device couldn’t be reached: {e}"))?;
+        // Tell every contact the account has a new device (best effort; it is
+        // repeated at start-up for any contact that was offline).
+        self.announce_device(
+            root.root_public_key().0,
+            certificate,
+            pending.request.ticket.clone(),
+        )
+        .await;
         self.refresh_link_state();
         Ok(())
+    }
+
+    fn contact_ticket_texts(&self) -> Vec<String> {
+        self.peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .all()
+            .into_iter()
+            .take(siar_protocol::link::MAX_LINK_CONTACTS)
+            .map(|(_, t)| t.encode())
+            .collect()
+    }
+
+    /// Send `DeviceAdded` to every paired contact. Failures are only logged: a
+    /// contact that is offline hears it at the next start-up announcement.
+    async fn announce_device(
+        &self,
+        root_public_key: [u8; 32],
+        certificate: Vec<u8>,
+        ticket: String,
+    ) {
+        let contacts = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .all();
+        for (_, contact) in contacts {
+            let msg = LinkMessage::DeviceAdded {
+                account_id: self.local_account,
+                root_public_key,
+                certificate: certificate.clone(),
+                device_ticket: ticket.clone(),
+            };
+            if let Err(e) = self
+                .service
+                .send_wire(contact.endpoint_addr.clone(), &WireMessage::Link(msg))
+                .await
+            {
+                tracing::debug!(error = %e, "couldn’t announce a new device to a contact");
+            }
+        }
+    }
+
+    /// Re-announce every linked device to every contact (the root key is read
+    /// from disk; a device without a root key has nothing to announce).
+    pub(crate) async fn announce_linked_devices(&self) {
+        let Some(root) = load_root(&self.data_dir) else {
+            return;
+        };
+        for l in load_linked(&self.data_dir) {
+            if l.certificate.is_empty() || l.ticket.is_empty() {
+                continue;
+            }
+            self.announce_device(root.root_public_key().0, l.certificate, l.ticket)
+                .await;
+        }
     }
 
     /// A person declined `device`.
@@ -369,6 +467,7 @@ impl Core {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(JoinWait {
             approver: approver.endpoint_addr.id,
+            approver_ticket: ticket_text.trim().to_owned(),
             until: std::time::Instant::now() + JOIN_WAIT,
         });
         let msg = LinkMessage::Request {
@@ -376,6 +475,7 @@ impl Core {
             device_id: self.my_device,
             device_public_key: self.local_key,
             display_name: self.this_device_view().display_name,
+            device_ticket: self.hub.read(|s| s.identity.ticket.clone()),
         };
         self.service
             .send_wire(approver.endpoint_addr.clone(), &WireMessage::Link(msg))
@@ -406,6 +506,7 @@ impl Core {
                 device_id,
                 device_public_key,
                 display_name,
+                device_ticket,
             } => {
                 let result = self
                     .link_offers
@@ -418,6 +519,7 @@ impl Core {
                             device_id,
                             device_public_key,
                             display_name,
+                            ticket: device_ticket,
                         },
                     );
                 match result {
@@ -448,13 +550,19 @@ impl Core {
                 }
             }
             LinkMessage::Denied => {
-                if self.take_join_wait(&from) {
+                if self.take_join_wait(&from).is_some() {
                     self.hub.notify(
                         NoticeLevel::Warning,
                         "The other device did not accept the link request.",
                     );
                 }
             }
+            LinkMessage::DeviceAdded {
+                account_id: _,
+                root_public_key,
+                certificate,
+                device_ticket,
+            } => self.handle_device_added(from, root_public_key, &certificate, &device_ticket),
             LinkMessage::Approved {
                 account_id,
                 root_public_key,
@@ -462,11 +570,12 @@ impl Core {
                 approver_device,
                 approver_public_key,
                 approver_name,
+                contact_tickets,
             } => {
-                if !self.take_join_wait(&from) {
+                let Some(wait) = self.take_join_wait(&from) else {
                     tracing::warn!(?from, "ignoring an unsolicited link approval");
                     return;
-                }
+                };
                 let cert: DeviceCertificate = match postcard::from_bytes(&certificate) {
                     Ok(c) => c,
                     Err(_) => {
@@ -500,15 +609,22 @@ impl Core {
                         name: approver_name.chars().filter(|c| !c.is_control()).collect(),
                         public_key: approver_public_key,
                         added_at_millis: millis_now(),
+                        ticket: wait.approver_ticket,
+                        certificate: Vec::new(),
                     },
                 ) {
                     self.hub.notify(NoticeLevel::Warning, e);
                     return;
                 }
+                let imported = self.import_contacts(&contact_tickets);
                 self.refresh_devices();
                 self.hub.notify(
                     NoticeLevel::Info,
-                    "This device is linked. Restart Siar to finish joining the account.",
+                    if imported > 0 {
+                        format!("This device is linked and added {imported} contact(s). Restart Siar to finish joining the account.")
+                    } else {
+                        "This device is linked. Restart Siar to finish joining the account.".to_owned()
+                    },
                 );
             }
         }
@@ -517,7 +633,7 @@ impl Core {
 
     /// Consume the join wait if `from` is the device we asked and it has not
     /// expired.
-    fn take_join_wait(&self, from: &iroh::EndpointId) -> bool {
+    fn take_join_wait(&self, from: &iroh::EndpointId) -> Option<JoinWait> {
         let mut wait = self
             .link_join
             .lock()
@@ -526,9 +642,153 @@ impl Core {
             .as_ref()
             .is_some_and(|w| w.approver == *from && w.until > std::time::Instant::now());
         if ok {
-            *wait = None;
+            wait.take()
+        } else {
+            None
         }
-        ok
+    }
+
+    /// A paired contact says its account has a new device.
+    fn handle_device_added(
+        &self,
+        from: iroh::EndpointId,
+        root_public_key: [u8; 32],
+        certificate: &[u8],
+        device_ticket: &str,
+    ) {
+        // Only an already-paired contact may announce devices for itself: the
+        // authenticated connection is what ties the announcement to a person
+        // you chose to trust.
+        let Some(contact) = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .conversation_of(&from)
+        else {
+            tracing::warn!(
+                ?from,
+                "ignoring a device announcement from an unpaired device"
+            );
+            return;
+        };
+        let (Ok(cert), Ok(ticket)) = (
+            postcard::from_bytes::<DeviceCertificate>(certificate),
+            PeerTicket::decode(device_ticket),
+        ) else {
+            tracing::warn!(?from, "ignoring a malformed device announcement");
+            return;
+        };
+        let mut devices = self
+            .contact_devices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Err(why) = crate::contact_devices::verify_announcement(
+            devices.known_root(contact),
+            root_public_key,
+            &cert,
+            &ticket,
+            millis_now(),
+        ) {
+            drop(devices);
+            let label = self.contact_label(contact);
+            self.hub.notify(
+                NoticeLevel::Warning,
+                match why {
+                    crate::contact_devices::AnnounceError::RootChanged => format!(
+                        "{label}’s account key changed. A new device they announced was NOT added; verify them again."
+                    ),
+                    _ => format!("A new device announced by {label} could not be verified and was ignored."),
+                },
+            );
+            return;
+        }
+        match devices.record(
+            contact,
+            root_public_key,
+            crate::contact_devices::Sibling {
+                device_id: cert.device_id,
+                ticket_text: device_ticket.to_owned(),
+                added_at_millis: millis_now(),
+            },
+        ) {
+            Ok(crate::contact_devices::Recorded::New) => {
+                if let Err(e) = devices.save(&self.data_dir) {
+                    tracing::warn!(error = %e, "couldn’t save the contact’s device");
+                }
+                drop(devices);
+                let label = self.contact_label(contact);
+                self.hub.notify(
+                    NoticeLevel::Info,
+                    format!("{label} added a new device. Messages you send them now go to both."),
+                );
+            }
+            Ok(crate::contact_devices::Recorded::Known) => {}
+            Err(why) => {
+                drop(devices);
+                tracing::warn!(error = %why, "couldn’t record a contact’s device");
+            }
+        }
+    }
+
+    fn contact_label(&self, conversation: siar_domain::ConversationId) -> String {
+        self.hub
+            .read(|s| {
+                s.conversations
+                    .ordered()
+                    .iter()
+                    .find(|c| c.id == conversation)
+                    .map(|c| c.display_name.clone())
+            })
+            .unwrap_or_else(|| "A contact".to_owned())
+    }
+
+    /// Pair with the contacts a linked device was given. Returns how many were
+    /// newly added. They are remembered in `imported_contacts.bin` so they
+    /// survive a restart.
+    fn import_contacts(&self, tickets: &[String]) -> usize {
+        let mut added = 0;
+        let mut keep = load_imported(&self.data_dir);
+        for text in tickets {
+            let Ok(ticket) = PeerTicket::decode(text) else {
+                continue;
+            };
+            if !self.register_contact(ticket) {
+                continue;
+            }
+            if !keep.contains(text) {
+                keep.push(text.clone());
+            }
+            added += 1;
+        }
+        if let Err(e) = save_imported(&self.data_dir, &keep) {
+            tracing::warn!(error = %e, "couldn’t remember the imported contacts");
+        }
+        added
+    }
+
+    /// Register a peer and show its conversation, without selecting it.
+    /// `false` if it was already known.
+    pub(crate) fn register_contact(&self, ticket: PeerTicket) -> bool {
+        let known = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .conversation_of(&ticket.endpoint_addr.id)
+            .is_some();
+        if known {
+            return false;
+        }
+        let title = ticket.endpoint_addr.id.fmt_short().to_string();
+        let conversation = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .register(ticket);
+        self.hub.update(|s| {
+            s.ensure_conversation(conversation, title, siar_ui_state::ConversationKind::Direct);
+            s.sendable.insert(conversation);
+        });
+        true
     }
 
     fn adopt_account(
@@ -614,6 +874,8 @@ mod tests {
             name: "phone".into(),
             public_key: [4; 32],
             added_at_millis: 9,
+            ticket: "t".into(),
+            certificate: vec![1],
         };
         save_linked(&d, std::slice::from_ref(&l)).unwrap();
         assert_eq!(load_linked(&d), vec![l.clone()]);

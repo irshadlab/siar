@@ -33,6 +33,8 @@ pub enum AppCommand {
     /// A person approved a waiting device (after comparing its fingerprint).
     LinkApprove {
         device: DeviceId,
+        /// Also give the new device this device's contacts.
+        share_contacts: bool,
     },
     LinkReject {
         device: DeviceId,

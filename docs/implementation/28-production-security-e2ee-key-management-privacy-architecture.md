@@ -4,42 +4,61 @@ Source spec: `sys-arch/28-production-security-e2ee-key-management-privacy-archit
 
 ## Implementation status
 
-**~46/127 (36%) done.** Assessment carried over from ROADMAP.md: a good stopping point for incremental section-by-section work. What's built covers the sections that unblock everything downstream (message envelopes, replay protection, key storage abstraction, device revocation, trust states, domain separation, safety fingerprints, identity-change UX).
-
-Already closed: §5-10, §14-24, §28-36, §40-44.
-
-Partially reconciled: §37-39 (SAS/pairing) — a real, named, unfixed gap: no `protocol_version` field on `DeviceLinkInvite`, deliberately not added because it would be a breaking change to an already-shipped signed struct.
-
-## What's left is dominated by four items, each its own subsystem rather than a next "batch"
-
-| Item | Sections | Why it's not a batch |
-|---|---|---|
-| The ratchet (forward secrecy / PCR) | §11-13 | Needs a real `vodozemac` integration, not hand-rolled crypto |
-| Group Security | §25-27 | Needs reconciling against `siar-crypto-mls` (831 lines, unexamined) |
-| Test-vector suite + fuzzing + named attack scenarios | §93-103 | A whole security test harness |
-| Workspace crate split | §112-122 | The spec's own ask: split into 10 `comm-security-*` crates — a restructuring decision, not a code batch |
-
-## Untouched, but NOT subsystem-scale (genuinely next-batch-sized whenever picked back up)
-
-- §46-92 — abuse resistance, plugin/FFI/embedded boundaries, crash-safe ratchets, diagnostics, failure taxonomy, threat-model docs, ADRs, disclosure process, compromise-response playbooks.
-- §104-111 — performance, security profiles.
+**🟡 Substantially advanced across multiple dedicated security rounds.**
+Covers message envelopes, replay protection, persistent identity derivation, persistent security logs, abuse gates, 1:1 pairwise MLS post-quantum sessions, FROST threshold root ceremonies, hybrid post-quantum signatures, BLS audit aggregation, BBS relay credentials, and mutation fuzz testing.
 
 ## Implementing crate(s)
 
-- `siar-crypto` — device certificates, message envelopes, replay protection, key storage abstraction.
-- `siar-identity-multidevice` — device revocation, trust states, safety fingerprints, identity-change UX (see `docs/02` for that crate's own much larger spec-02 scope; this is the slice of its work that also satisfies spec 28 sections).
-- `siar-crypto-mls` — 831 lines, unexamined against Group Security's own §25-27 requirements; the reconciliation this subsystem needs hasn't been done.
+- `siar-crypto` — device certificates, message envelopes, replay protection, key store abstractions, KDF secret derivation (`DeviceIdentity::derive_secret`).
+- `siar-identity-multidevice` — device revocation, trust states, safety fingerprints, SAS codes, root identity keys, linking protocol.
+- `siar-crypto-mls` — MLS groups, persistent group sessions, 1:1 pairwise MLS sessions (`siar-crypto-mls::pairwise`), post-quantum ciphersuites.
+- `siar-abuse` — admission control, peer quotas, stranger budgets, inbox limits, blocklist enforcement, emergency authority.
+- `siar-crypto-advanced` — FROST root threshold keys (`frost_root`), ML-DSA-65/Ed25519 hybrid signatures (`hybrid`), BLS multi-signature audit aggregation (`bls_audit`), and BBS zero-knowledge relay credentials (`bbs_relay`).
+- `apps/root-ceremony` (`siar-root`) — CLI for distributed key generation and threshold signing ceremonies.
 
-## Known gaps / open questions
+---
 
-- Two device-cert models exist (`siar_crypto::device_cert` vs `siar-identity-multidevice`) — a real, unresolved reconciliation question, documented in the newer crate's own `lib.rs` rather than silently resolved. Not specific to this spec alone; the same question is tracked in `MIGRATION.md`.
-- §37-39's missing `protocol_version` field — a deliberate, named, unfixed gap (breaking change to an already-shipped signed struct).
-- The four subsystem items above (ratchet, group security, test harness, crate split) each need a dedicated, scoped effort — none should share a round with anything else.
+## Architecture & Subsystems Implemented
 
-## Recommendation (carried over from ROADMAP.md)
+### 1. Ingress Admission & Abuse Resistance (`siar-abuse`, §60-67)
+- **Admission Pipeline (§61)**: Cheap-validation-first pipeline: Length → Version → Blocklist → Rate limit → Duplicate check → Authorization. Blocked or oversized items allocate zero buffers.
+- **Quotas (§62)**: Six distinct quotas per peer, plus a shared global budget for all unknown peers (Sybil resistance bounding collective resource consumption).
+- **Message Requests & File Offers (§63-64)**: Bounded inbox for unknown peers; automatic downloads disabled for untrusted senders; oversized file offers rejected.
+- **Blocklist Enforcement (§65)**: Evaluated before cryptographic verification. Blocking immediately revokes active sessions; unblocking never silently restores trust.
+- **Pairing & Emergency Policies (§60, §67)**: Exponential cooldown on failed pairing; unforgeable emergency authority (remote SOS requests require local validation).
+- **Ingress Gate Wiring**: `siar-messaging::IngressGuard` integrates `siar-abuse::Gate` into the daemon receive loop, keyed on QUIC endpoint IDs. Also wired into `apps/emergency-node` to gate incoming DTN bundles and relay check-ins.
 
-Pause Part 28 here. Come back to §46-92/§104-111 in ordinary batches later; treat the four subsystem items as their own dedicated project when prioritized.
+### 2. Forward-Secret Pairwise Messaging via OpenMLS 1:1
+- Implemented in `siar-crypto-mls::pairwise` using two-member MLS groups.
+- Post-quantum hybrid ciphersuite: `MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44` (ML-KEM-768 + X25519 key exchange, ML-DSA-44 signatures).
+- DTN adaptations: alternating commit turns (creator at even epochs, peer at odd epochs) to prevent commit collisions across offline delays; bounded buffer for future epoch messages; replay detection on old commits.
+- Replaced the experimental hand-rolled ratchet (`siar-ratchet` / `siar-secure-session`) with standardized OpenMLS primitives.
 
-## Note
+### 3. Advanced Cryptography (`siar-crypto-advanced`)
+- **FROST Root Authority (`frost_root`)**: `frost-ed25519` 3.0 (RFC 9591). Real threshold DKG without a central dealer. Yields standard Ed25519 public keys and signatures verifiable with standard Ed25519 verifiers.
+- **Post-Quantum Hybrid Signatures (`hybrid`)**: ML-DSA-65 + Ed25519 composite signatures following `draft-ietf-lamps-pq-composite-sigs`. Applied as countersignatures on `DeviceCertificate`.
+- **BLS Multi-Signature Audit Aggregation (`bls_audit`)**: `blst` min-pk with IETF Proof-of-Possession. Compact aggregation of hundreds of signer attestations into a single 96-byte signature + bitmap.
+- **Anonymous Relay Credentials (`bbs_relay`)**: `zkryptium` 0.8 (IETF BBS draft-14). Privacy-preserving passes with hidden random IDs and selective disclosure of epochs and tiers. Upstream bug (panic on <240-byte proof and trailing bytes) identified and patched.
+- **Root Ceremony CLI (`siar-root`)**: Supports `dkg1/2/3`, `sign1`, `package`, `sign2`, `aggregate`, and `verify`. Share files sealed with Argon2id + XChaCha20-Poly1305.
 
-Transcribed from ROADMAP.md's Tier 1 section on 2026-09-27. This is the first docs file for spec 28 — no prior stub existed. No section-by-section tracker like spec 04's has been built for this spec; the aggregate ~46/127 and the closed-section ranges above are as recorded in ROADMAP.md, not from a fresh audit.
+### 4. Transport Identity & State Persistence
+- **Stable Transport Identity**: Fixed critical issue where ephemeral Iroh keys caused addresses and conversation IDs to drift on restart; endpoint keys are now deterministically derived from persistent identity via domain-separated KDF (`DeviceIdentity::derive_secret`).
+- **Persistent Security Log**: Stored in stoolap table `security_events`; tracks identity key transitions, SAS verification changes, and security warnings across restarts.
+
+### 5. Mutation Fuzzing (Hardening Round 2026-11-08)
+- Deterministic, seeded mutation fuzzing executed on stable Rust:
+  - Admin request decoding (20,000 inputs, live server barrage).
+  - Node provisioning payloads and state files (6,000 mutants).
+  - `RuntimeConfig::parse` validation rules (15,000 inputs).
+  - Tamper-evident audit log: exhaustive single-byte mutations at every position.
+  - Ceremony secret files, BLS attestations, and hybrid signatures.
+- Caught and fixed edge-case bugs: non-UTF-8 node state files failing closed rather than crashing; non-UTF-8 audit log lines triggering proper quarantine.
+
+---
+
+## Known Gaps / Open Items
+
+- **Default Message Path Migration**: Pairwise OpenMLS sessions currently require explicit session upgrade; wiring OpenMLS 1:1 as the default out-of-the-box transport session for all conversations is the remaining migration step.
+- **Security Safe Modes & Profiles**: §79-80 security safe mode and §106-110 security profiles.
+- **Cross-Implementation Test Vectors**: §93 test vectors for hybrid composite drafts and BBS passes.
+- **Independent Security Review**: External review of cryptographic ceremony pipelines and memory zeroization across all workspace crates.

@@ -1,6 +1,57 @@
-# Multi-device contacts — design (not built)
+# Multi-device contacts
 
-Status: **design only.** Device *linking* works (see ROADMAP.md): a second
+Status: **built with the recommended options, in a simplified form** — see
+"As built" immediately below; the original design follows unchanged.
+
+## As built (verified by a three-core test)
+
+A contact's second device is the same contact: Carol writes once and both of
+Alice's devices receive it; Alice answering from her second device lands in
+Carol's one chat with her.
+
+* **Announcement** (`LinkMessage::DeviceAdded`): sent by the approving device to
+  every paired contact when a device is approved, and again 25 s after each
+  start-up (for contacts that were offline). The receiver accepts it only from
+  an already-paired peer *and* only if the certificate verifies against the
+  account root key, is for exactly the ticket it carries, has not expired, and
+  the root key equals the one first seen for that contact (trust on first use;
+  a changed root key is refused with a warning, never replaced).
+  `siar-app-core::contact_devices`, 6 unit tests.
+* **Storage: no migration.** Siblings live in `contact_devices.bin`. A
+  conversation id is derived from the contact's primary ticket and never
+  changes, so the alias table planned in step 2 was not needed.
+* **Receiving:** a frame from a recorded sibling endpoint is routed to the
+  contact's conversation and decrypted with the sibling's session; stored
+  history opens messages with the primary's or any sibling's session.
+* **Sending (fan-out), text only:** after the primary send succeeds, each
+  sibling gets its own copy through the normal send path (own outbox row, retries
+  and ACK tracking) filed under a hidden conversation, so the chat shows the
+  message once. The delivery state shown is the primary device's.
+* **Bootstrap:** at approval the person chooses "Approve" or "Approve and share
+  my contacts" (`siar link-approve <id> --share-contacts`); shared contacts
+  travel inside the link reply and are remembered in `imported_contacts.bin`.
+* **Notices:** the contact is told "X added a new device"; a root-key change or
+  an unverifiable announcement warns.
+
+### Not built (and why it matters)
+
+* **Revocation** (step 7): removing a device from a contact's record when it is
+  revoked. Until then a sibling stays recorded.
+* **Group messages and attachments are not fanned out** to a contact's extra
+  devices; only 1:1 text is.
+* **Alice's own sent messages are not mirrored to her other device**, so her
+  second device's chat shows what the contact sent and what that device itself
+  sent, not what her first device sent. That is self-sync (device-to-device
+  history), a separate feature, as is history transfer.
+* **Contacts added on the first device after linking are not pushed** to the
+  second (only the contacts that existed at approval, if shared).
+* **UI:** notices only. No device count on a contact, no per-device delivery
+  detail, no dedicated security event.
+* Imported contacts are titled by a short key id: a ticket carries no name.
+
+## Original design
+
+Earlier status line: Device *linking* works (see ROADMAP.md): a second
 device can join an account and both list each other. What does not exist is
 everything that makes a linked device *useful to other people*: your contacts
 do not know it exists, so they cannot send to it and do not attribute its

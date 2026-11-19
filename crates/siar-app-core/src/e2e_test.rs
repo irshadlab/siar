@@ -933,12 +933,121 @@ async fn a_second_device_links_through_the_same_commands_the_window_sends() {
     // A person approves; both sides then list each other.
     a.hub.dispatch(AppCommand::LinkApprove {
         device: waiting.device_id,
+        share_contacts: false,
     });
     wait_until("B lists A", || b.hub.read(|s| s.devices.all().len() == 2)).await;
     wait_until("A lists B", || a.hub.read(|s| s.devices.all().len() == 2)).await;
     assert!(a.hub.read(|s| s.link.pending.is_empty()));
     assert!(b.hub.read(|s| s.link.restart_needed));
     assert!(!a.hub.read(|s| s.link.restart_needed));
+}
+
+/// What the chat list shows for `conversation` on `node`, if it exists.
+fn preview_of(node: &Node, conversation: siar_domain::ConversationId) -> Option<String> {
+    node.hub.read(|s| {
+        s.conversations
+            .ordered()
+            .iter()
+            .find(|c| c.id == conversation)
+            .and_then(|c| c.last_message_preview.clone())
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs loopback networking"]
+async fn a_contacts_second_device_is_the_same_contact_in_both_directions() {
+    let tmp = std::env::temp_dir().join(format!("siar-e2e-multidev-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let a = start_node(&tmp.join("a")).await; // Alice, first device
+    let b = start_node(&tmp.join("b")).await; // Alice, second device (will join)
+    let c = start_node(&tmp.join("c")).await; // Carol
+
+    let ticket = |n: &Node| n.hub.read(|s| s.identity.ticket.clone());
+    let (ta, tc) = (ticket(&a), ticket(&c));
+    let conv_of =
+        |t: &str| crate::peers::conversation_for(&siar_messaging::PeerTicket::decode(t).unwrap());
+    let (conv_a_c, conv_c_a) = (conv_of(&tc), conv_of(&ta));
+
+    // Alice and Carol are paired, both ways.
+    a.tx.send(AppCommand::PairWithTicket {
+        ticket_text: tc.clone(),
+    })
+    .await
+    .unwrap();
+    c.tx.send(AppCommand::PairWithTicket {
+        ticket_text: ta.clone(),
+    })
+    .await
+    .unwrap();
+    wait_until("A and C are paired", || {
+        a.hub.read(|s| s.can_send(conv_a_c)) && c.hub.read(|s| s.can_send(conv_c_a))
+    })
+    .await;
+
+    // Bob joins Alice's account and is given her contacts.
+    a.hub.dispatch(AppCommand::LinkOpenOffer);
+    wait_until("offer", || a.hub.read(|s| s.link.offer.is_some())).await;
+    let offer = a.hub.read(|s| s.link.offer.clone()).unwrap();
+    b.hub.dispatch(AppCommand::LinkJoin {
+        ticket_text: offer.ticket,
+        code: offer.code,
+    });
+    wait_until("request waits", || {
+        a.hub.read(|s| !s.link.pending.is_empty())
+    })
+    .await;
+    let waiting = a.hub.read(|s| s.link.pending[0].clone());
+    a.hub.dispatch(AppCommand::LinkApprove {
+        device: waiting.device_id,
+        share_contacts: true,
+    });
+
+    // Bob now has Carol as a contact, under the same conversation id Alice has.
+    wait_until("B received Alice's contact", || {
+        b.hub.read(|s| s.can_send(conv_a_c))
+    })
+    .await;
+    // Carol was told, verified the announcement, and recorded Bob as a sibling.
+    wait_until("C recorded the new device", || {
+        !c.core
+            .contact_devices
+            .lock()
+            .unwrap()
+            .siblings_of(conv_c_a)
+            .is_empty()
+    })
+    .await;
+
+    // Carol writes once: Alice's two devices both receive it.
+    c.hub.dispatch(AppCommand::SendMessage {
+        conversation: conv_c_a,
+        text: siar_domain::MessageText::parse("hi Alice".into()).unwrap(),
+    });
+    wait_until("Alice's first device got it", || {
+        preview_of(&a, conv_a_c).as_deref() == Some("hi Alice")
+    })
+    .await;
+    wait_until("Alice's second device got it", || {
+        preview_of(&b, conv_a_c).as_deref() == Some("hi Alice")
+    })
+    .await;
+    // …and it shows once in Carol's chat, never as a second conversation.
+    assert_eq!(c.hub.read(|s| s.conversations.ordered().len()), 1);
+
+    // Alice answers from her SECOND device: it lands in Carol's one chat with her.
+    b.hub.dispatch(AppCommand::SendMessage {
+        conversation: conv_a_c,
+        text: siar_domain::MessageText::parse("hello from my phone".into()).unwrap(),
+    });
+    wait_until("Carol sees it in her chat with Alice", || {
+        preview_of(&c, conv_c_a).as_deref() == Some("hello from my phone")
+    })
+    .await;
+    assert_eq!(
+        c.hub.read(|s| s.conversations.ordered().len()),
+        1,
+        "the second device is not a second contact"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

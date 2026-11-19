@@ -650,7 +650,7 @@ MLS state and network identity. The window and the CLI are thin clients of its
 control socket. Nothing had shipped, so the embedded-core desktop path was removed.
 
 **Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 60 (incl. 11 linking, 4 link_flow, real two-core e2e incl. linking), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-backup` 20, `siar-ui-sync` 29 + 5, `siar-ui-slint` 29 interaction + 8 render, `siar-messaging` lib 62; was 34 +
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 67 (incl. 11 linking, 6 contact_devices, 4 link_flow, real multi-core e2e incl. linking and multi-device contacts), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-backup` 20, `siar-ui-sync` 29 + 5, `siar-ui-slint` 29 interaction + 8 render, `siar-messaging` lib 62; was 34 +
 10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
 parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
 runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
@@ -739,16 +739,19 @@ window against a display; Windows named pipes.
     between devices is a separate design); a joined device cannot link more.
   - Joining replaces the account id on disk; the running core keeps the old id
     until it restarts (the CLI says so). Only a *fresh* device may join.
-  - Contacts are not told about the new device, so messages from the new device
-    are not attributed to the account by others. **Design written:
-    `docs/MULTI_DEVICE_CONTACTS.md`** (constraints in today's code, the product
-    decisions needed, a 7-step plan). This is a data-model change,
-    not a notification: a conversation is keyed by the peer's *ticket*, so a
-    second device of the same contact would open a second conversation, and
-    sending would need to fan out to every device of a contact (one outbox row
-    per message id today). Design it as "contact = account, with N devices"
-    before building it.
+  - Contacts *are* told now: see "Multi-device contacts" below.
   - A wrong code is refused silently on the new device's CLI, which just waits.
+* **Multi-device contacts (verified by a three-core test):** the approving
+  device announces a new device to each paired contact
+  (`LinkMessage::DeviceAdded`, certificate chain + TOFU root key); the contact
+  records it as a sibling (`contact_devices.bin`, no schema migration), routes
+  its frames into the same conversation, and fans 1:1 text out to it through the
+  normal outbox under a hidden conversation. Approval has a "share my contacts"
+  choice (UI button, `siar link-approve --share-contacts`, daemon
+  `link-approve <id> share`). `docs/MULTI_DEVICE_CONTACTS.md` has "As built" and
+  the not-built list: **no revocation, no group/attachment fan-out, no mirroring
+  of the first device's own sent messages to the second, no push of contacts
+  added after approval, notices only in the UI.**
 * **Backup covers linking (verified):** `root.key`, `linked_devices.bin`,
   `joined_account.bin` and `account_id.txt` are archived by both the offline
   and the live (daemon) backup; a restore writes them owner-only (tested in

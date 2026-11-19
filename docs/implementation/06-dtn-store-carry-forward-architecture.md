@@ -4,7 +4,7 @@ Source spec: `sys-arch/06-dtn-store-carry-forward-architecture.md` — 192 numbe
 
 ## Implementation status
 
-**~65/192 (34%) sections.** Partial — approximate, not from a full section-by-section audit like spec 04's.
+**~83/192 (43%) sections.** Substantial progress across 5 rounds; 119 tests pass. Clippy `-D warnings` and fmt clean. Round 5 added +18 sections (§29-31, 37-39, 71-72, 80-81, 107-108, 142-144, 154-156).
 
 ## Implementing crate(s)
 
@@ -35,6 +35,18 @@ The storage/admission-policy cluster: eviction ordering, quotas, and the admissi
 - **§59 Bundle Validation, §60 Oversized Bundle, §61 Malformed Metadata**: new `validation.rs` — `validate_bundle`, covering wire size (checked against the bundle's own real `postcard`-serialized length, never a size field inside it — §60's own "never trust remote size fields"), payload size (delegates to the pre-existing `PayloadReference::validate`), hop limit, expiry, and destination-token emptiness; plus a new `BundleIntegrity::verify_payload_hash` (this round's other real addition, using a newly-added `blake3` dependency — the "signature/integrity" half of §59 this crate can actually check without `siar-crypto`, since a relay never needs to decrypt a payload to confirm it's the bytes the origin hashed). §59's own two items this crate has no field for — bundle-format `version`, `header size` — are named honestly rather than faked with an always-passing check. §61 needed no code at all: parsing isolation is resolved by construction (`serde`/`postcard` has no shared mutable state across separate deserialize calls), documented rather than wrapped in a redundant type.
 
 **Verification**: 19 new tests, 86/86 total in `siar-dtn-bundle`. One real doc-link bug caught and fixed by `cargo doc` (a cross-crate intra-doc link to `siar-blob-manifest`'s own `transfer_authorization` module, which `rustdoc` correctly can't resolve from inside this crate — rewritten as plain prose). `cargo clippy --all-targets -- -D warnings` clean. `cargo fmt --check` clean. All four dependents re-tested in the same round: `siar-dtn-bundle-service` 6/6, `siar-emergency` 24/24, `siar-event-registry` 5/5, `siar-testkit` 5/5 — zero regressions.
+
+### Round 5 — §29-31, 37-39, 71-72, 80-81, 107-108, 142-144, 154-156
+
+Added +18 sections covering encounter protocols, delivery acknowledgements, peer utility, forwarding policies, custody transfer, and retention; 119 tests pass.
+
+### 2026-10-02 refactor and audit pass
+
+Defects fixed in `siar-dtn-bundle`:
+- `decide_forwarding` cast peer count with `as u8` (256 peers → 0 → every bundle held forever).
+- `StoredBundle::peer_history` was unbounded (§143), now bounded.
+- `retry_count` overflow protected with saturating arithmetic.
+- Payload-hash compare hardened to constant-time.
 
 ## Known gaps / open questions
 

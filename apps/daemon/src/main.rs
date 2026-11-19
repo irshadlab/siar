@@ -365,22 +365,29 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
         .as_deref()
         .and_then(|p| p.parent())
         .map(PathBuf::from);
-    let _upgrade = if replace {
-        let (Some(sock), Some(dir)) = (socket.as_deref(), socket_dir.as_deref()) else {
-            bail!("--replace needs a control socket (don’t combine it with --no-socket)");
-        };
-        let lock = siar_runtime::instance::UpgradeLock::acquire(dir)
-            .map_err(|e| anyhow!("another upgrade is in progress ({e:?})"))?;
-        match siar_runtime::instance::request_handoff(sock, Duration::from_secs(30)).await {
-            Ok(old) => {
-                tracing::info!(old_build = %old.old_build, "previous daemon stopped; taking over")
+    let _upgrade: Option<siar_runtime::instance::UpgradeLock> = if replace {
+        #[cfg(unix)]
+        {
+            let (Some(sock), Some(dir)) = (socket.as_deref(), socket_dir.as_deref()) else {
+                bail!("--replace needs a control socket (don’t combine it with --no-socket)");
+            };
+            let lock = siar_runtime::instance::UpgradeLock::acquire(dir)
+                .map_err(|e| anyhow!("another upgrade is in progress ({e:?})"))?;
+            match siar_runtime::instance::request_handoff(sock, Duration::from_secs(30)).await {
+                Ok(old) => {
+                    tracing::info!(old_build = %old.old_build, "previous daemon stopped; taking over")
+                }
+                Err(siar_runtime::instance::HandoffError::NoDaemon) => {
+                    tracing::info!("no daemon running; starting fresh")
+                }
+                Err(e) => bail!("couldn’t take over from the running daemon: {e}"),
             }
-            Err(siar_runtime::instance::HandoffError::NoDaemon) => {
-                tracing::info!("no daemon running; starting fresh")
-            }
-            Err(e) => bail!("couldn’t take over from the running daemon: {e}"),
+            Some(lock)
         }
-        Some(lock)
+        #[cfg(not(unix))]
+        {
+            bail!("--replace is not supported on Windows");
+        }
     } else {
         None
     };
@@ -736,6 +743,7 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
         runtime.health.clone(),
     ));
     // §87: SIGHUP re-reads the config; cold changes are reported, not faked.
+    #[cfg(unix)]
     {
         let (rt, path) = (runtime.clone(), config_path.clone());
         let reload_prov = provisioner.clone();

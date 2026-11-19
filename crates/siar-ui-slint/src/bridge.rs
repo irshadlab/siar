@@ -398,6 +398,14 @@ pub(crate) fn install(window: &MainWindow, hub: &UiHub) {
     }
     {
         let hub = hub.clone();
+        app.on_link_revoke(move |id| {
+            if let Some(device) = parse_id::<DeviceId>(&id) {
+                hub.dispatch(AppCommand::LinkRevoke { device });
+            }
+        });
+    }
+    {
+        let hub = hub.clone();
         app.on_link_reject(move |id| {
             if let Some(device) = parse_id::<DeviceId>(&id) {
                 hub.dispatch(AppCommand::LinkReject { device });

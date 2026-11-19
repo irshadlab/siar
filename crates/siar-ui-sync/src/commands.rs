@@ -37,6 +37,9 @@ pub enum WireCommand {
     LinkReject {
         device: DeviceId,
     },
+    LinkRevoke {
+        device: DeviceId,
+    },
     LinkJoin {
         ticket_text: String,
         code: String,
@@ -139,6 +142,7 @@ impl TryFrom<&AppCommand> for WireCommand {
                 share_contacts: *share_contacts,
             },
             A::LinkReject { device } => Self::LinkReject { device: *device },
+            A::LinkRevoke { device } => Self::LinkRevoke { device: *device },
             A::LinkJoin { ticket_text, code } => Self::LinkJoin {
                 ticket_text: ticket_text.clone(),
                 code: code.clone(),
@@ -332,6 +336,7 @@ impl WireCommand {
                 share_contacts,
             },
             Self::LinkReject { device } => AppCommand::LinkReject { device },
+            Self::LinkRevoke { device } => AppCommand::LinkRevoke { device },
             Self::LinkJoin { ticket_text, code } => AppCommand::LinkJoin { ticket_text, code },
             Self::SendViaRelay {
                 conversation,
@@ -444,6 +449,7 @@ mod tests {
                 share_contacts: true,
             },
             AppCommand::LinkReject { device: dev },
+            AppCommand::LinkRevoke { device: dev },
             AppCommand::LinkJoin {
                 ticket_text: "t".into(),
                 code: "c".into(),

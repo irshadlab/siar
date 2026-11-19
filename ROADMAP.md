@@ -1,820 +1,253 @@
-# siar — Roadmap & Coverage Hierarchy
+# siar — Roadmap & Uncompleted Work Tracker
 
 Maintained alongside the code, not a substitute for it. This file tracks
-**what's written vs. what's left**, ordered by actual need — not spec
-number order. Update this file every time a spec's coverage changes.
+**what remains to be built, known gaps, architecture remarks, notices, and priority sequencing**.
 
-Spec source: `sys-arch/` (33 numbered core-architecture docs +
-27 `ui-ux-NN` docs, uploaded once, Wiki-style). Workspace source:
-33-crate Rust workspace (`siar-source`) + `apps/{cli,desktop,android,
-emergency-node}` + `platform/android`.
+> [!NOTE]
+> **Completed Implementation Details**: All round-by-round implementation histories,
+> section-by-section trackers, test statistics, and completed architectural records live
+> in their respective specification files under [`docs/implementation/`](file:///home/irshad/Projects/siar/docs/implementation/README.md).
+> Read `docs/implementation/` when you need to know *what's actually written and how*;
+> read this file when you need to know *what's left, open gaps, and where to look next*.
 
-Legend: ✅ Done/substantial · 🟡 Partial · ⚪/⬜ Not started · 🔒 Blocked on
-a prerequisite · 📋 Reconciled (already covered elsewhere, no new code
-needed) · ◇ Conceptual/guidance section, no code artifact of its own.
-
-**2026-09-27 reorganization**: this file used to carry the full
-round-by-round narrative and, for spec 04, a complete 95-row
-section-by-section tracker inline. That level of detail now lives in
-each spec's own `docs/docs/NN-*.md` file — this file is a **map**:
-which specs/sections are done, substantial, partial, untouched, or
-conceptual, and where to go for the full story. Read a `docs/docs/`
-file when you need to know *why* or *how*; read this file when you
-need to know *how much* and *where to look next*. `docs/docs/04-*.md`
-is the fullest example of what a per-spec file looks like once it has
-its own section-by-section tracker — not every spec below has one yet.
+Legend:
+- ✅ Done / substantial (detailed record in [`docs/implementation/`](file:///home/irshad/Projects/siar/docs/implementation/README.md))
+- 🟡 Partial (open work tracked below)
+- ⚪/⬜ Not started
+- 🔒 Blocked on a prerequisite
+- 📋 Reconciled (covered elsewhere, no new code needed)
+- ◇ Conceptual / guidance section, no code artifact of its own
 
 ---
 
-## Tier 0 — Foundational core crates (Parts 01-09)
+## Tier 0 — Foundational Core Crates (Parts 01-09)
 
-All nine have real, compile+test-verified coverage, tracked crate-by-
-crate below. Full round-by-round history for every row now lives in
-that spec's own `docs/docs/NN-*.md` file (linked in the table) — this
-table is a live pointer, not a duplicate of that detail.
+| # | Crate | State | Uncompleted / Open Work | Detail Doc |
+|---|---|---|---|---|
+| 01 | siar-protocol-ext | ✅ 108/108 | Spec complete. | [`01-protocol-extension-system-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/01-protocol-extension-system-architecture.md) |
+| 02 | siar-identity-multidevice | ✅ 204/204 | Spec complete. Seam integration and mobile platform hooks remaining. | [`02-multi-device-identity-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/02-multi-device-identity-architecture.md) |
+| 03 | siar-routing-policy | ✅ 200/200 | Spec complete. | [`03-transport-routing-policy-engine-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/03-transport-routing-policy-engine-architecture.md) |
+| 04 | siar-event-log | ✅ Substantial | Fuzz target needs nightly; no criterion benchmarks; domain `ReplicationAuthorizer`/`PayloadSealer`; outbox migration. | [`04-offline-event-log-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/04-offline-event-log-architecture.md) |
+| 05 | siar-blob-manifest | 🟡 Substantial | ~38 sections open/deferred (unsolicited push, background quota sync). | [`05-robust-file-blob-subsystem-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/05-robust-file-blob-subsystem-architecture.md) |
+| 06 | siar-dtn-bundle | 🟡 ~83/192 | ~109 sections remaining (encounter protocol, routing integration, store quota reservation wiring). | [`06-dtn-store-carry-forward-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/06-dtn-store-carry-forward-architecture.md) |
+| 07 | siar-capability | 🟡 ~113/164 | Remaining: §1-3 overview, 71, 77, 79-83, 87-88, 99, 115-117, and §122-164 (testing matrix, phases, DoD). | [`07-capability-negotiation-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/07-capability-negotiation-architecture.md) |
+| 08 | siar-resource-limits | ✅ ~192/193 | Remaining: wiring public facade (`ResourceRuntime`) into daemon runtime coordinator; prose §1-2, 186, 190, 192-193. | [`08-resource-limits-backpressure-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/08-resource-limits-backpressure-architecture.md) |
+| 09 | siar-crash-recovery | ✅ 186/186 | Remaining: wiring recovery coordinator into node runtime (`siar-runtime`). | [`09-crash-recovery-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/09-crash-recovery-architecture.md) |
 
-| # | Crate | State | Detail |
-|---|---|---|---|
-| 01 | siar-protocol-ext | ✅ **108/108 — spec complete** | `docs/docs/01-protocol-extension-system-architecture.md` |
-| 02 | siar-identity-multidevice | ✅ **204/204 — spec complete** (21-item Definition-of-Done self-audit: 19/21 done, 2 honestly partial) | `docs/docs/02-multi-device-identity-architecture.md` |
-| 03 | siar-routing-policy | ✅ **200/200 — spec complete** (19 rounds; own Definition-of-Done self-audit included) | `docs/docs/03-transport-routing-policy-engine-architecture.md` |
-| 04 | siar-event-log | ✅ Substantially complete — every section of the spec has been addressed in code, tests or an explicit documented decision. Phase 5 (outbox/effects/retry/reconcile), Phase 6 (scopes/cursors/reassembly; §54 deliberately not built), Phase 7 (snapshots/retention/deletion/backup/upcast), §55-66 closing round, and Phase 8: §27 HLC, §43 BlobRef, §44 search projection, §72 analytics filter, §73-76/§90 reader/appender/SoleWriter, §81 diagnostics, §91 storage-schema stamp, §85/§86 golden + robustness, §87/§80/§88 acceptance scenarios. §93 self-audit (in `definition_of_done.rs`): 14 done, 4 partial, 3 satisfied by other crates. Open: coverage-guided fuzz written but NOT run (needs nightly); no criterion benchmarks; no per-stream checkpoints; cross-process writer lock is the DB's; domain implementations of ReplicationAuthorizer/PayloadSealer; MessageService send path still on siar-storage's OutboxRepository (see siar-messaging::event_policy); apps/desktop projection-only reads unverified. NB: per-section fraction not recomputed (needs docs/docs/04-*.md) | `docs/docs/04-offline-event-log-architecture.md` |
-| 05 | siar-blob-manifest | 🟡 **Substantially complete across 27 rounds** (wire framing, chunked AEAD v2, `siar-file-transfer-service` store & engine, `siar-files` service, `files/1` over QUIC, pull/push, multi-recipient wrapped keys, revocation, crash injection & durable paging; 693 tests passed; round-by-round history in spec doc) | `docs/docs/05-robust-file-blob-subsystem-architecture.md` |
-| 06 | siar-dtn-bundle | 🟡 **~83/192** (+18 in round 5: §29-31, 37-39, 71-72, 80-81, 107-108, 142-144, 154-156; 119 tests) | `docs/docs/06-dtn-store-carry-forward-architecture.md` |
-| 07 | siar-capability | 🟡 **~113/164 (by section references in source; the old ~19/164 predates rounds N+1..N+3)** — round N+3 +15: §57-60, 75-76, 84-86, 97-98, 104-107 (UI adapter, lazy/hierarchical negotiation, failure policy, directional capabilities, trust separation, resume); 122 tests (114 unit + 8 property). Remaining: §1-3 overview, 71, 77, 79-83, 87-88, 99, 115-117, and §122-164 (testing, phases, definition of done) | `docs/docs/07-capability-negotiation-architecture.md` | `docs/docs/07-capability-negotiation-architecture.md` |
-| 08 | siar-resource-limits | ✅ **~192/193 — §187-188 facade (`ResourceRuntime`) done, Definition of Done (§191) executable and passing; §186/190 mapped in the crate README** (round 13: facade + 4 fixes, real cargo-fuzz harness, multi-sample benchmark; round 12: §45, 169-171, 172-185, 189, 191 — storage classes, error classes, property/concurrency/scenario/fuzz tests, benchmarks; remaining: §187-188 public facade/integration API once the wiring settles, plus prose-only §1-2, 186, 190, 192-193; +13 in round 11: §113-120, 123, 129-130, 156-157 — per-feature limits, pre-allocation frame decoder, unknown-peer + connection admission pipelines, sharded scheduler; +15 in round 10: §80, 105-110, 137-140, 165-168 — snapshot, bounded-cardinality metrics, user/dev feedback, batched events + journal filter, restart/crash recovery planning; +13 in round 9: §86-89, 121-122, 146-152 — CPU/thermal/energy, effective limits + runtime tightening, composable runtime modes; +15 in round 8: §68, 70-77, 82, 84-85, 127-128, 131 — routing/discovery/negotiation limits, event-log/projection/outbox pressure, IPC/FFI/plugin fan-out queues, verification budget + handshake pools, OS memory pressure; +14 in round 7: §28, 98, 144-145, 153-155, 158-164 — account tree/tenant isolation, fair semaphore, preemption+safe pause, cancel scopes, task registry, supervisor, sharded stats; +14 in round 6: §5-7, 9-16, 141-143 — layers/hard+soft limits, global budget + borrowing, profiles, config validation, dynamic config; +~15 in round 5: §42-43, 62-67, 78-79, 111-112, 132-136; round 4 added §58-61, 69, 81/83/87, 91-97, 99-104, 124-126, 129, 169-171; 434 tests across unit/property/concurrency/scenario/fuzz/audit/DoD/facade) | `docs/docs/08-resource-limits-backpressure-architecture.md` |
-| 09 | siar-crash-recovery | ✅ **186/186 — all sections implemented or consciously not built (§10 WAL = documented do-not-build; §182's three deferrals recorded)**; Definition of Done (§184) is an executable audit: 16 Done / 4 PartiallyDone with the missing piece named, 0 failing; §186 final principle verified clause by clause. Closing round (§180-186): `RecoveryFailure` (spec's 10-variant error enum, replaced the coordinator's invented 5), `scope_and_phases` (§180/182/183/185 as data checked against the real source tree and Cargo.toml), `definition_of_done`. **Honest gap: no other workspace crate depends on `siar-crash-recovery` yet** (`measure_wiring` reports it; wiring the coordinator into the node runtime is the next integration task). 495 unit + 3 integration tests; clippy `-D warnings` clean (test, release, `crash-injection`); `cargo doc -D warnings` clean | `docs/docs/09-crash-recovery-architecture.md` |
+### Tier 0 Open Items & Gaps
+
+- **Part 04 (Offline Event Log)**:
+  - Coverage-guided fuzz target written but not run (requires nightly toolchain).
+  - Criterion performance benchmarks.
+  - Per-stream sync checkpoints (§53).
+  - Domain implementations of `ReplicationAuthorizer` and `PayloadSealer`.
+  - `MessageService` send path still relies on `siar-storage`'s `OutboxRepository` (see `siar-messaging::event_policy`).
+  - Desktop projection-only reads unverified.
+- **Part 05 (Robust File/Blob Subsystem)**:
+  - ~38 open or deferred sections out of 210.
+  - Remote PUSH without prior request / unprompted upload authorization.
+  - Background quota reconciliation against physical disk usage.
+- **Part 06 (DTN / Store-Carry-Forward)**:
+  - ~109 sections untouched.
+  - Encounter protocol (§27-31, §189 Phase 3): peer connection discovery abstraction.
+  - Routing integration (§189 Phase 5): policy bridges into bundles, but no active route planning through `siar-routing-policy`.
+  - File/blob chunk carriage beyond type-level references (§40-45, §189 Phase 6).
+  - Quota and critical reserve enforcement against durable stores (currently caller-supplied boolean).
+- **Part 07 (Capability Negotiation)**:
+  - Sections §1-3 overview, 71, 77, 79-83, 87-88, 99, 115-117 open.
+  - Sections §122-164 (testing matrix, formal phases, Definition of Done).
+- **Part 08 (Resource Limits & Backpressure)**:
+  - Integration of `ResourceRuntime` facade into the top-level daemon coordinator.
+  - Prose-only sections: §1-2, 186, 190, 192-193.
+- **Part 09 (Crash Recovery)**:
+  - Honest wiring gap: wiring the recovery coordinator into the node runtime (`siar-runtime`).
 
 ---
 
-## Cross-spec build order (Parts 01-33) — dependency analysis
+## Cross-Spec Build Order (Parts 01-33) — Dependency Analysis
 
-Built 2026-09-27, at the user's own request, to answer a real question:
-after Tier 0, in what order should the remaining 24 core specs be
-built to minimize having to come back and rework something because a
-prerequisite showed up late?
+Notice and dependency analysis built to determine the optimal sequence for remaining core specifications, minimizing downstream rework:
 
-**Method**: every `sys-arch/NN-*.md` file was grepped for `Part NN`
-cross-references to every other spec. This is a real measurement, not
-a guess — but it's a heuristic, not a verified hard-blocking graph:
-most of these mentions are "this relates to / this is consumed by,"
-not a compiler-enforced dependency, so treat the resulting order as a
-strong prior to plan around, not a rule that can never be reordered.
-**In-degree** (how many *other* specs' own text points at a given
-spec) is the signal that matters most for sequencing: a spec many
-others reference is one whose absence forces the most future rework if
-built late, regardless of how many things *that* spec itself
-references (a spec can reference dozens of "related areas" without any
-of them being a real prerequisite for it).
-
-### Full in-degree ranking (excluding self-references)
+### In-Degree Ranking (Excluding Self-References)
 
 | Part | In-degree | Status | Part | In-degree | Status |
 |---|---|---|---|---|---|
-| 08 Resource Limits/Backpressure | **22** | 🟡 Tier 0 | 14 Proximity Abstraction | 8 | ⚪ |
-| 10 Fuzzing/Test Suite | **19** | ⚪ — see note below | 15 QR/NFC Pairing | 7 | ⚪ |
-| 13 Battery-Aware Scheduling | **18** | 🟡 `siar-power` (101 tests) — see "Parts 13 & 16 status" below | 11 Relay Self-Hosted Infra | 6 | ⚪ |
-| 03 Transport Routing Policy | 17 | ✅ Tier 0 | 22 WASM Components | 6 | ⚪ |
-| 16 Daemon/Headless Runtime | 15 | 🟡 `siar-runtime` (132 tests) — see "Parts 13 & 16 status" below | 01 Protocol Extension | 5 | ✅ Tier 0 |
-| 19 C-ABI/FFI | **15** | ⚪ — see note below | 21 3rd-Party Protocol Ext | 5 | ⚪ |
-| 04 Offline Event Log | 14 | 🟡 Tier 0 | 28 Security/E2EE | 4 | 🟡 Tier 1 |
-| 05 File/Blob Subsystem | 14 | 🟡 Tier 0 | 29 Realtime Calls | 2 | ⚪ |
-| 07 Capability Negotiation | 14 | 🟡 Tier 0 | 25 Android HW Media | 1 | ⚪ |
-| 17 Emergency Priority | 13 | 🟡 (partial crate) | 26 Audio DSP | 1 | ⚪ |
-| 18 Network Diagnostics | 13 | ⚪ — see note below | 27 Android Build Automation | 1 | ⚪ |
-| 12 Multipath Networking | 11 | ⚪ | 31 Notifications | 1 | ⚪ |
+| 08 Resource Limits/Backpressure | **22** | ✅ Complete facade | 14 Proximity Abstraction | 8 | ⚪ |
+| 10 Fuzzing/Test Suite | **19** | ⚪ Practice across crates | 15 QR/NFC Pairing | 7 | 🟡 Substantial (linking) |
+| 13 Battery-Aware Scheduling | **18** | 🟡 `siar-power` (132 tests) | 11 Relay Self-Hosted Infra | 6 | ⚪ |
+| 03 Transport Routing Policy | 17 | ✅ Spec complete | 22 WASM Components | 6 | ⚪ |
+| 16 Daemon/Headless Runtime | 15 | 🟡 `siar-runtime` (159 tests) | 01 Protocol Extension | 5 | ✅ Spec complete |
+| 19 C-ABI/FFI | **15** | ⚪ Intentionally late | 21 3rd-Party Protocol Ext | 5 | ⚪ |
+| 04 Offline Event Log | 14 | ✅ Substantial | 28 Security/E2EE | 4 | 🟡 Substantial |
+| 05 File/Blob Subsystem | 14 | 🟡 Substantial (27 rounds) | 29 Realtime Calls | 2 | ⚪ |
+| 07 Capability Negotiation | 14 | 🟡 ~113/164 | 25 Android HW Media | 1 | ⚪ |
+| 17 Emergency Priority | 13 | 🟡 Partial crates | 26 Audio DSP | 1 | ⚪ |
+| 18 Network Diagnostics | 13 | ⚪ Diagnostics in runtime | 27 Android Build Automation | 1 | ⚪ |
+| 12 Multipath Networking | 11 | ⚪ | 31 Notifications | 1 | 🟡 Desktop sink |
 | 23 External Interop | 11 | ⚪ | 32 Search/Indexing | 1 | ⚪ |
-| 02 Multi-Device Identity | 10 | ✅ Tier 0 | 30 Presence/Typing | 0 | ⚪ |
-| 09 Crash Recovery | 10 | 🟡 Tier 0 | 33 Backup/Restore | 0 | ⚪ |
+| 02 Multi-Device Identity | 10 | ✅ Spec complete | 30 Presence/Typing | 0 | ⚪ |
+| 09 Crash Recovery | 10 | ✅ Spec complete | 33 Backup/Restore | 0 | 🟡 `siar-backup` |
 | 20 Embedded Linux Node | 10 | ⚪ | | | |
-| 24 Plugin/Module Ecosystem | 10 | ⚪ (deliberately last) | | | |
-| 06 DTN Store-Carry-Forward | 9 | 🟡 Tier 0 | | | |
+| 24 Plugin/Module Ecosystem | 10 | ⚪ Deliberately last | | | |
+| 06 DTN Store-Carry-Forward | 9 | 🟡 ~83/192 | | | |
 
-**Two ranking corrections — high in-degree that should NOT jump the
-queue:**
-- **Part 10 (Fuzzing/Test Suite)** ranks 2nd, but it isn't a phase to
-  schedule — it's a *practice* applied to each crate as it's built
-  (exactly what this workspace already does: `siar-event-log`'s crash
-  injection/property tests, `siar-blob-manifest`'s tamper tests). Its
-  high in-degree just reflects how many specs say "add fuzz/property
-  tests per Part 10," not that Part 10 has to exist as its own crate
-  before anything else can proceed.
-- **Part 19 (C-ABI/FFI)** ranks in the top 5, but binding generation
-  against an API that hasn't stabilized yet is exactly the kind of
-  back-and-forth this exercise is trying to avoid — build bindings
-  once the crates underneath them stop shifting, not before. Treat as
-  deliberately late despite the raw score.
-- **Part 18 (Network Diagnostics)** has real in-degree, but reads the
-  other way around: it *visualizes and diagnoses paths across
-  everything else* (routing, DTN, multipath, proximity) — it needs
-  those to exist first to have anything to show, so it naturally sits
-  after most of the networking-layer specs, not before them.
+### Ranking Corrections & Ordering Notices
 
-### Recommended order after Tier 0
+- **Part 10 (Fuzzing/Test Suite)**: High in-degree reflects continuous testing practices applied to each crate as it is built (e.g. mutation fuzzing in Part 28/16, property tests in Part 04/08), not a blocking standalone crate.
+- **Part 19 (C-ABI/FFI)**: High in-degree, but bindings must stabilize after underlying Rust crates settle. Intentionally deferred until core APIs stop shifting.
+- **Part 18 (Network Diagnostics)**: Visualizes and diagnoses paths across routing, DTN, multipath, and proximity. Sits downstream of networking layer implementations.
 
-Tier 0 (01-09) continues in the standing order (finish 06 → 07 → 08 →
-09) — the ranking above *confirms* that plan rather than overriding
-it: 07 and 08 are the single highest true "build this or everything
-downstream reworks around its absence" items in the entire 33-spec set
-outside what's already done.
+### Recommended Build Sequence
 
-1. **13 Battery-Aware Scheduling** — 2nd-highest real (non-corrected)
-   in-degree; a cross-cutting policy layer nearly every
-   networking/background spec below needs to respect (duty-cycling,
-   scan frequency, discovery aggressiveness).
-2. **16 Daemon/Headless Runtime** — defines how the whole system runs
-   without a UI; `apps/emergency-node` and any embedded/daemon work
-   depend on this existing first.
-3. **12 Multipath Networking** — extends Part 03 (done) directly; nothing
-   new to wait on.
-4. **17 Emergency Priority Classes** — already has real partial crates
-   (`siar-emergency`, `siar-emergency-service`) from the Tier 0 event-
-   integration work; continuing it is lower-effort than starting cold.
-5. **14 Proximity Abstraction** — a named prerequisite for #6 below.
-6. **15 QR/NFC Bootstrap Pairing** — **this is the concrete reason Part
-   28 isn't next**: Part 28's own tracked gap (§37-39 SAS/pairing, no
-   `protocol_version` field on `DeviceLinkInvite`) is a pairing-flow
-   problem, and Part 15 is where the real pairing flow this gap needs
-   to reconcile against actually gets built. Doing 28's own pairing
-   work before 15 exists means guessing at a shape that would likely
-   need reworking once 15 lands.
-7. **28 Security/E2EE** — resume here, now with Part 15 as real
-   infrastructure to reconcile the SAS/pairing gap against, rather than
-   an assumption.
-8. **11 Relay Self-Hosted Infra**, then **18 Network Diagnostics**
-   (now that most of the networking layer above actually exists to
-   diagnose), then **23 External Interop**, **20 Embedded Linux Node**.
-9. **29 Realtime Calls** (wants Part 28's ratchet/groups reasonably
-   solid first), then **30 Presence**, **31 Notifications** (both
-   reference 28 and 29), **32 Search**, **33 Backup** (references the
-   most other specs of anything in the set — 28, 31, 32 among them —
-   and has zero in-degree itself, the textbook "build last" signature).
-10. **25/26/27** (Android hardware media, audio DSP, build automation)
-    — platform-specific, slot in whenever Android work is prioritized
-    independently of this ordering.
-11. **19 FFI**, last among the "core" specs, once the APIs it binds
-    have actually stopped changing.
-12. **21/22/23/24** (third-party protocol extensions, WASM, plugin
-    ecosystem) — already the standing call in "Suggested next
-    priorities" below: extensibility/ecosystem work is deliberately
-    lowest priority until the core product is solid, and this ranking
-    doesn't change that call.
+1. **Finish Tier 0 Core**: Complete remaining sections in 06 DTN and 07 Capability, wire 08 and 09 into `siar-runtime`.
+2. **12 Multipath Networking**: Directly extends Part 03 (done).
+3. **17 Emergency Priority Classes**: Consolidate `siar-emergency` and `siar-emergency-service` with event logging.
+4. **14 Proximity Abstraction**: Radio abstraction for BLE/Wi-Fi Direct.
+5. **15 QR/NFC Bootstrap Pairing**: Complete NFC exchange and threshold pairing.
+6. **28 Security/E2EE**: Complete default OpenMLS pairwise migration and abuse gate ingress.
+7. **11 Relay Self-Hosted Infra** → **18 Network Diagnostics** → **23 External Interop** → **20 Embedded Linux Node**.
+8. **29 Realtime Calls** (wants stable ratchets/groups) → **30 Presence** → **31 Notifications** → **32 Search** → **33 Backup/Restore** GUI wizards.
+9. **Platform Media (25/26/27)**: Android hardware surface, audio DSP, and build automation.
+10. **19 FFI**: C-ABI bindings once APIs settle.
+11. **Ecosystem & Extensibility (21/22/23/24)**: WASM components, third-party extensions, and plugin ecosystem (deliberately lowest priority).
 
 ---
 
-## 2026-10-02 refactor/audit pass
+## Tier 1 — Security Backbone (Part 28) Open Work
 
-Workspace-wide `cargo clippy --all-targets` is warning-free; `cargo test`
-(excluding the heavy `siar-media-av1`/`siar-media-audio` codec crates)
-had 1697 passing / 0 failing at last count. Defects fixed:
-- 06: `decide_forwarding` cast peer count with `as u8` (256 peers → 0 →
-  every bundle held forever); `StoredBundle::peer_history` unbounded
-  (§143); `retry_count` overflow; payload-hash compare now constant-time.
-- 07: `BoundedBytes` derived `Deserialize`, bypassing its 256-byte bound
-  for peer-supplied bytes.
-- Saturating counters: blob transfer journal retries, UI unread count,
-  identity link rate limiter.
-- 08: `TokenBucket` moved its refill mark backwards on a regressing clock,
-  granting a free burst on the next forward reading; strict-priority
-  `BoundedPriorityQueue` can starve low tiers (new `AgingQueue` is the
-  starvation-safe alternative; the old queue is kept as-is).
-- 08 (round 8): `BoundedCounter::release` used a plain `fetch_sub`, so an
-  over-release would wrap the counter to ~`u64::MAX` and deny everything;
-  it now saturates (and asserts in debug builds).
-- 08 (round 10): design finding, not a code bug — `ReservationId` is a
-  per-process counter restarting at 1, so it must never be persisted;
-  `restart.rs` keys durable records on `OpId`/`DurableResId` instead.
-- 08 (round 11): the new cross-validation caught a real default error
-  (Embedded DTN max bundle 1 MiB > hard frame limit 256 KiB, i.e. a
-  bundle that could be accepted by policy but never received).
-- 08 (round 12), found while writing the Definition-of-Done tests: (a)
-  `PeerQuota::for_trust_class` was device-independent, so one trusted
-  peer's quota could exceed a whole Embedded node's stream budget — added
-  `clamped_to`; (b) §191 requires separate durable/cache/staging/relay
-  quotas but no cache quota or class ledger existed — added
-  `storage_classes`; (c) `ResourceError` lacked most of §169's variants.
-  Adding variants to `ResourceError` can break exhaustive `match`es in
-  callers (compile-time, easy to fix).
-- 08 (round 13): `OutboxAccounting` charged critical entries sitting in
-  the reserve against *normal* capacity (freeing a normal slot gave none
-  back); `plan_recovery`/`restore_reservations` could place one durable id
-  in two buckets and restore the wrong record when ids repeated (found by
-  the new fuzz target on its first corpus run); `fuzz_entry` needed a
-  dev-only dependency in normal builds (found by building the real fuzz
-  targets — test/clippy `--all-targets` builds mask missing normal deps,
-  so a plain `cargo check --workspace` is now part of the checklist).
-  `ResourceError`, `Retryability`, `RetryClass`, `ResourceCause` and
-  `UserMessage` are `#[non_exhaustive]`: downstream exhaustive `match`es
-  need a wildcard arm once.
-- 07 (round N+3): `HierarchicalSession::finish` honoured results for
-  extensions never begun / unsupported, so a stray `Ok` made an  unsupported extension usable and a forged fatal `Err` could terminate a
-  healthy session (property test with the intended invariant found it).
-  Also noted: a generic bitset intersection is wrong for directional
-  capabilities (AND keeps "send" between two send-only peers); they use
-  `direction::negotiate_directional`.
-Not touched: the three open reconciliation questions above.
+Full completed detail lives in [`28-production-security-e2ee-key-management-privacy-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/28-production-security-e2ee-key-management-privacy-architecture.md).
+
+### Remaining Subsystems & Open Tasks
+
+- **Default Pairwise MLS Migration**: Pairwise forward-secret messaging exists via OpenMLS (`siar-crypto-mls::pairwise`), but currently requires explicit upgrade. Migrating the default messaging path to OpenMLS pairwise (retiring static session) requires wire session upgrade and storage schema updates.
+- **Ingress Gate Production Wiring**: `siar-abuse::Gate` is wrapped in `siar-messaging::IngressGuard` and emergency-node, but default production limits remain untuned for high-volume relays.
+- **Security Safe Modes & Profiles**: §79-80 security safe mode and §106-110 security profiles.
+- **Cross-Implementation Test Vectors**: §93 test vectors for hybrid composite signatures and BBS passes against external implementations.
+- **Envelope Fuzzing**: Fuzz targets for legacy handshake and envelope parsing on nightly.
+- **Audits & Reviews**: External independent review of FROST ceremony, hybrid signatures, and workspace-wide memory zeroization.
 
 ---
 
-## Tier 1 — Security backbone (Part 28)
+## Desktop UI / Slint — Known Gaps & Uncompleted Items
 
-**~46/127 (36%) done.** Four remaining items are each their own
-subsystem (the ratchet, group security/MLS reconciliation, a security
-test-vector/fuzzing harness, a 10-crate workspace split) rather than a
-next incremental batch — recommendation is to pause here until one of
-those four is deliberately prioritized. Full detail, the closed/open
-section ranges, and the four-item table: `docs/docs/28-production-security-e2ee-key-management-privacy-architecture.md`.
+Full completed detail lives in [`ui-ux-02-desktop-dioxus-app-shell-navigation-window-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/ui-ux-02-desktop-dioxus-app-shell-navigation-window-architecture.md) and [`ui-ux-tracker.md`](file:///home/irshad/Projects/siar/docs/implementation/ui-ux-tracker.md).
 
----
+> [!NOTE]
+> Desktop toolkit migrated from Dioxus to **Slint** (`crates/siar-ui-slint` and `apps/desktop`).
+> Verified live on Wayland / Niri display with 29 interaction and 10 render tests green.
 
-## Desktop UI toolkit change: Dioxus → Slint (2026-10-22)
+### Open Gaps
 
-The desktop shell no longer uses Dioxus (WebView). It is now Slint, in a new
-crate `crates/siar-ui-slint`; `apps/desktop` is a thin core-wiring shell.
-Android stays Jetpack Compose, unchanged. The `ui-ux-NN` specs describe the
-*design* (shell, tokens, states); only their Dioxus-specific implementation
-wording (signals, rsx) is superseded.
-
-**Done and verified** (40 UI tests + 123 ui-state tests + desktop tests, all
-green; plus an end-to-end test with two real cores — pair, send, receive,
-ACK → Delivered):
-- `ui-ux-22` design tokens as the `Theme` global (semantic roles, light/dark/
-  high-contrast, density, UI scale, window classes); components consume
-  semantic tokens only.
-- `ui-ux-02` shell: rail, adaptive sidebar/content (one pane on compact
-  windows), status bar, native window decorations.
-- Chats (`ui-ux-04/05/06` subset): conversation list + filter, bottom-anchored
-  timeline, image previews, honest "carried by peers — not delivered" state,
-  composer (Enter / Shift+Enter).
-- Contacts, groups + invites + add-member, connect/pairing, settings
-  (persisted), security events + banner + devices (`ui-ux-15`).
-- Core wiring fixes vs the Dioxus shell: one stable conversation per peer,
-  per-conversation timelines, frames routed by sender, real delivery ticks
-  (storage poll), user-visible errors instead of log-only.
-
-**Added 2026-10-23 (ui-ux-15 §48-59, §96-100, §133-134 + core wiring):**
-- Contact verification: safety numbers from `siar-identity-multidevice`'s
-  `SafetyFingerprint` (both sides compute the same number — verified across
-  two real cores). Marks persist as `device=<key>`, so a later key change is
-  `KeyChanged` (not silently "unverified") and raises a critical
-  `IdentityChanged` security event once per transition. Today the inputs are
-  the two *device* signing keys; switch to account root keys when those are
-  wired into the desktop app.
-- Own identity fingerprint (short/full, reveal-on-demand) and a Diagnostics
-  card (device key id, group epochs, signature + transport summary; no private
-  key material can be shown by construction).
-- Spec fix: the top banner now has "Review" / "Dismiss". Dismiss is local
-  only and can never resolve an event (§98); my first version resolved on
-  click, which violated the spec.
-- Still not wired (no backend integration in the desktop app yet): device
-  linking/revocation (`device_lifecycle`, `revocation_*`), recovery
-  (`recovery*`), app lock / privacy settings (`privacy_and_lock`).
-
-**Added 2026-10-23 (history):**
-- Chat history survives a restart: stored 1:1 payloads (static pairwise key)
-  are decrypted via new `MessageService::open_stored_payload`. Paging is a
-  pure, unit-tested function (`apps/desktop/src/history.rs`): a chat is the
-  merge of two stored streams (my outbound id + the ONE inbound id every
-  peer files its messages to me under), and other peers' rows are skipped
-  because they fail to decrypt. "Load earlier messages" works, with scroll
-  anchoring so the view doesn't jump; chat-list previews come back too.
-- Core bug fixed along the way (found by the real-storage test): outgoing
-  `sequence` was the send time in ms, so same-millisecond messages tied and
-  reloaded in arbitrary order. It is now strictly increasing per device
-  (`next_sequence`, `crates/siar-messaging`), and both sides reload one order.
-- Known limits: groups have no history after restart (MLS ratchets forward, see group notes);
-  unread counts aren't persisted; messages from peers still using the old
-  random conversation ids can't be matched; attachments reload as references
-  (previews load on demand again).
-
-**Added 2026-10-23 (read state):**
-- Unread badges survive a restart. One number per chat is persisted
-  (`read-marks.txt`): the highest *incoming* sequence the user has seen.
-  Unread = incoming messages above it, recomputed from storage at start-up, so
-  there is no per-message flag to drift. A chat with no mark yet is treated as
-  already read (tracking starts then), so upgrading can't paint phantom
-  badges; a damaged file degrades the same way. Marks only ever move forward.
-  A chat counts as read when it is opened, when a message arrives while it is
-  on screen, or when you reply.
-- Limits: unread is computed from the newest page of history (50), so a badge
-  tops out there after a long absence; a chat shown while the window is
-  unfocused counts as read; groups keep in-session unread only.
-
-**Added 2026-10-23 (group persistence + two core bugs):**
-- MLS group state now survives a restart. `GroupService::new_persistent`
-  keeps one SQLite file per group under `<data dir>/mls` plus an `index.txt`
-  (conversation → file, MLS group id, signing *public* key; no secrets), and
-  `restore_mls_sessions()` reopens them (a bad file loses only its group).
-  A published key package is persisted too, so the one already handed to
-  someone stays valid after a restart (`ensure_key_package_published`). The
-  desktop restores groups into the chat/group lists at start-up.
-  `GroupService::new` is unchanged (scratch directory, not persistent) for
-  the CLI and Android.
-- Bug found by the first real MLS round-trip test: **no member could ever
-  join a group** — groups were created without the ratchet-tree extension, so
-  every Welcome failed with `MissingRatchetTree`. Fixed in
-  `siar-crypto-mls::MlsGroupSession::create`.
-- Bug found by the first group-reload test: the crate's `PostcardCodec`
-  could not read back some openmls state (`WontImplement`), so every reload
-  failed. Replaced with `JsonCodec` (serde_json); this is local on-disk
-  state, not hot-path networking.
-- Tests: 3 crypto-level reload tests, 2 `GroupService` end-to-end tests
-  (create → add → welcome → join → messages → restart BOTH sides → messages
-  again; pre-restart key package still usable), 4 index tests, and a
-  desktop-level restart test.
-- Still open for groups (the invite-state gap listed here earlier is fixed,
-  see the next section): group history
-  cannot be re-read after a restart by design (MLS ratchets forward, so old
-  ciphertext is not re-decryptable — it would need plaintext-at-rest).
-
-**Added 2026-10-24 (group invites):**
-- A group invite is now one step for the admin and one tap for the invitee.
-  The Welcome envelope carries a versioned `WelcomeBundle` (MLS welcome +
-  the group's roster/admin record as of the add), so nothing is pasted by
-  hand and the admin needs no way to export state. `join_group_from_invite`
-  refuses a record for another conversation or one that doesn't list this
-  account. An older client's bare welcome still works through the manual
-  paste path (the invite card says so). Verified through two real desktop
-  cores using only UI commands: create → add (with the invitee's key
-  package) → invite arrives → accept with nothing pasted → group messages
-  both ways.
-- Remaining for groups: a member can only message members it has saved as
-  contacts (no device discovery); no history after restart (MLS forward
-  secrecy); group unread isn't persisted.
-
-**Added 2026-10-25 (live audit, core hardening, backup):**
-- Live hardware audit (Arch / Wayland / Niri, GPU renderer, live relay):
-  the app starts and renders correctly. Fixed from it: segmented controls
-  (theme/density/size) had NO keyboard support and are now one Tab stop with
-  arrow/Home/End; the Paste button now focuses its field first; read-only
-  copy fields show a focus ring; diagnostics copy buttons confirm. Not
-  reproduced: the claim that "Tab skips every text input" — a headless test
-  passes with and without `forward-focus`; the one-line fix is kept (harmless)
-  but nothing is claimed for it. The audit's patch used identifiers that
-  don't exist in this code, so the fixes were re-implemented, not applied.
-- **Transport identity bug (critical, pre-existing):** the iroh endpoint key
-  was `SecretKey::generate()` on every launch, so a device's address (the
-  core of its ticket) changed at each restart; saved tickets went stale, a
-  restarted peer's messages were dropped as "unpaired", and per-peer
-  conversation ids (derived from endpoint ids) changed, orphaning history.
-  Now derived from the persistent identity with a domain-separated KDF
-  (`DeviceIdentity::derive_secret`), so it is stable across restarts and
-  restores with no extra secret file. **Upgrade note:** every device's address
-  changes ONCE on upgrading to this build; saved tickets must be re-shared
-  once. `apps/cli` still generates per launch (it has no persistent identity
-  either).
-- Backup/restore (`crates/siar-backup`, `siar-desktop backup|restore|
-  backup-info`): Argon2id + XChaCha20-Poly1305, header bound as AAD (any
-  flipped bit anywhere is detected — tested at every byte), hostile KDF
-  parameters/paths/duplicates/oversize rejected before any work or write,
-  restore only into an empty folder, staged then renamed (a failure leaves
-  nothing behind), mode 0600. A single-instance lock (`siar.lock`) now stops
-  two copies sharing one data folder and makes backup/restore refuse a
-  running app. Disaster-recovery test on real cores: restore gives the same
-  account/device ids, key package, verified contact, group and decryptable
-  history, and can message its peer. Not yet in the UI.
-- Persistent security log (stoolap table `security_events`): events and
-  resolved state survive restarts; a standing key-change warning is not
-  re-raised at launch once seen, but a NEW change during a session still is.
-- MLS persistence uses SQLite (not stoolap) on purpose: `siar-crypto-mls`
-  already built on `openmls_sqlite_storage`; messages, contacts, groups and
-  everything else stay in stoolap. Moving MLS state to stoolap would mean
-  implementing openmls's ~90-method `StorageProvider` trait — possible, not
-  done, and not recommended without a reason.
-
-**Added 2026-10-25 (group discovery + roster sync):**
-- Group members no longer have to be saved contacts. The Welcome carries
-  every member's address (`WelcomeBundle` v2, `DirectoryEntry`; v1 still
-  read) and an add-member commit carries the new member's address and the
-  roster change (`CommitBundle`). Learned addresses are kept in the new
-  stoolap table `peer_directory`, so they survive a restart.
-- Bug fixed on the way: when a member was added, only the ADMIN's stored
-  roster changed — every other member's roster and send list stayed stale,
-  so anyone added later was invisible to them. Existing members now apply
-  the change themselves.
-- Trust rules (tested): an invite's addresses are accepted only for accounts
-  in the group record that came with it, never for yourself, capped at 256;
-  a member-add only changes a roster if it arrives from a device that is a
-  known ADMIN in the receiver's own view (a valid MLS commit from an
-  unverified sender merges cryptographically but changes neither roster nor
-  address book).
-- Verified through three real desktop cores using only UI commands: B and
-  C, who never met and have no contacts, message each other and the admin;
-  B restarts and still reaches both.
-- Still open for groups: no history after a restart (MLS ratchets forward);
-  group unread isn't persisted; removing a member is not wired in the UI.
-
-**Not done / known gaps**
-- Calls, Files, Search destinations (no backend yet).
-- ~~Device linking needs a wire protocol and root-key custody~~ — done in later
-  rounds (see "Device linking" and "Multi-device contacts" below).
-- ~~Not run on a real display/GPU~~ — **closed**: verified live on a real
-  Wayland session (see "Live verification on a real display" below).
-- Network "Online" means the transport endpoint is bound, not probed.
-- Slint pinned `=1.16.1` (1.17+ needs rustc 1.92; workspace is on 1.91).
-- Run `cargo hakari generate` (workspace-hack lost its Dioxus-only entry).
-
-## Tier 2 — UI/UX (27 specs, `ui-ux-01` through `ui-ux-27`)
-
-**1 of 27 specs touched (partially)** — `ui-ux-15` Security Center is
-~83% of 221 sections; the other 26 are ⚪, several sharing a "joint
-gap" with a still-unstarted core-arch spec (search, QR/NFC pairing,
-notifications, presence, backup, plugins, diagnostics). `ui-ux-22`
-Design System is the standing next-priority candidate, since most of
-the rest of this tier visually depends on it existing first. Full
-27-spec table and `ui-ux-15`'s own detail:
-`docs/docs/ui-ux-tracker.md`.
+- **Unimplemented UI Tabs**:
+  - Realtime Calls (`ui-ux-07`): Stub tab pending backend audio/video pipeline.
+  - File Media Gallery (`ui-ux-10`): Dedicated gallery browser (currently inline chat previews only).
+  - Global Search (`ui-ux-11`): Search interface pending Part 32 indexing engine.
+- **MLS Group Chat Limitations**:
+  - No message history reload after restart (MLS forward secrecy deletes past decryption keys; requires encrypted plaintext-at-rest store).
+  - Group unread counts are not persisted across restarts (in-session only).
+  - Member removal UI action is not wired.
+- **Window ⇄ Daemon Controls**:
+  - No in-app "Restart Now" button (desktop window cannot restart its background daemon).
+  - Network "Online" indicator reflects local transport endpoint binding, not probed internet/relay reachability.
+- **Build / Packaging Toolchain**:
+  - Slint pinned to `=1.16.1` (Slint 1.17+ requires rustc 1.92; workspace pinned to rustc 1.91).
+  - Re-run `cargo hakari generate` locally.
 
 ---
 
-## Tier 3 — Toolchain / sandbox environment note
+## Device Linking & Multi-Device Contacts — Known Limits & Uncompleted Work
 
-Historical constraint, now resolved: this sandbox's verification
-environment used to be stuck on rustc 1.75 with no path to the
-workspace's pinned `rust-version = "1.91"`. **Correction (still
-current)**: `rustc-1.91`/`cargo-1.91`/`rust-1.91-clippy`/`rustfmt-1.91`
-install directly via `apt-get install` (`archive.ubuntu.com` is
-allowlisted), landing at `/usr/lib/rust-1.91/bin`. Combined with the
-right system libs (`libgtk-3-dev libssl-dev libsoup-3.0-dev
-libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev libasound2-dev
-cmake libopus-dev libdav1d-dev`), `cargo check --workspace
---all-targets` against the real repo-root `Cargo.lock` (v4 format —
-parses fine under cargo 1.91; don't delete/regenerate it) passes clean
-across all 33 crates, including `apps/desktop`. Disk space is tight —
-expect to `rm -rf target && apt-get clean` between big check runs. Only
-genuine device/emulator/hardware-codec behavior (`apps/android`'s real
-Kotlin/JNI runtime, hardware codecs) remains out of reach here.
+Full completed detail lives in [`15-qr-nfc-bootstrap-pairing-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/15-qr-nfc-bootstrap-pairing-architecture.md) and [`docs/MULTI_DEVICE_CONTACTS.md`](file:///home/irshad/Projects/siar/docs/MULTI_DEVICE_CONTACTS.md).
 
-Each new sandbox session for this project starts with **no Rust
-toolchain installed at all** (not even 1.75) — install fresh every
-time; never assume a prior session's toolchain state still holds.
+### Known Limits
+
+- **Primary Device Custody**: Only the device that created the account holds `root.key` and can approve new devices. Joined devices cannot approve further devices without implementing root key sharing or threshold custody.
+- **Identity Adoption**: Joining replaces the account ID on disk, but the running daemon core retains its initial ID until restarted (notified via global UI banner).
+- **Silent Waiting on Error**: An invalid or expired link code currently causes the joining client to wait silently without displaying an instant rejection alert.
+- **Multi-Device Sync Gaps**:
+  - **Group MLS**: 1:1 text and file transfers fan out to linked devices, but MLS groups do not yet add sibling devices automatically.
+  - **History Sync / Catch-Up**: New devices do not receive historic conversations from sibling devices.
+  - **Dynamic Contact Pushing**: Contacts added *after* initial device linking are not automatically announced to sibling devices.
+  - **Revocation Delivery**: Direct tombstone delivery to the revoked device itself is not guaranteed if offline.
+  - **Per-Device Delivery Status**: UI displays conversation delivery status, not per-device delivery breakdowns.
 
 ---
 
-## Suggested next priorities, in order
+## Tier 2 — UI/UX (27 Specs) Status Overview
 
-Tier 0's nine core specs are being worked through one by one, in spec
-order, per standing user instruction, before moving on. Specs 01-03
-are complete. Spec 04 has Phases 1-4 done, Phase 5 deliberately
-deferred (see `docs/docs/04-*.md`). Spec 05 is 2 rounds into an
-ordinary section-by-section pass (see `docs/docs/05-*.md`). Specs
-06-09 remain untouched since their last recorded aggregate count.
+Full tracking across all 27 UI/UX specifications lives in [`ui-ux-tracker.md`](file:///home/irshad/Projects/siar/docs/implementation/ui-ux-tracker.md).
 
-**Once Tier 0 is done, the "Cross-spec build order" section above is
-the primary sequencing for Parts 10-33** — it supersedes the older,
-less rigorous list this section used to carry. The two tracks below
-run alongside it, not instead of it:
+### Untouched / Open UI Specs
 
-- **UI/UX**: `ui-ux-15` continues in ordinary batches (§195-221
-  remain — integration section §195-206 next, then testing/final scope
-  §207-221). `ui-ux-22` Design System is worth pulling forward once
-  Tier 0 ends, ahead of most core-arch work above it in the ranking —
-  everything else in that tier visually depends on it, and no core-arch
-  ranking captures that (`ui-ux` specs weren't part of the reference-
-  graph measurement). The "joint gaps" pattern noted before (search,
-  QR/NFC pairing, notifications, presence/receipts, backup, plugins,
-  diagnostics — each a core-arch spec paired with its own ⚪ ui-ux
-  counterpart) still holds; the cross-spec order above already
-  sequences the core-arch half of each pair, so build that spec's own
-  ui-ux counterpart in the same window rather than as a separate later
-  effort.
-- **Deliberately last, by explicit priority call**: plugin/module
-  ecosystem (Part 24, ui-ux-19), WASM components (Part 22), third-party
-  protocol extensions (Part 21), external interoperability (Part 23).
-  Usability and reliability come first; extensibility/ecosystem work
-  is lower priority until the core product is solid — the cross-spec
-  ranking's own in-degree numbers agree (all four rank in the bottom
-  third).
-- **The four Part 28 subsystems** (ratchet, groups/MLS, test harness,
-  crate split) — each needs its own dedicated, scoped effort rather
-  than sharing a round with anything else, whenever Part 28 is resumed
-  per the cross-spec order above.
+- `ui-ux-03` Android Compose App Shell (⚪ unstarted)
+- `ui-ux-07` Calls / Realtime Media (⚪ unstarted)
+- `ui-ux-10` Files / Media Gallery (🟡 inline previews only)
+- `ui-ux-11` Search & Retrieval (⚪ unstarted — joint gap with Part 32)
+- `ui-ux-13` Notifications UI (🟡 daemon desktop notifications only)
+- `ui-ux-14` Presence & Typing (🟡 delivery ticks only; typing ephemeral unstarted)
+- `ui-ux-16` Backup / Restore GUI (🟡 CLI/daemon only; GUI wizard unstarted)
+- `ui-ux-17` Emergency SOS UI (⚪ unstarted)
+- `ui-ux-19` Plugin / Module UI (⚪ unstarted — joint gap with Part 24)
+- `ui-ux-20` Network Path Diagnostics UI (🟡 card only; visual graph unstarted)
 
+---
 
-## Parts 13 & 16 status
+## Tier 3 — Toolchain / Sandbox Environment Notes
 
-Section fractions are deliberately not claimed; each line below names the spec sections it covers and the test that proves it. Run `grep -c "^# [0-9]*\." sys-arch/13-*.md sys-arch/16-*.md` before quoting any.
+- **Toolchain Requirements**: Rustc 1.91.1 pinned (`rust-version = "1.91"`). Direct installation via `apt-get install` (`/usr/lib/rust-1.91/bin`).
+- **System Dependencies**: `libgtk-3-dev libssl-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev libasound2-dev cmake libopus-dev libdav1d-dev nasm pkg-config`.
+- **Cargo Lock**: Workspace `Cargo.lock` uses v4 format. Do not delete or regenerate with older cargo.
+- **Disk Space Constraint**: Workspace target builds require regular cleanup (`rm -rf target && apt-get clean`).
 
-### Part 13 — `siar-power` (122 unit + 10 scenario tests; clippy `-D warnings` clean)
+---
 
-**Done.** §4-8,15 state · §9-14,69-70 profiles/config/prefs · §16-19,140 budgets · §20-28,68,72-74,96-97 layered policy engine · §21,75-80,110-112 durable-deferral scheduler (aging, herd control, restart-safe) · §30-32 wake batching · §34-38,91 discovery duty cycle · §39-57,138 files/DTN/media advice · §81-84 hysteresis, coalescing, epoch · §85,115 metrics + diagnostics lines · §86-87 privacy classes, peer hint · §100-102 vendor quirks (data table; only ever makes the core *more* conservative; guidance is optional wording, tested against "must/required") · §105 `HostReport` stable host API · §106-108 `ExtensionGovernor` (claims clamped, bounded queue, CPU-scaled credit bucket, strike/backoff suspension) · §113 recovery order · §114 semantic event outbox (not every battery change) · §116-119 user wording, emergency banner, thermal call notice, `NotificationGate` · §120-129 and §133 scenario tests · §139 sysfs reader + push source.
-**Refactor.** `siar-routing-policy` and `siar-crash-recovery` use `siar-power`'s `BatteryLevelClass`/`ThermalState`; `siar-resource-limits::ModeFlags::from_power`.
-**Wired in.** `emergency-node` (relay forwarding pauses, storing never does) · `siar-app-core::power_gate` (attachment previews, history preload; messages never gated).
-**Policy bugs the tests caught:** reserve-domain work (receipts, identity) was blocked at critical battery; heavy transfers were deferred at *High* battery.
-**Open.** Android BatteryManager/Doze/foreground-service producers and iOS (§58-64) — the Rust side is `HostReport`/`PushPowerSource`, the Kotlin/Swift producers are not written · empirical tuning (§99) and real-device/benchmark suites (§130-136) need hardware · no desktop bulk-file feature exists yet, so §39-49 limits have no desktop consumer beyond previews · nothing consumes the §114 outbox or the §116 messages in the GUI yet.
+## Part 13 (`siar-power`) — Uncompleted & Open Items
 
-### Part 16 — `siar-runtime` (86 tests) + `apps/daemon` (2 tests + 2 live smoke scripts)
+Full completed detail lives in [`13-battery-aware-scheduling-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/13-battery-aware-scheduling-architecture.md).
 
-**Done.** §32-36,111-112 lifecycle + network barrier · §29-31,97-98,121,142 supervisor/breaker · §89-90,140-141 health · §56-58 command idempotency · §23-25,144-148,169-171 bounded events · §14-22,102-105 protocol/roles/versions (+ mutation-fuzz test) · §51-54 `Runtime` · §13-18,144-146,179 Unix-socket IPC (abort-safe socket cleanup) · §37-39,99 sd_notify + unit generation · §85-88 strict TOML config, secrets by reference only, validated, hot/cold reload classification · §87 SIGHUP reload · §91-92 metrics (local, no identifiers) · §97 watchdog (withheld when a critical subsystem is down) · §100-101,106-110,167-168 instance file, upgrade lock, graceful handoff that waits for the old *process* (not just its socket), zombie-aware pid check · §161-162 audit log (action kinds only; Admin-only to read) · §176-178 `ensure_daemon` spawn-race helper · §78,81-84 validated namespace ids and disjoint per-namespace directories · §193 fuzz target `fuzz/fuzz_targets/ipc_frame.rs` (**written, not compiled** — needs nightly + cargo-fuzz).
-**Core extraction.** `siar-app-core` (no GUI toolkit; `cargo tree` shows 0 Slint/winit crates) over `siar-ui-model` (`Slices`, Slint-free `StateHub`); `UiHub` is a thin redraw wrapper. `siar-daemon run | ctl | unit` hosts that core.
-**Bugs the live tests caught:** socket file left behind when the supervisor aborts the server; upgrade handoff returned while the old process still held the database lock.
-**Open — and why.**
-* **GUI as a daemon client.** `siar-ui-state` types and `AppCommand` have no serde; shipping `Slices` would couple the wire format to UI structs. Needs domain-level snapshot+delta (conversations, messages, delivery, security events). Until then window and daemon are mutually exclusive per data folder.
-* Windows named pipes (§180) · Android service hosting / iOS execution windows (§42-46) · remote admin over Iroh (§66-71,159-162) · multi-account *inside one daemon* (§80-84: the path/namespace layer exists, the account-scoped command ledger and per-account core do not) · plugin-host isolation (§120) · Unix FD passing (§63) · desktop notifications from the daemon (§151-158) · ~~iroh endpoint not closed gracefully~~ (done: `Core::shutdown_transport`, 5 s bound) · ~~`ctl` machine-readable output~~ (done as `ctl --ron`: RON, lossless for every `Reply`; TOML was rejected — root must be a table, no null; JSON dropped by owner's choice).
-* **Window sync of security events (2026-11-03):** new `SectionKey::SecurityEvents` / `Section::SecurityEvents` in `siar-ui-sync` (`security.rs`: wire DTOs + lossless kind/action mappings; severity is NOT sent — the receiver derives it from the kind so a Critical event can't be downgraded in transit; newest-2,000 bound; delta touches only that section). The producer already existed in app-core (`IdentityChanged` on contact key change, persisted/restored). 19 unit + 4 e2e tests, clippy clean. **Read-only:** resolving an event from a window is not a sync command yet. **Devices:** `Slices.devices` has NO producer in the core (device linking is still seams, per spec 02 notes) so there is nothing to sync; left out deliberately.
-* **Resolve over sync (2026-11-03):** `WireCommand::ResolveSecurityEvent { event_id }` (validated, round-trips; `siar-ui-sync` 20 unit + 4 e2e). The core's handler previously only persisted — it now also marks the event in the daemon's hub state (idempotent for a local UI), so a remote window sees it as a sync delta. The app-core restart test now resolves via the command alone (no local update) and still checks it persists.
-* **Daemon desktop notifications (§151-158, 2026-11-03):** `apps/daemon/src/notify.rs` — pure `NotificationEngine` (9 tests) + `DesktopSink` (`notify-rust`; failure logged once, never fatal), hooked via a new `UiSyncService::set_observer`. Private by default (no sender/text); `SIAR_NOTIFICATIONS=off|private|preview`; silent while a window is attached except Critical security alerts; 30 s per-conversation cooldown; pre-existing unread/events at startup are not news. **Showing on a real desktop is untested** (no session bus in the sandbox).
-* `ctl pairwise-publish` / `ctl pairwise-open <conv> <ticket> <peer-device> <key-package>` open forward-secret 1:1 sessions on a running daemon (`Core::pairwise_publish/pairwise_open`; compiled + clippy clean, **no end-to-end test of the ctl path itself** — the messaging layer under it has 3 real-iroh tests).
+- **Mobile Producers**: Rust interfaces (`HostReport` / `PushPowerSource`) complete; Android `BatteryManager`/Doze and iOS Kotlin/Swift producers not yet written.
+- **Empirical Tuning**: Hardware parameter tuning (§99) and real-device benchmark suites (§130-136) require physical device benches.
+- **Desktop Bulk Consumers**: §39-49 transfer limits have no desktop consumer beyond image attachment previews.
+- **UI Event Notice Wiring**: GUI does not yet consume the semantic event outbox (§114) or thermal/battery user notices (§116).
 
+---
 
-### Part 16 — round 2026-11-03 (b): headless provisioning, diagnostics, backup/restore coordination
-`siar-runtime` 96 → 133 tests; `clippy -D warnings` clean across `siar-runtime`/`siar-daemon`/`siar-emergency-node`/`siar-ui-sync`.
-* **§72-76 `node.rs`** — `NodeRole` (6, §74) with a *data-table* `FeatureSet` per role (§75: a DTN node has Iroh/BLE/LAN/DTN/files and no calls/GUI — tested); unprovisioned nodes run **only** `BootstrapListener` (§73, tested for every other feature). `Provisioner`: signed `ProvisionPayload` bound to the node's one-time QR challenge (replay to another node refused), domain-separated signing bytes covering every field, bounded config/validity, embedded config parsed+validated *before* anything is persisted, atomic owner-only state file, corrupt state fails closed to unprovisioned (and says so), second payload refused until a local `reset()` (no IPC path to reset, on purpose). 13 tests.
-* **§93-96 `diag.rs`** — `LogRecord` (`timestamp, subsystem, event, severity, operation id`) whose text fields are a validated identifier alphabet (`Label`, re-validated on deserialise) so message text cannot ride along; `TraceId` (`corr/xfer/bundle/cmd`, §94); `RecentErrors` bounded ring (warnings+ only); `redact_paths`/`redact_config`; `DiagnosticBundle` (versions, health, redacted config, metrics, recent errors; ≤256 KiB, oldest errors dropped first, truncation stated); `CrashReport` keeps panic *location* and a redacted backtrace, **never the panic message** (length only); `install_panic_hook` writes owner-only reports, keeps the newest 5. New `Query::Diagnostics` (Admin) and `ctl diagnostics`. 13 tests, including a real panic whose message contained an address and a secret.
-* **§111-115 `backup.rs`** — `BackupService` trait (§114, implemented by the hosting app) + `Runtime::create_backup`/`restore_backup`. A backup runs **quiesced** (Ready/Degraded → Maintenance; an operator-set Maintenance/ReadOnly is left as found); a `QuiesceGuard` makes `set-maintenance off`/`set-read-only off` return `Busy` mid-copy and always restores state on error/cancel; one backup/restore at a time; targets must be absolute, no `..`. Restore requires Maintenance (§115), then runs Part 09 reconcile, and **a failed reconcile leaves the runtime in Maintenance**. New `Command::CreateBackup/RestoreBackup` (Admin, idempotent via `CommandId`, audited by kind only — never the path), appended at the end of the enum so existing wire indices are unchanged; `ctl backup|restore <abs-dir>`. 10 tests.
-* **Superseded by the round below:** the daemon's `BackupService`, the admin-key verifier + provisioning flow and the daemon's panic hook are now done (see "Part 16 — round 2026-11-05"). Still true from this line: nothing feeds `RecentErrors` from `tracing` yet; `workspace-hack/` was absent from the upload (local stub used for verification, not delivered).
-* **Verification caveat:** this workspace upload had no `workspace-hack/` directory; verification used a local empty stub (not delivered, `Cargo.lock` not delivered). Re-run `cargo hakari generate` locally.
+## Part 16 (`siar-runtime` / `apps/daemon`) — Uncompleted & Open Items
 
+Full completed detail lives in [`16-daemon-headless-runtime-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/16-daemon-headless-runtime-architecture.md).
 
-### Part 16 — round 2026-11-05: daemon backup/restore, enrolment, FROST root ceremony CLI
-Verified: `siar-runtime` 156, `siar-daemon` 31, `siar-backup` 19, `siar-crypto-advanced` 41 (ceremony 7 + 34 earlier), `siar-identity-multidevice` 258, `siar-storage` 28, `siar-root` 2; `cargo fmt --all --check` clean; `clippy -D warnings` clean for runtime/daemon/root/crypto-advanced/backup/storage/app-core/identity-multidevice/emergency-node/ui-sync/cli.
-* **Daemon backup (§113-115), proven on the live daemon.** `ctl backup <abs-dir>` runs while the daemon serves: it holds the data-folder lock (proof for `siar_backup::create_backup_while_locked`), asks stoolap for `create_snapshot()`, and archives **only** `siar.db/snapshots/**` plus the small non-DB files — the live WAL/volumes are filtered out *before being opened*, so a half-checkpointed store can't be captured. Encrypted with the existing Argon2id + XChaCha20-Poly1305 archive; passphrase from `secrets.backup_passphrase` (file/env, never the config text). `ctl restore` (only in `ctl maintenance on`) decrypts+validates into a sibling staging dir and drops a marker; the **next start** swaps it in before the DB opens (`apply_pending_restore`), keeps the previous data in `<data>.pre-restore-<ms>`, rebuilds the DB with `restore_snapshot`, and refuses to start if it can't. Black-box run: backup → tamper `device_id.txt` → stage → shutdown → restart → original id back, previous data kept, daemon Ready.
-* **Rollback bug found by the new fault-injection test and fixed:** a failure after placement used to *delete* the restored entries (they had been moved out of staging), leaving the marker pointing at an empty stage. Rollback now returns them to staging (trimming the DB runtime files opening it created). Test injects a failure at each phase (MovedAway/Placed/DbRestored): data folder byte-identical, staged restore retained, retry succeeds.
-* **Correction to the 2026-11-03 notes:** nothing outside the runtime tests reads `network_open()`. `Maintenance` refuses mutating *commands* and publishes the flag; the app core's incoming loop is **not** silenced. Docs fixed in `backup.rs`/`lifecycle.rs`. The daemon backup is designed around that (snapshot + immutable files), but stoolap's snapshot atomicity *across tables under concurrent writes* is undocumented upstream and untested here.
-* **Enrolment (§72-76) end to end.** `node.require_provisioning` + `node.admin_keys` (local file only — a payload that sets `[node]` is rejected, so a payload can't change who the admins are). `Ed25519AdminVerifier` (issuer = hex of the admin's Ed25519 key; allow-list; `verify_strict`); `Command::Provision`/`Query::ProvisionStatus` (appended; wire indices stable); canonical-encoding check on the payload. Unprovisioned daemon runs IPC + enrolment only; success persists state (0600), ends the run with **exit 75** (unit has `Restart=on-failure`). Black-box with real binaries: forged signature → `unauthorized`; **2-of-3 FROST signature accepted**; restart → `provisioned role=dtn-node`; replay → `busy`.
-* **`siar-root` CLI (`apps/root-ceremony`)** over `crates/siar-crypto-advanced::ceremony`: `dkg1/2/3`, `sign1`, `package`, `sign2`, `aggregate`, `verify`, `payload`. Secret state sealed (Argon2id → XChaCha20-Poly1305, kind bound as AAD, hostile KDF params refused); nonces deleted *before* signing (single-use); round-2 files are secret and must travel confidentially. No `--passphrase` flag (visible in `ps`).
-* **zkryptium upstream report (step 5):** `zkryptium-issue.md` + `zkryptium-proof-length.patch` + the repro test. Both defects (panic on <240-byte proof, trailing bytes accepted) reproduced on 0.8.1 and fixed by the patch (tests pass patched, fail unpatched). **Not filed** — needs the reporter's GitHub account. Sibling `from_bytes` with the same slicing pattern listed, untested.
-* **Closed the next round (2026-11-05 b):** the provisioned **role now decides what the daemon runs** (a role without `Messaging` does not start the chat core — no identity, no chat database; verified live with `storage-node`), the payload's **config is applied** (`overlay_config`: admin's settings over the local file, but `[node]` and `[secrets]` stay local; empty payload config applies nothing; SIGHUP reload keeps the overlay; verified live: effective `logging.level` changed), and the enrolment exit-75 check now keys off *started unprovisioned*, so a provisioned node without a core exits 0 normally. Honest limit at that point (closed by the launcher below): relay/DTN/storage roles ran nothing here.
-* **Still open, named:** (1) per-feature switches *inside* the chat core (calls/files/preview) are still not driven by the role; only core-or-not is. (2) the app core does not honour `network_open()` (above). (3) The BBS layer remains unaudited. (4) `ctl restore` needs the operator to restart the daemon to apply. (5) FROST share storage is passphrase-sealed files only (no HSM/TPM). (6) `Bootstrapped` gained a public `db` field; `siar-desktop` and every other dependent still compile (`cargo check -p siar-desktop --all-targets` clean).
+- **UI Sync Optimization**: Serialization currently re-encodes sections per diff; needs dirty-tracking before scaling to thousands of conversations.
+- **Windows Named Pipes**: Implemented via `interprocess` but unverified on real Windows hosts.
+- **Mobile Daemon Hosting**: Android foreground service hosting and iOS background execution windows (§42-46).
+- **Multi-Account inside One Daemon**: Per-account directory namespaces exist; account-scoped command ledgers inside one daemon process are not built.
+- **Process Isolation**: Plugin-host sandboxing (§120).
+- **IPC Enhancements**: Unix FD passing (§63).
+- **Remote Restore Automation**: Remote restore stages files in maintenance mode; automated process restart is not yet built.
+- **Storage Node Binary**: Provisioning supports `StorageNode`, but no storage daemon binary exists yet.
 
-### Hardening round 2026-11-08: mutation-fuzz of every untrusted-input parser added this session (Part 28 "fuzz targets" item, partly)
-**What this is and is not:** deterministic, seeded mutation fuzzing that runs on **stable** as ordinary `cargo test` (flip/overwrite/insert/delete bytes of valid inputs, plus random bytes; `catch_unwind` around every call; assertions on what is accepted). It is **not** coverage-guided `cargo-fuzz`/libFuzzer (that needs nightly + sanitizers, unavailable here) — it will not find what a coverage-guided fuzzer would, and the sample counts are small. Verified: `siar-runtime` 156, `siar-admin` 13 + 9, `siar-crypto-advanced` 44, `siar-daemon` 31; fmt + clippy `-D warnings` clean.
-* **Targets and what each asserts:** admin request decoding (20 000 inputs; never panics; accepted ⇒ re-encodable); **a live admin server** under a barrage of hostile frames from an authorised and an unlisted key (never crashes; only genuinely valid requests ever reach the backend; roles still enforced afterwards); provisioning payload + signature (6 000 mutants: **never panics, never provisions**, and the untouched pair still works afterwards — nothing burned); node state file (200 junk files incl. non-UTF-8: fails closed, never aborts); `RuntimeConfig::parse` (15 000: never panics; **anything accepted re-validates**, never "admin enabled with nobody", never "provisioning required with no admin key"); the audit file (**every single-byte flip/overwrite/delete/insert at every position of a valid log is detected** — 1 000+ mutations, exhaustive — plus random garbage never panics `verify`/`open`); sealed ceremony files (a modified sealed blob **never** opens; hex/tag/signing-input parsers never panic); BLS attestations and registrations (a modified attestation never verifies); hybrid keys and signatures (a modified signature never verifies).
-* **Real bugs the fuzzing found, both fixed and mutation-checked (test fails without the fix):** (1) a **non-UTF-8 node state file made `Provisioner::open` return an error** — the daemon would have refused to start instead of failing closed to "unprovisioned" with a warning; (2) a **non-UTF-8 audit file made `FileSink::open` fail**, dropping the node to memory-only auditing instead of quarantining the file and starting a new chain. Earlier in the same round the exhaustive audit sweep's predecessor tests had already exposed the unverified first audit line (fixed 2026-11-07).
-* **Honest limits:** decoders from upstream crates (`postcard`, `toml`, `frost`, `ml-dsa`, `zkryptium`) are exercised only through our wrappers, with a few thousand inputs each — no corpus, no coverage feedback, no sanitizer, no long runs. The `zkryptium` panic (reported separately) is exactly the class this style *can* catch only when someone thinks to try short inputs; a coverage-guided fuzzer should still be run against these entry points on a machine with nightly. Still open from Part 28: fuzzing envelope/handshake parsing in the *older* crates (siar-protocol/siar-crypto), cross-implementation test vectors (§93), side-channel and memory-hygiene review, external review.
+---
 
-### Part 16 — round 2026-11-07: durable, hash-chained audit log (`siar-runtime::audit_file`)
-Verified: `siar-runtime` 151 (10 new), `siar-daemon` 31; fmt + clippy `-D warnings` clean. Black-box (real daemon): local `ctl` + remote owner/viewer/stranger actions all land in `<data>/audit/audit.log` (dir 0700, file 0600) naming operator label + outcome; `siar-daemon audit-verify <dir>` → `OK: 6 entries`; the head it prints equals the `# persisted head …` line from `ctl audit`; after a restart the chain **continued** (seq 0..9, still OK); a tampered file → `audit-verify` exit 1 naming the line, and on the next start the daemon logs an ERROR, **moves the evidence to `audit.corrupt-<ms>/` intact**, and starts a new chain whose first line is a visible `audit:chain-restarted`.
-* **Format:** `seq ⇥ time ⇥ principal ⇥ Role ⇥ action ⇥ Outcome ⇥ chain`, `chain = blake3(previous chain ‖ body)`; sequence numbers must be contiguous. Rotation at 1 MiB, 4 segments kept; **the chain continues across segments** and disk use is bounded. Tab/newline/control characters in an action cannot forge a field or a line (sanitised, 96-char cap). Concurrent writers keep the sequence contiguous.
-* **What it does and does not protect — read this:** it detects **corruption and edits/removals/reordering that do not recompute the chain** (and re-linking a single rewritten line is caught because the next line hashes it). It does **not** stop someone who can rewrite the *whole* file from recomputing every link, and **tail truncation leaves a valid shorter chain**. The defence is to record the head (`ctl audit` / `audit-verify` print it; remote `audit` shows it) somewhere the node's own user cannot write.
-* **Never rewound by a restore, never archived:** `audit/` is excluded from `ctl backup` archives and a restore leaves it exactly in place (older archives that contain one are ignored for it) — restoring an old backup cannot erase the record of the restore itself.
-* **Failure behaviour:** a failing disk never blocks or panics the caller: writes are best-effort appends (no per-entry fsync, so a crash can lose the last few entries) and failures are counted (`write-failures=` in the head line). If the audit directory cannot be opened at all the node keeps auditing in memory and logs an ERROR.
-* **Tests with teeth:** two mutation checks this round. Disabling the chain link alone did **not** fail any test (per-line hashes + sequence numbers caught the other cases) — which exposed that the chain's unique property wasn't tested, so a re-linking test was added and now fails on the mutant. Black-box then exposed a real bug: the first line of a log that starts at sequence 0 was accepted unverified; fixed (genesis predecessor is known) and mutation-checked.
-* **Still open, named:** (1) the anchor line of a log whose oldest segments rotated away is unverifiable by construction. (2) No off-box shipping of the head (syslog/remote) — the operator must do it. (3) The audit file is plain text, not encrypted (labels are a fixed vocabulary; no message content or paths by design). (4) No size/time-based archival of rotated-away segments beyond `keep`.
+## Part 33 (Backup / Restore) — Uncompleted Items
 
-### Part 16 — round 2026-11-06 (b): role launcher (`apps/daemon/src/roles.rs`)
-Verified: `siar-daemon` 31 tests (6 new, with fake child binaries: graceful SIGTERM, kill after grace, unrequested exit = error, args delivered, binary located only beside the daemon, plan follows features); fmt + clippy `-D warnings` clean. **Black-box with the real binaries:** a node provisioned as `relay-gateway` restarts into the role, runs `siar-emergency-node` as a **child of the daemon**, creates **no chat identity** (only `relay/identity.bin`), reports `role-relay: Healthy`, restarts the relay under a new pid after `kill -KILL`, and `ctl shutdown` stops everything (daemon exit 0, no stray process).
-* **Plan from the feature set, not the role name:** `RelayForwarding`, or `Dtn` without `Messaging` ⇒ supervised relay child (RelayGateway, DtnNode, OrganizationNode — alongside the chat core —, TestNode). `StorageNode` ⇒ explicitly **Unavailable** (no storage binary exists; logged, not faked). `PersonalDevice` ⇒ chat core only.
-* **Safety:** the child binary is found **only next to the daemon's own executable** (no `PATH` search — a planted binary would otherwise run with the daemon's rights); started with `kill_on_drop`; unexpected exit (even status 0) is a failure so the supervisor restarts it under its normal bounded policy (5 restarts/60 s, backoff, then `Degraded` — no crash loop); SIGTERM at shutdown, kill after a 10 s grace.
-* **Identity** of the relay is kept in the daemon's data folder (`relay/identity.bin`), stable across restarts and covered by `ctl backup`.
-* **Still open:** the relay child has its own IPC socket (`default_socket_path("emergency-node")`) and is **not** reachable through the remote-admin operations or the daemon's `ctl` (health shows only that the worker is up); the supervisor sees the process, not the relay's internal state. SIGTERM uses the system `kill` (Unix only; on Windows the child is killed). No storage binary exists for `StorageNode`.
+Full completed detail lives in [`33-backup-restore-export-import-archival-portability-architecture.md`](file:///home/irshad/Projects/siar/docs/implementation/33-backup-restore-export-import-archival-portability-architecture.md).
 
-### Part 16 — round 2026-11-06: remote administration (§66-71, §159-160, §182) — new crate `siar-admin`
-Verified: `siar-admin` 12 unit + 8 over **real Iroh connections on loopback**, `siar-runtime` 141, `siar-daemon` 25; fmt clean; clippy `-D warnings` clean (admin/runtime/daemon/root/emergency-node/ui-sync). Black-box with the real binaries: viewer `health` ok; viewer `maintenance on` → "your role does not allow this operation"; owner `maintenance on/off` ok (local `ctl status` showed Maintenance); live remote `backup` produced an archive; a stranger key got nothing; `admin <node> sh -c id` → "There is no remote shell"; owner `shutdown` replied `ok` and the daemon exited 0.
-* **Transport/identity/protocol (§66, §68, §159, §182):** its own Iroh endpoint with its **own key** (`<data>/admin/endpoint.key`, 0600, never overwritten, group/world-readable refused), ALPN `comm-admin/1` (the test confirms `comm-ipc/1` is not served). Auth = the QUIC handshake's Ed25519 key must be on the operator allow-list, else the connection is closed **before any byte is parsed**.
-* **Roles (§69):** `Viewer < Operator < SecurityAdmin < Owner`; `AdminOp::required_role` is an exhaustive match (a new op can't ship without a role). Viewer: health/status/metrics/diagnostics/power/provision-status. Operator: maintenance, read-only, backup. SecurityAdmin: audit. Owner: restore, shutdown.
-* **§70:** authenticated, authorised, **audited** (every outcome — executed, forbidden, rate-limited, malformed, unknown peer, overloaded — lands in the runtime audit log as `remote:<operator-label>:<op>`; labels are validated identifiers, arguments never logged), **rate-limited** (per-operator token bucket, connection cap, 64 KiB request cap with exactly-one-request/no-trailing-bytes parsing, request/exec/idle timeouts).
-* **§67/§71 no shell, no content:** `AdminOp` is a closed list; there is no pass-through to `Command::App`/`Query::App`, nothing reads message content, and **enrolment (`Provision`) is not remotely reachable**. Errors cross the wire as a fixed vocabulary (no paths).
-* **§160:** discovery is **off by default**; the endpoint is reachable only by someone holding its id + address. `[admin] bind = "0.0.0.0:7447"` gives a stable port; otherwise it is random per start (the daemon writes `admin/endpoint.id` and `admin/endpoint.addrs`).
-* **Config:** `[admin] enabled/discovery/bind/operators[{key,role,label}]`, validated (enabled with no operators is refused, never "open"); **local-file only** — a provisioning payload that sets `[admin]` (or `[node]`) is rejected and `overlay_config` keeps both local. `[node]` and `[admin]` changes are now reported **restart-required** on SIGHUP (`[node]` was missing before).
-* **Operator tooling:** `siar-daemon admin-keygen --out F` (prints the public id for the node's config), `siar-daemon admin --key-file F --addr ip:port <node-id> <op>`; one-shot commands no longer print library log noise.
-* **Bugs found by tests/black-box this round:** (1) a server shutdown raced the reply of the very request that asked for it ("connection lost" for an operation that succeeded) — fixed with an in-flight drain; **mutation-checked** (the new test fails with the drain disabled); (2) two of my own test inputs were wrong (a "garbage" request that was in fact a valid `Metrics` request; a "non-point" key that was valid) — corrected, not product bugs.
-* **Retry safety:** the request id is the idempotency key into the runtime's command ledger under a **remote principal space** (top bit set — can't collide with a local UID).
-* **Still open, named:** (1) operators are fixed at start (no hot reload; restart to change). (2) ~~the remote `Audit` view shows only the in-memory ring~~ — superseded by the durable audit log below (the ring still backs the live view; the file is the record). (3) Remote **restore** is reachable by Owner but still two-phase (stages, applies on next start) and a remote `shutdown` followed by restore needs someone to start the node; there is no remote "restart". (4) No per-operator key rotation/revocation workflow beyond editing the config + restart. (5) Operators reach the node by ip:port or discovery; there is no relay-only path when discovery is off and the node is behind NAT. (6) The admin endpoint key is inside the data folder, so it is **included in `ctl backup` archives** (encrypted with the backup passphrase) — a restored node keeps its admin id; say so before sharing archives.
+- **GUI Backup & Restore Wizard**: Currently exposed through `siar-desktop backup/restore` and daemon `ctl backup/restore`.
+- **Automated Scheduling**: Scheduled automated background backup jobs.
+- **Selective Data Export**: Exporting individual conversations or contacts.
 
-### New crate `siar-crypto-advanced` — FROST root, hybrid PQ signatures, BLS audit aggregation, BBS relay passes
-Rule followed: **no primitive written here**; every one is an upstream crate. 34 tests, clippy `-D warnings` and fmt clean; `siar-identity-multidevice` 258/258 after two additive accessors.
-* **`frost_root`** — `frost-ed25519` 3.0 (RFC 9591), real DKG (no dealer), threshold signing. Output is a standard Ed25519 key/signature: tested against the workspace's own `RootPublicKey::verify` and a real `verify_root_rotation` (new root = FROST group). Aggregate is re-checked with `verify_strict` before it is returned. **Existing accounts keep their single-key root until they rotate** (rotation to a FROST root is the path; nothing migrates automatically).
-* **`hybrid`** — ML-DSA-65 + Ed25519 composite per IETF `draft-ietf-lamps-pq-composite-sigs` (prefix/label/M′ layout), both halves required, hedged ML-DSA signing from the OS CSPRNG. Certificates are **not** modified (no schema version, §125): a hybrid *countersignature* binds `DeviceCertificate::canonical_signing_bytes()`. The Ed25519 half can be the FROST group key; the ML-DSA half stays single-holder (no audited threshold ML-DSA exists).
-* **`bls_audit`** — `blst` min-pk, IETF POP ciphersuite. Roster admits keys only with proof-of-possession (rogue-key defence), canonical bitmap, verifier-chosen threshold, signed head carries group/epoch/hash. 200-member / 150-signer case = one 96-byte signature + 25-byte bitmap.
-* **`bbs_relay`** — `zkryptium` 0.8 (IETF BBS draft-14). Pass = hidden random id + disclosed (epoch, tier); proofs bound to relay id + single-use relay nonce. **Found upstream bug:** `zkryptium` 0.8.1 `PoKSignature::from_bytes` panics on proofs shorter than 240 bytes and ignores trailing bytes; mitigated by an exact-length check before the call plus `catch_unwind` — should be reported upstream.
-* **Audit status (not hidden):** `ml-dsa` — its README states it has never been independently audited. `zkryptium`/`bls12_381_plus` — no audit found. `frost-ed25519` — NCC audited v0.6.0, not 3.0. `blst` — audit commissioned by EF/PL. Treat the BBS layer as experimental.
-* **Not done:** hybrid not wired into `siar-backup` (format v1 unchanged; confidentiality there is already symmetric Argon2id+XChaCha20-Poly1305, so only a detached authenticity signature is added); no interop vectors for the composite draft (untested against other implementations); BBS per-relay pseudonym for rate-limiting; no mixnet exists to consume the passes; FROST share storage/transport and a root-ceremony UI/CLI; BLS attestations not yet persisted in the audit recorder.
+---
 
+## Suggested Next Priorities
 
-## Window ⇄ daemon sync, and Part 28 phases 2 & 7 (this round)
-
-### `siar-ui-sync` — domain-level snapshot + delta (closes the "GUI as a daemon client" gap)
-**Why it was blocked, and what changed.** `siar-ui-state` types and `AppCommand` have no serde, and shipping `Slices` would have welded the wire format to UI structs. So the protocol carries **domain data in explicit wire sections** (`Core`, `Identity`, `Conversations`, `Contacts`+safety, `Network`, `Power`, one `Timeline` per conversation), reusing the domain types that already derive serde (`DeliveryState`, `MessageContent`, ids). Window-local state (selection, composer, filter, banner dismissals) is never sent and is never touched by a sync.
-* **Idempotent sections** — a snapshot and deltas may overlap harmlessly; per-section version + content hash, only changed sections are sent (tested).
-* **Bounded** — a timeline over 192 KiB is truncated at its *old* end and says `has_more`; frames split at 384 KiB; lists capped at 2000; event queues are the runtime's bounded ones, a slow window gets a `Gap` and re-snapshots.
-* **Consistent** — gap-free `seq` per daemon instance; a gap or a different `instance_id` forces a resync; snapshots are taken under the sync lock and paged under a short-lived id.
-* **Commands** cross as `WireCommand`, **re-validated on the daemon** (`MessageText` derives `Deserialize` without checking its invariants — a hostile client could otherwise send a 100 KB "message"; tested). Unsupported commands tell the user instead of vanishing.
-* **Live-verified:** 17 unit + 4 socket end-to-end tests (convergence, command forwarding, 40-conversation paged snapshot, reconnect to a *restarted daemon with different state*) and `scripts/daemon-sync-smoke.sh` (two real daemons; each side's state read back through the protocol with `ctl ui-state`).
-* `apps/desktop --connect [SOCKET]` attaches the Slint window to a running daemon (no data-folder lock taken). **Live-verified on a real display (see "Live verification on a real display" below).**
-**Not synced yet (named, as of this round; later rounds added groups, invites, security events, devices, diagnostics, attachment previews and link state, and the window now starts the daemon itself):** contact-safety *actions* beyond verify. The window shows a reconnect notice once per outage. Capture re-encodes all sections per diff (fine for hundreds of conversations; add dirty-tracking before thousands).
-**Observed, not caused here:** a first message into a never-opened chat shows `unread=0` on the receiving daemon — existing read-mark semantics ("no recorded mark ⇒ already read") in `siar-app-core`; matters for daemon-mode notifications.
-
-### Part 28 Phase 2 — `siar-ratchet` — **REMOVED 2026-11-03** (owner's decision; forward secrecy + post-compromise security + post-quantum now come from OpenMLS 1:1, `siar-crypto-mls::pairwise`). Historical record:
-`siar-crypto`'s own docs state its `Session` has **no forward secrecy** ("ratchet still unbuilt"), which contradicts Part 28's Definition of Done. This crate is that ratchet.
-* Double Ratchet (Signal spec) on audited primitives — X25519, HKDF-SHA256, HMAC-SHA256, ChaCha20-Poly1305. §12 forward secrecy and §13 post-compromise recovery are **tests, not claims**: a state stolen later cannot read earlier traffic; after the victim's next fresh key is answered, the thief goes blind (and the test records the honest two exposure windows before that).
-* §75-§77 crash safety by construction: `encrypt`/`decrypt` are **functional** and return the *next* state; a forged message cannot advance or corrupt anything (every single-byte flip rejected, state byte-identical afterwards); "persist then send" is the only way to use it.
-* §16-§17 replay and nonce safety; §60 bounded work (`MAX_SKIP`, 2000 stored keys, 32 remembered DH keys so a replay from an old epoch is rejected *before* any derivation); §46-§48 suite in every KDF label and AAD, unknown suite/version is an error, never a fallback.
-* §11/§15/§37-§41 handshake: signed prekey bundle verified against the **trusted** signer (a relay swapping the bundle, the prekey or the identity key is rejected), 3-DH with transcript binding, low-order keys refused, identity DH key *derived* from the device identity (key separation, §44).
-* §24/§103 `HighWaterMarks` detect a restore of a stale state (and a test shows why: re-encrypting from stale state reproduces the same key and nonce).
-* KATs: HKDF RFC 5869 A.1/A.3 and HMAC RFC 4231 #1 (cross-checked against an independent implementation); one **regression** vector, labelled as such.
-**NOT wired into `siar-messaging` — the messenger still uses the static-key `Session`, so users do not yet get forward secrecy.** Wiring is a wire-format change needing a session-upgrade/migration plan (initial-header carriage, prekey publication/rotation, persisted encrypted state, a high-water mark outside backups). **Not externally reviewed** (§123 phase 9). No header encryption; no one-time prekeys (first flight protected by the signed prekey only until the first reply).
-
-### Part 28 Phase 7 — `siar-abuse` (30 tests; clippy clean)
-§61 cheap-validation-first admission (length → version → blocklist → rate limit → duplicate → authorization; a blocked or oversize item **allocates nothing**), §62 six separate quotas per peer *and* a shared global budget for all unknown peers, §63 bounded message-request inbox (refuses new rather than evicting genuine ones), §64 file-offer policy (unknown peers never auto-download; large offers refused), §65 blocklist before any crypto (blocking revokes standing; unblocking never silently restores trust), §60 exponential pairing cooldown, §67 un-forgeable emergency authority (a remote *request* for critical is ignored; only a local grant counts). **§66 stated plainly:** this does not prevent Sybil identities; it bounds what all strangers together can spend (10 000 fresh identities get the same global allowance as one — tested). **Not wired** into transport/messaging ingress; defaults are reasoned, untuned.
-
-### Part 28 — what remains
-Already substantial in `siar-crypto`/`siar-identity-multidevice`/`siar-crypto-mls`/`siar-backup` (not re-audited here): identity & device trust, envelopes, replay window, clone detection, revocation, restore safety, key store, MLS groups. **Open:** wiring the ratchet and the abuse gate into the message path; §79-§80 security safe mode and §106-§110 security profiles; §93 cross-implementation test vectors beyond the primitives above; fuzz targets for envelope/handshake parsing; external review; side-channel and memory-hygiene review (zeroization is applied to ratchet state, not audited workspace-wide).
-
-
-## Wiring round — stopped early, by decision (state as handed over)
-
-**Done and verified**
-* **Graceful iroh close:** `SiarEndpoint::close` (→ `Router::shutdown`), `MessageService::shutdown`, `Core::shutdown_transport`; the daemon calls it on exit. Live check (`scripts/daemon-sync-smoke.sh`): both daemons exit 0 and the "dropped without calling `Endpoint::close`" warning is gone.
-* **`siar-secure-session`** (**REMOVED 2026-11-03**, was unwired; 32 tests): crash-safe blob store; XChaCha20-Poly1305 at-rest encryption with per-purpose derived keys and AAD binding; `SessionVault` with high-water marks that must live outside backups (stale-restore is refused); signed-prekey rotation with bounded retention (a failed write never publishes a key whose secret isn't durable; a corrupt file is an error, never a silent regeneration); `SecureSessions` facade enforcing persist-before-send, commit-before-save, a per-session lock, and **no silent session replacement** (a replayed first-flight yields `ResetNeeded`, never a rollback).
-* (removed) `siar-ratchet` had gained validated `SignedPrekeySecret::to_bytes/from_bytes` (29 tests).
-
-**Set aside, unfinished — `wip/siar-messaging-ingress/` (NOT built, NOT tested, NOT in the workspace)**
-Ticket-carried prekey bundle and the ingress gate in front of `handle_incoming`. An interrupted script left a duplicate Cargo key; the verified originals were restored and the workspace re-checked.
-
-**Not started:** wiring `SecureSessions` into `MessageService`; the **message storage format change** a ratchet requires (history is stored as session ciphertext and re-decrypted on demand — impossible once keys are deleted on use); extra sync sections; remote admin; multi-account in one daemon; plugin isolation; daemon notifications.
-
-**Decided (2026-11-02): 1:1 uses OpenMLS** (two-member groups, `siar-crypto-mls::pairwise`), post-quantum suite `MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44` (hybrid ML-KEM-768+X25519 key exchange, ML-DSA-44 signatures; draft code points). DTN adaptations: alternating commit turns (creator at even epochs, peer at odd) so commits never collide; bounded deferral of messages from future epochs; `max_past_epochs=4`, out-of-order tolerance 512, forward distance 4096; replayed commits reported as duplicates. 10 tests, clippy clean. **Not yet wired into the message path** (no real-world run yet; ML-DSA key/signature sizes ≈1.3 KB/2.4 KB are unmeasured on BLE).
-**`siar-ratchet` and `siar-secure-session` were REMOVED (2026-11-03, owner's reversal of the earlier keep decision):** crates deleted, workspace entries and `Cargo.lock` entries dropped, two dead `wip/siar-messaging-ingress` files that depended on the ratchet's prekey bundle deleted. Nothing depended on them. Consequence: there is no fallback if OpenMLS 1:1 proves unworkable in the field — the static-key `siar_crypto::Session` (no forward secrecy) remains the only non-MLS path.
-
-### Crate swaps (2026-11-02)
-* `interprocess` 2.4 replaces the Unix-only IPC server (one path for Unix socket / Windows named pipe; peer creds via `peer_creds()`: euid on Unix, pid only on Windows → Windows relies on an owner-only pipe DACL, **uncompiled/untested on Windows**).
-* `tokio-util`: `CancellationToken` (runtime lifecycle, `siar-calls`, `siar-ui-sync`, desktop stop) and `TaskTracker` (supervisor drain). Restart/backoff/breaker policy stays ours. tokio floor raised to 1.54 (interprocess needs it, undeclared upstream).
-* `sd-notify` 0.5 replaces hand-rolled notify (Unix-only; now honours `WATCHDOG_PID`).
-* `service-manager` + `clap` in daemon/emergency-node were already present. `apps/cli` now uses `clap` (`src/args.rs`, 6 grammar tests). Windows: `siar-daemon service-run` + `apps/daemon/src/winservice.rs` answer the SCM via `windows-service` 0.8.1 (Stop/Shutdown → `siar_runtime::service::external_stop()` → graceful drain); `install` registers it machine-wide (elevated). **Windows code is uncompiled/untested — verify on Windows: `install`, `sc start/stop org.siar.daemon`.**
-* 1:1 messaging: `PairwiseService` + `EnvelopeKind::PairwiseWelcome/PairwiseMls` + `MessageService::open_pairwise_session` exist with 3 real-iroh end-to-end tests; app-core bootstrap now attaches the service (data_dir/pairwise). A conversation only upgrades when `open_pairwise_session` is called for it (needs the peer's key package); otherwise it keeps the static-key `Session` (no forward secrecy). No UI/CLI command opens sessions yet.
-* Bumps: openmls 0.9.2 (+ traits/rust_crypto/basic_credential 0.6.0, sqlite_storage 0.3.0), stoolap 0.4.2.
-* Not verified in the sandbox (disk): full `siar-daemon`/`siar-messaging`/`siar-event-log` test runs, `apps/desktop` compile, `workspace-hack` regeneration.
-
-## Daemon-centric round (2026-11-15): CLI and window are daemon clients
-
-**Decision:** `siar-daemon` is the only process that opens the database, keys,
-MLS state and network identity. The window and the CLI are thin clients of its
-control socket. Nothing had shipped, so the embedded-core desktop path was removed.
-
-**Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 68 (incl. 11 linking, 6 contact_devices, 4 link_flow, real multi-core e2e incl. linking and multi-device contacts), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-backup` 20, `siar-ui-sync` 29 + 5, `siar-ui-slint` 29 interaction + 8 render, `siar-messaging` lib 62; was 34 +
-10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
-parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
-runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
-Black-box with real binaries: `siar status` with no daemon gives an actionable
-error; `--spawn` starts one; `ticket/identity/key-package/group-create` work;
-**two daemons pair and exchange messages in both directions through the CLI**.
-Not run at that time: `cargo check --workspace` in one pass (done in later
-rounds, zero warnings) and the Slint window against a display (**since verified
-live**, see "Live verification on a real display"); Windows named pipes remain
-unverified.
-
-* **Ingress admission (Part 28 §60-§62, §65):** `siar-messaging::IngressGuard`
-  puts `siar-abuse::Gate` in front of the app-core receive loop, keyed on the
-  QUIC-authenticated endpoint id (never `Envelope::sender`, which a stranger
-  controls), salted-hashed. Standing comes from the device directory (contact /
-  group member) and the verification store (verified). The gate is never given
-  message ids, so retransmits still get ACKed. Bug found and fixed in
-  `siar-abuse`: demoting a peer to Unknown kept its old unlimited buckets.
-  Also wired into `apps/emergency-node` (every `WireMessage` kind is rationed
-  before any decoding or signature check: bundles/deposits/adverts use the
-  `DtnBundle` budget, signed check-ins `SignatureVerify`; a device that has
-  disclosed itself to the relay counts as a contact, everyone else as a
-  stranger). Limits are untuned defaults: a stranger gets 20 bundles then ~1 per
-  3 s, all strangers together ~3/s — measure before running a busy public relay.
-  The relay has unit tests only; no live-traffic test of the gate yet.
-* **CLI (`siar`):** rewritten as a client. Commands: status, ticket, identity,
-  key-package, conversations, groups, messages, pair, send (conversation id or
-  ticket), send-file (path read by the daemon; verified with two real daemons,
-  including a path with spaces), listen (polling), group-create, group-add,
-  group-send, **send-anon** and **check-mailbox-anon** (relay mailbox).
-  `--spawn`, `--socket`. **Removed:** `check-mailbox` (the signed device
-  check-in; its replies are relay bundles a client cannot decrypt, so it was only
-  a harness probe).
-* **Relay mailbox in the daemon core:** `send-anon` stores the message first
-  (timeline + restart-safe), deposits it with the relay, marks it `Sent` (or
-  `Failed`). `check-mailbox-anon` sends an anonymous check-in and, for 30 s,
-  accepts token-mailbox deliveries **only from that relay**, decrypts against
-  that conversation's peer, checks the body hash, stores and shows each item
-  once (re-deliveries are ignored). A relay we are waiting on is treated as a
-  known peer for admission so a large mailbox is not cut at the stranger budget.
-  Verified live: a real `siar-emergency-node` plus two real daemons; two messages
-  left at the relay were collected, stored and shown once, and a second check
-  said "nothing waiting". Limits: no retry on the anonymous send (`Sent` means
-  "handed to the relay", not delivered); an unpaired-by-message contact's stored
-  sender device is a stand-in derived from its transport key; tickets are
-  validated when the command arrives.
-* **Scheduled mailbox collection:** `[mailbox] relays = ["<relay ticket>"]`,
-  `interval_secs` (60 to 86 400, default 300; off while `relays` is empty; local
-  file only, restart to change). The core polls each relay for a rotating slice
-  of at most 32 contacts per poll, 150 ms apart, first poll ~20 s after start.
-  It is power-gated like other background work (`Relay` domain, background
-  priority): on low battery or saver a poll is deferred and resumed, never
-  dropped, and at most one is ever queued. The explicit `check-mailbox-anon` is
-  never gated. Several contacts may check one relay at once (each delivery is
-  tried against each contact asked about; decryption authenticates). Verified
-  live with a real relay and three daemons: Alice and Carol each left a message
-  for Bob; Bob, configured to poll, received both with no manual check.
-  Unverified: behaviour on a real battery (the power path is unit-tested only);
-  poll cost with many contacts and several relays.
-* **Anonymous send retry:** `send-anon` retries the deposit (0.5 s, 2 s, 6 s
-  pauses, 4 attempts) with the same envelope before marking the message
-  `Failed`. A message that is still `Failed` after that is not retried later,
-  not even after a restart.
-* **Whole-workspace check:** `cargo check --workspace --all-targets` passes with
-  zero warnings (needs `libasound2-dev cmake libopus-dev libdav1d-dev
-  libssl-dev libgtk-3-dev nasm pkg-config` on the build machine).
-  `siar-ui-slint` headless interaction tests pass (15 + 27 + 8). The window on a
-  real display has since been verified by the owner (see "Live verification on
-  a real display").
-* **Device linking (CLI path, verified live):** `siar link-offer` on the device
-  that created the account prints a one-time code (80 bits, 5 min, single use,
-  5 wrong tries destroys it) and a ticket; on a fresh device `siar link-join
-  <ticket> <code>`; the first device sees the request with the new key's
-  fingerprint in `siar link-pending` and nothing happens until `siar
-  link-approve <device-id>`; approval signs a `DeviceCertificate` with the
-  account root key and the new device accepts only a certificate for its own
-  id and key. Both sides then list each other (`siar devices`, persisted in
-  `linked_devices.bin`). Pieces: `siar-app-core::linking` (rules, 11 tests),
-  `siar-app-core::link_flow` (storage, operations, message handler, 4 tests),
-  `WireMessage::Link` (`siar-protocol::link`), `RootIdentityKey::from_seed/seed`,
-  admission under the tight handshake budget, relay ignores link frames.
-  Verified live with two real daemons: wrong code refused; right code, pending,
-  approve; after restarting the new device its account id equals the first
-  device's and both lists persist; code reuse, a joined device trying to offer,
-  and a device with history trying to join are all refused; `root.key` and the
-  link files are owner-only (0600) and only the first device has a `root.key`.
-  **Known limits:**
-  - Only the device that created the account can approve (sharing the root key
-    between devices is a separate design); a joined device cannot link more.
-  - Joining replaces the account id on disk; the running core keeps the old id
-    until it restarts (the CLI says so). Only a *fresh* device may join.
-  - Contacts *are* told now: see "Multi-device contacts" below.
-  - A wrong code is refused silently on the new device's CLI, which just waits.
-* **Multi-device contacts (verified by a three-core test):** the approving
-  device announces a new device to each paired contact
-  (`LinkMessage::DeviceAdded`, certificate chain + TOFU root key); the contact
-  records it as a sibling (`contact_devices.bin`, no schema migration), routes
-  its frames into the same conversation, and fans 1:1 text out to it through the
-  normal outbox under a hidden conversation. Approval has a "share my contacts"
-  choice (UI button, `siar link-approve --share-contacts`, daemon
-  `link-approve <id> share`). `docs/MULTI_DEVICE_CONTACTS.md` has "As built" and
-  the not-built list. Since added: **revocation** (`siar link-revoke`, a Remove
-  button in Security → Devices, contacts told and re-told at start-up), **file
-  fan-out**, and **mirroring of your own sent text between linked devices**
-  (fire-and-forget, no catch-up). Verified by the three-core test. **Still not
-  built: group fan-out, history sync/catch-up, pushing contacts added after
-  approval, telling the revoked device, per-device delivery detail.**
-* **Backup covers linking (verified):** `root.key`, `linked_devices.bin`,
-  `joined_account.bin` and `account_id.txt` are archived by both the offline
-  and the live (daemon) backup; a restore writes them owner-only (tested in
-  `siar-backup` and `siar-daemon`). Before this round that was true by
-  construction but unproven.
-* **Window screen for linking:** Security → Devices now has "Add a device"
-  (one-time code + this device's ticket, copyable), "Devices waiting for
-  approval" (name, key fingerprint, Decline/Approve), "Join an existing
-  account" (ticket + code) and a "restart to finish" notice. New commands
-  `LinkOpenOffer/LinkApprove/LinkReject/LinkJoin`, a synced `Link` section
-  (offer code, waiting requests; no keys), and the core refreshes the picture
-  every 5 s so an expired code disappears. Verified: a two-core test drives the
-  flow through the same commands the window sends (wrong code refused, request
-  waits, code single-use, approval lists both sides, joiner needs restart);
-  headless UI tests for the callbacks and a rendered screenshot reviewed by eye
-  (`device_linking_renders`). A device that has joined an account now shows a
-  global banner on every page ("close Siar completely and open it again to
-  finish; until then it still uses its old identity, so don't start new
-  chats"), rendered and reviewed by eye. The window on a real display is
-  **closed** (owner-verified, see "Live verification on a real display").
-  **Still not done:** an in-app "restart now" button (the window cannot restart
-  the daemon it is attached to).
-* **CLI output:** `siar … | head` no longer panics on a closed pipe; any other
-  write failure exits 1.
-* **Daemon app surface** gained identity, key-package, groups queries and
-  pair (returns the conversation id), group-create/add/send commands.
-* **Window:** connect-first; starts the daemon if absent (binary looked up only
-  beside the executable). New synced sections **Groups** and **Invites** and the
-  four group commands. Invite Welcome bytes never leave the daemon. Limit: a
-  legacy invite without an embedded group record cannot be finished from an
-  attached window. The daemon refuses a `CreateGroup` whose founder is not its
-  own account and an `AddGroupMember` whose two account fields differ. Own identity, diagnostics, devices and attachment previews are now
-  synced too (previews: one section each, max 64, JPEG over 128 KiB becomes an
-  honest "too large" failure, never a truncated image). the devices section now lists the one device that is
-  certainly ours (this one: host name, trusted, current). Other devices of the
-  account appear once device linking (`siar-identity-multidevice`, still without
-  a real call site in the core) is wired in. A full resync now also clears security events, groups, invites and
-  the new sections (before, a daemon restart could leave stale ones in the
-  window). New `AppCommand::SendAttachment` (absolute path only, regular file,
-  within the attachment limit). `apps/desktop` still depends on `siar-app-core` for path
-  resolution only.
-* **Roles:** `[node] role = "..."` in the local config selects an unattended
-  node's role (refused with `require_provisioning`). Relay/DTN/organisation
-  roles still run `siar-emergency-node` as a supervised child, deliberately, for
-  privilege separation. `storage-node` is still "unavailable".
-
-## Live verification on a real display (closed)
-
-**Item closed.** The owner ran `siar-desktop` against a live `siar-daemon` on a
-real display and reported the results below. These were observed on the owner's
-host, not in the build sandbox (which has no display); this entry records the
-owner's report.
-
-* **Environment:** Linux, Wayland session (Niri).
-* **Live window:** `siar-desktop` attached cleanly to `siar-daemon` over
-  `/run/user/1000/siar/daemon.sock` (`subscribers: 1`), rendered with full
-  navigation, and showed "Online" and "End-to-end encrypted".
-* **Multi-core suite** (the `#[ignore]`d loopback tests), both passed:
-  `a_second_device_links_through_the_same_commands_the_window_sends` (2.58 s) and
-  `a_contacts_second_device_is_the_same_contact_in_both_directions` (0.83 s).
-* **UI test suite:** all 29 interaction tests (2.43 s) and all 10 headless render
-  tests (10.66 s) passed, 0 failures.
-
-Consequently the "not run on a real display" caveat is removed everywhere in
-this file. What this does *not* establish, and stays open: Windows named pipes,
-a real GPU/other compositors (only Wayland/Niri was exercised), and the window's
-behaviour on a physical device battery.
+1. **Tier 0 Completion**:
+   - Complete remaining sections of **06 DTN Store-Carry-Forward** and **07 Capability Negotiation**.
+   - Wire **08 Resource Limits** facade (`ResourceRuntime`) and **09 Crash Recovery** into `siar-runtime`.
+2. **Security & Messaging Hardening**:
+   - Migrate default messaging path to forward-secret **1:1 Pairwise OpenMLS**.
+   - Tune and enforce `siar-abuse` ingress gates across production traffic.
+3. **Core Networking Expansion**:
+   - Implement **12 Multipath Networking** (extending Part 03).
+   - Implement **14 Proximity Abstraction** (BLE / Wi-Fi Direct).
+4. **UI Feature Completion**:
+   - Realtime media calling UI & pipeline (`ui-ux-07` / Part 29).
+   - Plaintext-at-rest encrypted storage for MLS group history across restarts.

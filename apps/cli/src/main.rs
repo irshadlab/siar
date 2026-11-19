@@ -160,6 +160,9 @@ async fn run(args: Args) -> Result<()> {
             };
             out!("{}", d.command("link-approve", &arg).await?);
         }
+        Command::LinkRevoke { device_id } => {
+            out!("{}", d.command("link-revoke", &device_id).await?);
+        }
         Command::LinkReject { device_id } => {
             out!("{}", d.command("link-reject", &device_id).await?);
         }

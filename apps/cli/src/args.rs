@@ -71,6 +71,8 @@ pub enum Command {
         #[arg(long)]
         share_contacts: bool,
     },
+    /// Remove a linked device from this account (contacts are told).
+    LinkRevoke { device_id: String },
     /// Decline a waiting device.
     LinkReject { device_id: String },
     /// Join an account from a fresh device, with an offer's ticket and code.

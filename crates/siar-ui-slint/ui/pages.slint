@@ -678,8 +678,12 @@ export component SecurityPage inherits PageBody {
                             }
                             Button {
                                 text: "Approve";
+                                clicked => { AppState.link-approve(p.device-id, false); }
+                            }
+                            Button {
+                                text: "Approve and share my contacts";
                                 kind: "primary";
-                                clicked => { AppState.link-approve(p.device-id); }
+                                clicked => { AppState.link-approve(p.device-id, true); }
                             }
                         }
                     }

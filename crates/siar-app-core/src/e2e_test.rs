@@ -953,6 +953,17 @@ fn preview_of(node: &Node, conversation: siar_domain::ConversationId) -> Option<
     })
 }
 
+/// How many attachment messages `conversation` holds on `node`.
+fn attachments_in(node: &Node, conversation: siar_domain::ConversationId) -> usize {
+    node.hub.read(|s| {
+        s.timelines.get(&conversation).map_or(0, |t| {
+            t.visible()
+                .filter(|m| matches!(m.content, siar_domain::MessageContent::Attachment(_)))
+                .count()
+        })
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs loopback networking"]
 async fn a_contacts_second_device_is_the_same_contact_in_both_directions() {
@@ -1047,6 +1058,76 @@ async fn a_contacts_second_device_is_the_same_contact_in_both_directions() {
         c.hub.read(|s| s.conversations.ordered().len()),
         1,
         "the second device is not a second contact"
+    );
+
+    // Alice writes from her FIRST device: her second device's chat is complete
+    // too (it shows what her other device sent), and Carol still sees it once.
+    a.hub.dispatch(AppCommand::SendMessage {
+        conversation: conv_a_c,
+        text: siar_domain::MessageText::parse("from my laptop".into()).unwrap(),
+    });
+    wait_until("Carol got the laptop message", || {
+        preview_of(&c, conv_c_a).as_deref() == Some("from my laptop")
+    })
+    .await;
+    wait_until("Alice's second device mirrors her own message", || {
+        // Her own message: the chat list shows it as sent by her.
+        preview_of(&b, conv_a_c).as_deref() == Some("You: from my laptop")
+    })
+    .await;
+
+    // Carol sends a FILE: it reaches both of Alice's devices.
+    let file = tmp.join("photo.png");
+    std::fs::write(&file, vec![7u8; 2048]).unwrap();
+    assert_eq!(
+        (attachments_in(&a, conv_a_c), attachments_in(&b, conv_a_c)),
+        (0, 0)
+    );
+    c.hub.dispatch(AppCommand::SendAttachment {
+        conversation: conv_c_a,
+        path: file.to_string_lossy().into_owned(),
+    });
+    wait_until("the file reached Alice's first device", || {
+        attachments_in(&a, conv_a_c) == 1
+    })
+    .await;
+    wait_until("the file reached Alice's second device", || {
+        attachments_in(&b, conv_a_c) == 1
+    })
+    .await;
+
+    // Alice removes her second device: Carol stops sending to it.
+    a.hub.dispatch(AppCommand::LinkRevoke {
+        device: waiting.device_id,
+    });
+    wait_until("Carol forgot the removed device", || {
+        c.core
+            .contact_devices
+            .lock()
+            .unwrap()
+            .siblings_of(conv_c_a)
+            .is_empty()
+    })
+    .await;
+    assert_eq!(
+        a.hub.read(|s| s.devices.all().len()),
+        1,
+        "Alice lists only herself"
+    );
+    let frozen = preview_of(&b, conv_a_c);
+    c.hub.dispatch(AppCommand::SendMessage {
+        conversation: conv_c_a,
+        text: siar_domain::MessageText::parse("after the removal".into()).unwrap(),
+    });
+    wait_until("Alice's first device still gets messages", || {
+        preview_of(&a, conv_a_c).as_deref() == Some("after the removal")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        preview_of(&b, conv_a_c),
+        frozen,
+        "the removed device must receive nothing new"
     );
 }
 

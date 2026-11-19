@@ -345,6 +345,7 @@ impl RuntimeConfig {
         }
     }
 
+    #[cfg(unix)]
     #[must_use]
     pub fn server_config(&self) -> crate::ipc::ServerConfig {
         crate::ipc::ServerConfig {

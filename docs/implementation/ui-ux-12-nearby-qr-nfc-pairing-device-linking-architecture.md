@@ -4,12 +4,33 @@ Source spec: `sys-arch/ui-ux-12-nearby-qr-nfc-pairing-device-linking-architectur
 
 ## Implementation status
 
-⚪ **Not started / not yet reconciled against the codebase.** No round of work has been logged against this spec in ROADMAP.md as of 2026-09-01.
+**🟡 Substantially complete (Device Linking & Pairing UI built).**
+Implemented in Slint desktop UI (`siar-ui-slint`) and verified both headlessly and live on Wayland display.
 
-## Candidate implementing crate(s) (unverified)
+## Implementing crate(s)
 
-- `apps/desktop / apps/android UI layer + siar-ui-state (pre-existing UI code likely exists, unreconciled against this spec — see ROADMAP Tier 2)`
+- `crates/siar-ui-slint` / `apps/desktop` — Security → Devices views, link modals, and notification banners.
+- `siar-ui-sync` — `Section::Link` state synchronization between daemon and GUI window.
+- `siar-app-core` — link command handlers and status polling.
 
+## Completed UX Features
 
-## Note
-This file is a placeholder generated from the spec's own section count only. Nobody has yet done the read-the-spec / read-the-code reconciliation pass this doc is meant to hold — that reconciliation, not this stub, is the real next step for this spec.
+- **Add a Device Flow**:
+  - Displays generated one-time link code (80-bit formatted) and node ticket with one-click copy.
+  - Automatically refreshes every 5 seconds; auto-clears on expiration.
+- **Pending Approvals Queue**:
+  - Lists incoming link requests with device name, public key fingerprint, and explicit Decline / Approve actions.
+  - Optional toggle to share verified contacts upon approval.
+- **Join Existing Account Flow**:
+  - Input fields for ticket and one-time code with format validation.
+  - Clear error states for expired or rejected requests.
+- **Restart Notice Banner**:
+  - Clear global top banner displayed across all app views informing user to restart the application after linking to switch to the linked account identity.
+- **Device Management & Revocation**:
+  - Displays active devices list with trust status and local device indicator.
+  - "Remove" action triggering cryptographic revocation and propagation to contacts.
+
+## Known Gaps / Open Items
+
+- Visual QR code rendering in desktop UI (currently textual code + ticket exchange).
+- In-app "Restart Now" button (desktop window cannot directly trigger restart of detached daemon process).

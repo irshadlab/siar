@@ -387,9 +387,12 @@ pub(crate) fn install(window: &MainWindow, hub: &UiHub) {
     }
     {
         let hub = hub.clone();
-        app.on_link_approve(move |id| {
+        app.on_link_approve(move |id, share_contacts| {
             if let Some(device) = parse_id::<DeviceId>(&id) {
-                hub.dispatch(AppCommand::LinkApprove { device });
+                hub.dispatch(AppCommand::LinkApprove {
+                    device,
+                    share_contacts,
+                });
             }
         });
     }

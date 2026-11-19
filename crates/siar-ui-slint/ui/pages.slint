@@ -642,6 +642,13 @@ export component SecurityPage inherits PageBody {
                 spacing: Theme.sp-sm;
                 if d.section-title != "": SectionTitle { text: d.section-title.to-uppercase(); }
                 DeviceItem { item: d; }
+                if !d.is-this-device && d.status == 0: HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: "Remove this device";
+                        clicked => { AppState.link-revoke(d.id); }
+                    }
+                }
             }
 
             if AppState.link-restart-needed: Card {

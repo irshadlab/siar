@@ -84,6 +84,8 @@ pub struct Core {
     pub(crate) link_join: Mutex<Option<crate::link_flow::JoinWait>>,
     /// The code and ticket of the open offer, for the window to show.
     pub(crate) link_shown: Mutex<Option<(String, String)>>,
+    /// Extra devices of each contact (see `contact_devices`).
+    pub(crate) contact_devices: Mutex<crate::contact_devices::ContactDevices>,
 }
 
 /// At most this many contacts are checked per relay per poll; the rest follow
@@ -172,6 +174,7 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
         link_endpoints: Mutex::new(std::collections::HashMap::new()),
         link_join: Mutex::new(None),
         link_shown: Mutex::new(None),
+        contact_devices: Mutex::new(crate::contact_devices::ContactDevices::load(&data_dir)),
     });
 
     // ---- seed the UI -----------------------------------------------------------
@@ -185,6 +188,17 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
                 seeded.push((conversation, c.display_name.clone()));
             }
             Err(e) => tracing::warn!(error = %e, "saved contact has an unparseable ticket"),
+        }
+    }
+    // Contacts handed over when this device was linked (not saved contacts, so
+    // they are remembered in their own small file).
+    for text in crate::link_flow::load_imported(&data_dir) {
+        if let Ok(ticket) = PeerTicket::decode(&text) {
+            let conversation = core.peers().register(ticket.clone());
+            seeded.push((
+                conversation,
+                ticket.endpoint_addr.id.fmt_short().to_string(),
+            ));
         }
     }
     // The security log from earlier runs. Restored BEFORE the start-up
@@ -295,6 +309,14 @@ pub async fn start(boot: Bootstrapped, hub: Arc<StateHub>) -> Arc<Core> {
         tokio::spawn(async move { preload.preload_history().await });
     }
     tokio::spawn(power_task(core.clone()));
+    // A contact that was offline when a device was linked hears about it now.
+    {
+        let core = core.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(25)).await;
+            core.announce_linked_devices().await;
+        });
+    }
     // An offer that expires (or a request that times out) changes what the
     // window should show without any event; look every few seconds.
     {
@@ -412,6 +434,15 @@ impl Core {
         if self.waiting_on(endpoint) {
             return Standing::Contact;
         }
+        if self
+            .contact_devices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lookup_endpoint(endpoint)
+            .is_some()
+        {
+            return Standing::Contact;
+        }
         let Some((device, key)) = self.device_directory.device_at_endpoint(endpoint) else {
             // A paired peer that is not in the directory yet is still ours.
             let paired = self
@@ -461,6 +492,23 @@ impl Core {
                 self.hub
                     .notify(NoticeLevel::Warning, "That relay ticket isn’t valid.");
                 None
+            }
+        }
+    }
+
+    /// Send `text` to each recorded extra device of `conversation`'s contact.
+    /// Best effort per device: a failure is logged, never shown as a failed
+    /// send, because the message did reach the contact's primary device.
+    async fn fan_out_text(&self, conversation: ConversationId, text: &siar_domain::MessageText) {
+        let siblings = self
+            .contact_devices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .siblings_of(conversation);
+        for sibling in siblings {
+            let hidden = crate::peers::conversation_for(&sibling);
+            if let Err(e) = self.service.send_text(hidden, &sibling, text.clone()).await {
+                tracing::debug!(error = %e, "couldn’t queue a copy for a contact’s other device");
             }
         }
     }
@@ -717,6 +765,15 @@ impl Core {
         before: Option<u64>,
     ) -> Option<crate::history::Page> {
         let peer = self.peers().ticket(conversation).cloned()?;
+        // A contact's extra devices wrote into the same shared inbound stream
+        // with their own sessions: try each when opening a stored message.
+        let mut openers = vec![peer];
+        openers.extend(
+            self.contact_devices
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .siblings_of(conversation),
+        );
         let (repo, service) = (self.messages.clone(), self.service.clone());
         let (my_device, inbound) = (self.my_device, self.inbound_conversation);
         tokio::task::spawn_blocking(move || {
@@ -731,7 +788,11 @@ impl Core {
                         Vec::new()
                     })
                 },
-                |payload| service.open_stored_payload(&peer, payload).ok(),
+                |payload| {
+                    openers
+                        .iter()
+                        .find_map(|p| service.open_stored_payload(p, payload).ok())
+                },
             )
         })
         .await
@@ -1046,6 +1107,11 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                     .await
                 {
                     Ok(message_id) => {
+                        // The contact's other devices get their own copy, each
+                        // with its own outbox row (retries, delivery tracking),
+                        // filed under a hidden conversation of its own so it
+                        // never shows twice in this chat.
+                        core.fan_out_text(conversation, &text).await;
                         core.hub.update(|s| {
                             s.record_outgoing(conversation, message_id, MessageContent::Text(text));
                         });
@@ -1059,7 +1125,10 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                     core.hub.notify(NoticeLevel::Warning, why);
                 }
             }
-            AppCommand::LinkApprove { device } => match core.link_approve(device).await {
+            AppCommand::LinkApprove {
+                device,
+                share_contacts,
+            } => match core.link_approve(device, share_contacts).await {
                 Ok(()) => core
                     .hub
                     .notify(NoticeLevel::Info, "Device approved and linked."),
@@ -1626,8 +1695,21 @@ async fn incoming_loop(
             continue;
         }
 
-        // 1:1: route by WHO SENT IT, not by whoever is selected.
-        let Some(peer) = core.peers().ticket_of_endpoint(&frame.from).cloned() else {
+        // 1:1: route by WHO SENT IT, not by whoever is selected. A contact's
+        // extra device is the same contact: its frames land in the same chat.
+        let routed = match core.peers().ticket_of_endpoint(&frame.from).cloned() {
+            Some(t) => {
+                let c = crate::peers::conversation_for(&t);
+                Some((t, c))
+            }
+            None => core
+                .contact_devices
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .lookup_endpoint(&frame.from)
+                .map(|(c, t)| (t, c)),
+        };
+        let Some((peer, conversation)) = routed else {
             let first_time = core
                 .warned_unknown
                 .lock()
@@ -1645,7 +1727,6 @@ async fn incoming_loop(
         let (message_id, sequence) = (envelope.message_id, envelope.sequence);
         match core.service.handle_incoming(&peer, envelope).await {
             Ok(Some(IncomingEvent::Content(content))) => {
-                let conversation = crate::peers::conversation_for(&peer);
                 let title = frame.from.fmt_short().to_string();
                 core.hub.update(|s| {
                     s.ensure_conversation(conversation, title, ConversationKind::Direct);

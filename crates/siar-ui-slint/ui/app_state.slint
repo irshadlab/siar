@@ -205,6 +205,7 @@ export global AppState {
     callback link-open-offer() -> bool;
     callback link-approve(string, bool);        // device id, share my contacts
     callback link-reject(string);
+    callback link-revoke(string);                 // remove a linked device
     callback link-join(string, string) -> bool;     // ticket, code
     callback dismiss-banner(string);
     callback review-security();

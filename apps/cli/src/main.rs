@@ -149,8 +149,16 @@ async fn run(args: Args) -> Result<()> {
             out!("On the new device: siar link-join <ticket> <code>   (valid for 5 minutes)");
         }
         Command::LinkPending => print_lines(&d.query("link-pending", "").await?),
-        Command::LinkApprove { device_id } => {
-            out!("{}", d.command("link-approve", &device_id).await?);
+        Command::LinkApprove {
+            device_id,
+            share_contacts,
+        } => {
+            let arg = if share_contacts {
+                format!("{device_id} share")
+            } else {
+                device_id
+            };
+            out!("{}", d.command("link-approve", &arg).await?);
         }
         Command::LinkReject { device_id } => {
             out!("{}", d.command("link-reject", &device_id).await?);

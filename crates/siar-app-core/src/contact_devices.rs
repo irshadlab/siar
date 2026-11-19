@@ -140,6 +140,17 @@ impl ContactDevices {
         Ok(Recorded::New)
     }
 
+    /// Forget a device (it was removed from the contact's account). `true` if
+    /// it was recorded. The pinned root key stays: the account is unchanged.
+    pub fn remove(&mut self, contact: ConversationId, device_id: DeviceId) -> bool {
+        let Some(list) = self.siblings.get_mut(&contact) else {
+            return false;
+        };
+        let before = list.len();
+        list.retain(|s| s.device_id != device_id);
+        list.len() != before
+    }
+
     #[must_use]
     pub fn siblings_of(&self, contact: ConversationId) -> Vec<PeerTicket> {
         self.siblings
@@ -262,6 +273,20 @@ mod tests {
             Err(AnnounceError::RootChanged)
         );
         assert_eq!(d.siblings_of(contact).len(), 1);
+    }
+
+    #[test]
+    fn a_removed_device_is_forgotten_but_the_pinned_root_stays() {
+        let contact = ConversationId::new();
+        let mut d = ContactDevices::default();
+        let s = sibling(31);
+        let id = s.device_id;
+        d.record(contact, [1; 32], s).unwrap();
+        assert!(d.remove(contact, id));
+        assert!(!d.remove(contact, id), "removing twice reports nothing");
+        assert!(d.siblings_of(contact).is_empty());
+        assert_eq!(d.known_root(contact), Some([1; 32]));
+        assert!(!d.remove(ConversationId::new(), id));
     }
 
     #[test]

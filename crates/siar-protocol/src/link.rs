@@ -17,7 +17,7 @@
 //! its own device id/key; nothing in this crate trusts these fields.
 
 use serde::{Deserialize, Serialize};
-use siar_domain::{AccountId, DeviceId};
+use siar_domain::{AccountId, ConversationId, DeviceId, MessageId};
 
 pub const MAX_LINK_CODE_BYTES: usize = 64;
 pub const MAX_LINK_NAME_BYTES: usize = 256;
@@ -25,6 +25,9 @@ pub const MAX_LINK_CERTIFICATE_BYTES: usize = 2048;
 pub const MAX_LINK_TICKET_BYTES: usize = 4096;
 /// Contacts an approving device may hand to the new one in one message.
 pub const MAX_LINK_CONTACTS: usize = 64;
+/// Text mirrored between a person's own devices (generous: a message is
+/// already limited by `MessageText`).
+pub const MAX_SYNC_TEXT_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LinkMessage {
@@ -60,6 +63,19 @@ pub enum LinkMessage {
         root_public_key: [u8; 32],
         certificate: Vec<u8>,
         device_ticket: String,
+    },
+    /// From the approving device to a contact: "that device is no longer part
+    /// of my account". Re-sent at start-up for contacts that were offline.
+    DeviceRemoved {
+        device_id: DeviceId,
+    },
+    /// Between a person's own linked devices: "I sent this in that
+    /// conversation", so the other device's chat is complete. Fire-and-forget.
+    SyncSent {
+        conversation: ConversationId,
+        message_id: MessageId,
+        text: String,
+        sent_at_millis: u64,
     },
 }
 
@@ -100,7 +116,8 @@ impl LinkMessage {
                 certificate.len() <= MAX_LINK_CERTIFICATE_BYTES
                     && device_ticket.len() <= MAX_LINK_TICKET_BYTES
             }
-            Self::Denied => true,
+            Self::SyncSent { text, .. } => text.len() <= MAX_SYNC_TEXT_BYTES,
+            Self::Denied | Self::DeviceRemoved { .. } => true,
         }
     }
 }
@@ -158,5 +175,20 @@ mod tests {
         };
         assert!(!announce.within_limits());
         assert!(LinkMessage::Denied.within_limits());
+        assert!(LinkMessage::DeviceRemoved {
+            device_id: DeviceId::new()
+        }
+        .within_limits());
+        let sync = |n: usize| LinkMessage::SyncSent {
+            conversation: ConversationId::new(),
+            message_id: MessageId::new(),
+            text: "x".repeat(n),
+            sent_at_millis: 1,
+        };
+        assert!(sync(MAX_SYNC_TEXT_BYTES).within_limits());
+        assert!(!sync(MAX_SYNC_TEXT_BYTES + 1).within_limits());
+        let m = sync(5);
+        let bytes = postcard::to_allocvec(&m).unwrap();
+        assert_eq!(postcard::from_bytes::<LinkMessage>(&bytes).unwrap(), m);
     }
 }

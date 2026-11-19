@@ -673,6 +673,8 @@ fn linking_shows_the_code_and_waiting_devices_and_sends_only_the_persons_decisio
     // The person's decisions become exactly these commands, nothing more.
     h.app().invoke_link_approve(dev.to_string().into(), true);
     h.app().invoke_link_reject(dev.to_string().into());
+    h.app().invoke_link_revoke(dev.to_string().into());
+    h.app().invoke_link_revoke("not-an-id".into()); // ignored
     h.app().invoke_link_approve("not-an-id".into(), false); // ignored, never a panic
     assert!(h.app().invoke_link_open_offer());
     assert_eq!(
@@ -685,6 +687,7 @@ fn linking_shows_the_code_and_waiting_devices_and_sends_only_the_persons_decisio
                     share_contacts: true,
                 },
                 AppCommand::LinkReject { device: dev },
+                AppCommand::LinkRevoke { device: dev },
                 AppCommand::LinkOpenOffer,
             ]
         )

@@ -1,64 +1,50 @@
 # Tier 2 — UI/UX (27 specs, `ui-ux-01` through `ui-ux-27`)
 
-No raw `sys-arch/ui-ux-NN-*.md` source documents were uploaded alongside the 33 core architecture specs, so unlike Parts 01-33 this tier has no per-spec source file to point to and no per-spec docs file has been split out — this single file holds the whole tier's tracking, exactly as ROADMAP.md did before this reorganization.
+No raw `sys-arch/ui-ux-NN-*.md` source documents were uploaded alongside the 33 core architecture specs, so unlike Parts 01-33 this tier had no per-spec source file initially. This tracker records implementation coverage across the 27 UI/UX specs.
+
+## Desktop Toolkit Transition: Dioxus → Slint (2026-10-22)
+
+The desktop shell was migrated from Dioxus to native **Slint** in `crates/siar-ui-slint` with `apps/desktop` as an unprivileged client communicating with `siar-daemon` via `siar-ui-sync`. Android remains Jetpack Compose.
 
 ## Implementation status
 
-**1 of 27 specs touched (partially).** This tier was entirely ⚪ before the session that started this work — `apps/desktop` and `apps/android` have substantial pre-existing UI code (chat, groups, attachments) but none of it had been reconciled against the formal 27-spec set until `ui-ux-15`.
+Substantial coverage implemented in `crates/siar-ui-slint` and `siar-ui-state`, covering the app shell (`ui-ux-02`), design system tokens (`ui-ux-22`), inbox & chat timeline (`ui-ux-04/05/06`), contacts (`ui-ux-08`), MLS groups (`ui-ux-09`), device linking (`ui-ux-12`), and Security Center (`ui-ux-15`).
 
-| # | Spec | State |
-|---|---|---|
-| 01 | Product Foundation / Cross-Platform Interaction | ⚪ |
-| 02 | Desktop (Dioxus) App Shell / Navigation | ⚪ (`apps/desktop`'s shell pre-dates this spec, unreconciled) |
-| 03 | Android (Compose) App Shell / Navigation | ⚪ (`apps/android`'s shell pre-dates this spec, unreconciled) |
-| 04 | Conversation List / Inbox | ⚪ (`siar-ui-state::conversation_list.rs` pre-exists, unreconciled) |
-| 05 | Message Timeline | ⚪ (`siar-ui-state::timeline.rs` pre-exists, unreconciled) |
-| 06 | Composer / Attachments / Voice / Drafts | ⚪ (`siar-ui-state::composer.rs` pre-exists, unreconciled) |
-| 07 | Calls / Realtime Media | ⚪ (`siar-calls` crate pre-exists, unreconciled) |
-| 08 | Contacts / Requests / Verification / Identity | ⚪ (`siar-ui-state::contact_list.rs` pre-exists, unreconciled) |
-| 09 | Groups / Membership / Roles | ⚪ (`siar-ui-state::group_list.rs` pre-exists, unreconciled) |
-| 10 | Files / Media Gallery / Transfer | ⚪ |
-| 11 | Search / Local Knowledge Retrieval | ⚪ (Part 32 has no crate either — joint gap) |
-| 12 | Nearby / QR / NFC Pairing / Device Linking | ⚪ (Part 15 has no crate either — joint gap) |
-| 13 | Notifications / Background / Incoming Call | ⚪ (Part 31 has no crate either — joint gap) |
-| 14 | Presence / Typing / Receipts / Status | ⚪ (Part 30 has no crate either — joint gap) |
-| **15** | **Security Center / Devices / Keys / Recovery** | 🟡 **~83% of 221 total sections** — see detail below |
-| 16 | Backup / Restore / Export / Migration | ⚪ (Part 33 has no crate either — joint gap) |
-| 17 | Emergency SOS / Offline Mesh | ⚪ (`siar-emergency` crate pre-exists, unreconciled) |
-| 18 | Settings / Privacy / Notifications / Data Controls | ⚪ |
-| 19 | Plugin/Module Ecosystem | ⚪ (Part 24 has no crate either — joint gap) |
-| 20 | Diagnostics / Network Paths / Advanced Dev | ⚪ (Part 18 has no crate either — joint gap) |
-| 21 | Accessibility | ⚪ |
-| 22 | Design System (tokens/typography/icons/motion) | ⚪ — **candidate for next priority: almost everything else in this tier visually depends on it existing first** |
-| 23 | Responsive/Adaptive Layout | ⚪ |
-| 24 | Error/Loading/Empty/Offline/Degraded States | ⚪ |
-| 25 | Onboarding / First-Run / Permissions | ⚪ |
-| 26 | Performance / Virtualization / Large-Data UI | ⚪ |
-| 27 | UI Testing / Screenshot / Release Quality Gates | ⚪ |
+| # | Spec | State | Notes |
+|---|---|---|---|
+| 01 | Product Foundation / Cross-Platform Interaction | 🟡 | Shared interaction rules between desktop Slint and mobile |
+| 02 | Desktop App Shell / Navigation (Slint) | ✅ | Implemented in `crates/siar-ui-slint` & `apps/desktop` |
+| 03 | Android (Compose) App Shell / Navigation | ⚪ | `apps/android` pre-existing Compose shell, unreconciled |
+| 04 | Conversation List / Inbox | ✅ | Inbox list, filtering, unread badges, snippet previews |
+| 05 | Message Timeline | ✅ | Bottom-anchored timeline, delivery ticks, image previews, paging |
+| 06 | Composer / Attachments / Voice / Drafts | 🟡 | Multi-line composer, file attachments; voice notes not built |
+| 07 | Calls / Realtime Media | ⚪ | Stub tab; waiting for backend realtime media pipeline |
+| 08 | Contacts / Requests / Verification / Identity | ✅ | Contact directory, safety fingerprints, key change warnings |
+| 09 | Groups / Membership / Roles | ✅ | MLS group sessions, one-step invites, roster discovery sync |
+| 10 | Files / Media Gallery / Transfer | 🟡 | Inline attachment previews; dedicated gallery unbuilt |
+| 11 | Search / Local Knowledge Retrieval | ⚪ | Joint gap with Part 32 |
+| 12 | Nearby / QR / NFC Pairing / Device Linking | ✅ | Security → Devices pairing views, one-time codes, approval queue |
+| 13 | Notifications / Background / Incoming Call | 🟡 | Daemon desktop notifications (`notify-rust`), background gating |
+| 14 | Presence / Typing / Receipts / Status | 🟡 | Delivery receipts (ticks); typing & ephemeral status unbuilt |
+| **15** | **Security Center / Devices / Keys / Recovery** | ✅ | Fingerprint reveal, diagnostics card, event banners, device lists |
+| 16 | Backup / Restore / Export / Migration | 🟡 | CLI/daemon backup complete (`siar-backup`); GUI wizard unbuilt |
+| 17 | Emergency SOS / Offline Mesh | ⚪ | Backend emergency crates exist, UI unbuilt |
+| 18 | Settings / Privacy / Notifications / Data Controls | 🟡 | Settings view (persisted theme, density, notifications) |
+| 19 | Plugin/Module Ecosystem | ⚪ | Joint gap with Part 24 |
+| 20 | Diagnostics / Network Paths / Advanced Dev | 🟡 | Diagnostics card in Security view; visual graph unbuilt |
+| 21 | Accessibility | 🟡 | Full keyboard navigation, focus management, high-contrast theme |
+| 22 | Design System (tokens/typography/icons/motion) | ✅ | Implemented as `Theme` global in `crates/siar-ui-slint` |
+| 23 | Responsive/Adaptive Layout | ✅ | Adaptive layout switching between single-pane and split views |
+| 24 | Error/Loading/Empty/Offline/Degraded States | 🟡 | Network offline banners, empty list placeholders, error banners |
+| 25 | Onboarding / First-Run / Permissions | 🟡 | Unprovisioned / first-run setup flow |
+| 26 | Performance / Virtualization / Large-Data UI | 🟡 | Bounded 50-item timeline pages, lazy attachment loading |
+| 27 | UI Testing / Screenshot / Quality Gates | ✅ | 29 interaction + 10 headless render tests, live Wayland verification |
 
-## `ui-ux-15` detail (the one spec with real work)
+---
 
-§3-90, §96-100, §110-141, §144, §148-183, §186-194 (reconciled) done, ~83% of 221 total sections:
+## Implementing Crate(s)
 
-- `RevocationCapabilities`/`sign_out_copy` (§179 — "this signs the device out" only ever renders when actually true).
-- The fixed revocation-can't-erase-remote-copies disclaimer (§180-181).
-- `RecoveryScope` and its history caveat (§182-183 — silence about unrestorable history would itself be the overclaim these sections warn against).
-- **A real spec-internal inconsistency found and documented, not silently resolved**: §184's compromise-response checklist has a different order and two extra steps versus §38's (built in an earlier round). Extended the existing `CompromiseResponseStep` enum with §184's two genuinely new steps (`ReVerifyAffectedContacts`, `CreateFreshBackup`) rather than reordering the original five, since earlier rounds' tests already depend on that order.
-- §186-194 closed via reconciliation, no new code — event correlation is explicitly deferred by the spec itself as "advanced future feature"; retention/search/Alerts-vs-Events are policy notes; the four cross-crate integration points (§190-193) were already satisfied by design (`RecoveryStatus`/`BackupSecurityState` reused not duplicated; `DeviceLinked`/`VerificationFailed`/`IdentityChanged` event kinds already exist) or point to still-unbuilt Parts (07 calls, 12 linking is partially built elsewhere, 13 notifications).
-
-**Remaining**: §195-221 — continue in ordinary batches. Next natural slice: the integration section (§195-206, Privacy Settings Integration onward), then testing matrix + final scope (§207-221) — likely finishes the spec in 2-3 more rounds (per ROADMAP.md's own estimate).
-
-## Implementing crate(s)
-
-- `siar-ui-state` — conversation list, timeline, composer, contact list, group list (all pre-existing, unreconciled against their respective specs above).
-- `siar-calls` — spec 07.
-- `siar-emergency` — spec 17.
-- The security-center work (`ui-ux-15`) lives inside `siar-identity-multidevice` (see `docs/02` and `docs/28`).
-
-## Joint gaps (spec pairs where both the core-arch and ui-ux spec are ⚪)
-
-11+32 (search), 12+15 (QR/NFC pairing), 13+31 (notifications), 14+30 (presence/receipts), 16+33 (backup), 19+24 (plugins), 20+18 (diagnostics). Each pair is naturally one unit of work (backend + its UI together), not two separate efforts.
-
-## Note
-
-Transcribed verbatim in structure from ROADMAP.md's Tier 2 section on 2026-09-27. No sys-arch source exists for these specs in this workspace's uploaded scope, so none of this has been re-verified against a raw spec document the way Parts 01-33 can be.
+- `crates/siar-ui-slint` — Slint markup, components, theme tokens, styling, interaction handlers.
+- `apps/desktop` — Slint window runtime, daemon auto-spawn, IPC connection management.
+- `siar-ui-sync` — domain snapshot + delta synchronization protocol connecting UI to daemon.
+- `siar-ui-state` — view models and state reducers.

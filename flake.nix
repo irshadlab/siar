@@ -143,6 +143,7 @@
               || rel == "/apps" || lib.hasPrefix "/apps/" rel
               || rel == "/crates" || lib.hasPrefix "/crates/" rel
               || rel == "/assets" || lib.hasPrefix "/assets/" rel
+              || rel == "/patches" || lib.hasPrefix "/patches/" rel
             else
               (craneLib.filterCargoSources path type)
               || (builtins.match ".*\\.(png|jpg|jpeg|svg|ico|css|sql|json|txt|proto|c|h|toml|lock|slint)$" path != null);
@@ -217,6 +218,20 @@
           };
         });
 
+        siar-daemon = craneLib.buildPackage (commonArgs // {
+          inherit cargoArtifacts;
+          pname = "siar-daemon";
+          cargoExtraArgs = "--package siar-daemon --bin siar-daemon --offline";
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = if isLinux then coreLinuxBuildInputs else commonBuildInputs;
+          meta = with lib; {
+            description = "SIAR Headless Daemon - core application runtime";
+            homepage = "https://github.com/irshadlab/siar";
+            license = licenses.agpl3Plus;
+            mainProgram = "siar-daemon";
+          };
+        });
+
         siar-emergency-node = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
           pname = "siar-emergency-node";
@@ -277,14 +292,14 @@ DESKTOPEOF
 
         siar-all = pkgs.symlinkJoin {
           name = "siar-all";
-          paths = [ siar-cli siar-emergency-node ] ++ lib.optionals isLinux [ siar-desktop ];
+          paths = [ siar-cli siar-daemon siar-emergency-node ] ++ lib.optionals isLinux [ siar-desktop ];
         };
 
         # ======================================================================
         # Hermetic Flake Checks
         # ======================================================================
         checks = {
-          inherit siar-cli siar-emergency-node;
+          inherit siar-cli siar-daemon siar-emergency-node;
 
           clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
@@ -314,6 +329,7 @@ DESKTOPEOF
           default = siar-cli;
           siar = siar-cli;
           siar-cli = siar-cli;
+          siar-daemon = siar-daemon;
           siar-emergency-node = siar-emergency-node;
           siar-desktop = siar-desktop;
           all = siar-all;
@@ -327,6 +343,10 @@ DESKTOPEOF
           siar = flake-utils.lib.mkApp {
             drv = siar-cli;
             name = "siar";
+          };
+          siar-daemon = flake-utils.lib.mkApp {
+            drv = siar-daemon;
+            name = "siar-daemon";
           };
           siar-emergency-node = flake-utils.lib.mkApp {
             drv = siar-emergency-node;

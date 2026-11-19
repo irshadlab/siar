@@ -378,8 +378,16 @@ impl DaemonApp {
                 let o = live.core.link_open_offer().map_err(bad)?;
                 Ok(format!("{}\n{}", o.code, o.ticket).into_bytes())
             }
+            // `<device-id> [share]` — `share` also gives the new device this
+            // device's contacts.
             "link-approve" => {
-                live.core.link_approve(device(&text)?).await.map_err(bad)?;
+                let mut parts = text.split_whitespace();
+                let id = parts.next().unwrap_or_default();
+                let share = parts.next() == Some("share");
+                live.core
+                    .link_approve(device(id)?, share)
+                    .await
+                    .map_err(bad)?;
                 Ok(b"approved".to_vec())
             }
             "link-reject" => {

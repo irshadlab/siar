@@ -390,6 +390,10 @@ impl DaemonApp {
                     .map_err(bad)?;
                 Ok(b"approved".to_vec())
             }
+            "link-revoke" => {
+                live.core.link_revoke(device(&text)?).await.map_err(bad)?;
+                Ok(b"removed".to_vec())
+            }
             "link-reject" => {
                 let found = live.core.link_reject(device(&text)?).await;
                 Ok(if found {

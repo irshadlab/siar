@@ -414,9 +414,10 @@ ACK → Delivered):
 
 **Not done / known gaps**
 - Calls, Files, Search destinations (no backend yet).
-- Device linking: needs a wire protocol that does not exist yet (no linking
-  message in `siar-protocol`) plus account-root key custody in the desktop app.
-- Not run on a real display/GPU (software-renderer + headless tests only).
+- ~~Device linking needs a wire protocol and root-key custody~~ — done in later
+  rounds (see "Device linking" and "Multi-device contacts" below).
+- ~~Not run on a real display/GPU~~ — **closed**: verified live on a real
+  Wayland session (see "Live verification on a real display" below).
 - Network "Online" means the transport endpoint is bound, not probed.
 - Slint pinned `=1.16.1` (1.17+ needs rustc 1.92; workspace is on 1.91).
 - Run `cargo hakari generate` (workspace-hack lost its Dioxus-only entry).
@@ -598,8 +599,8 @@ Rule followed: **no primitive written here**; every one is an upstream crate. 34
 * **Consistent** — gap-free `seq` per daemon instance; a gap or a different `instance_id` forces a resync; snapshots are taken under the sync lock and paged under a short-lived id.
 * **Commands** cross as `WireCommand`, **re-validated on the daemon** (`MessageText` derives `Deserialize` without checking its invariants — a hostile client could otherwise send a 100 KB "message"; tested). Unsupported commands tell the user instead of vanishing.
 * **Live-verified:** 17 unit + 4 socket end-to-end tests (convergence, command forwarding, 40-conversation paged snapshot, reconnect to a *restarted daemon with different state*) and `scripts/daemon-sync-smoke.sh` (two real daemons; each side's state read back through the protocol with `ctl ui-state`).
-* `apps/desktop --connect [SOCKET]` attaches the Slint window to a running daemon (no data-folder lock taken). **Compiles; not run against a display in this sandbox.**
-**Not synced yet (named):** groups and invites, attachment *preview pixels*, security events, devices list, diagnostics, contact-safety *actions* beyond verify, group management commands. Until those sections exist the window attached to a daemon is a **messaging-only** client. No auto-start of the daemon from the window. The window shows a reconnect notice once per outage. Capture re-encodes all sections per diff (fine for hundreds of conversations; add dirty-tracking before thousands).
+* `apps/desktop --connect [SOCKET]` attaches the Slint window to a running daemon (no data-folder lock taken). **Live-verified on a real display (see "Live verification on a real display" below).**
+**Not synced yet (named, as of this round; later rounds added groups, invites, security events, devices, diagnostics, attachment previews and link state, and the window now starts the daemon itself):** contact-safety *actions* beyond verify. The window shows a reconnect notice once per outage. Capture re-encodes all sections per diff (fine for hundreds of conversations; add dirty-tracking before thousands).
 **Observed, not caused here:** a first message into a never-opened chat shows `unread=0` on the receiving daemon — existing read-mark semantics ("no recorded mark ⇒ already read") in `siar-app-core`; matters for daemon-mode notifications.
 
 ### Part 28 Phase 2 — `siar-ratchet` — **REMOVED 2026-11-03** (owner's decision; forward secrecy + post-compromise security + post-quantum now come from OpenMLS 1:1, `siar-crypto-mls::pairwise`). Historical record:
@@ -650,15 +651,17 @@ MLS state and network identity. The window and the CLI are thin clients of its
 control socket. Nothing had shipped, so the embedded-core desktop path was removed.
 
 **Verified:** `siar-abuse` 31, `siar-runtime` 159, `siar-ui-sync` 28 + 5 e2e, `siar-ui-state` 129,
-`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 67 (incl. 11 linking, 6 contact_devices, 4 link_flow, real multi-core e2e incl. linking and multi-device contacts), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-backup` 20, `siar-ui-sync` 29 + 5, `siar-ui-slint` 29 interaction + 8 render, `siar-messaging` lib 62; was 34 +
+`siar-cli` 9, `siar-messaging` end-to-end 15, `siar-daemon` 31, `siar-messaging` ingress 11, `siar-emergency-node` 7, `siar-app-core` 68 (incl. 11 linking, 6 contact_devices, 4 link_flow, real multi-core e2e incl. linking and multi-device contacts), `siar-protocol` 24, `siar-messaging` ingress 12, `siar-backup` 20, `siar-ui-sync` 29 + 5, `siar-ui-slint` 29 interaction + 8 render, `siar-messaging` lib 62; was 34 +
 10 two-real-core e2e (run `-- --ignored --test-threads=1`; two fail when run in
 parallel and pass alone). `clippy -D warnings` clean for abuse/messaging/app-core/
 runtime/ui-sync/cli/daemon; `cargo check -p siar-desktop --all-targets` and `-p siar-ui-slint --all-targets` clean.
 Black-box with real binaries: `siar status` with no daemon gives an actionable
 error; `--spawn` starts one; `ticket/identity/key-package/group-create` work;
 **two daemons pair and exchange messages in both directions through the CLI**.
-Not run: `cargo check --workspace` in one pass (sandbox disk/RAM); the Slint
-window against a display; Windows named pipes.
+Not run at that time: `cargo check --workspace` in one pass (done in later
+rounds, zero warnings) and the Slint window against a display (**since verified
+live**, see "Live verification on a real display"); Windows named pipes remain
+unverified.
 
 * **Ingress admission (Part 28 §60-§62, §65):** `siar-messaging::IngressGuard`
   puts `siar-abuse::Gate` in front of the app-core receive loop, keyed on the
@@ -715,8 +718,9 @@ window against a display; Windows named pipes.
 * **Whole-workspace check:** `cargo check --workspace --all-targets` passes with
   zero warnings (needs `libasound2-dev cmake libopus-dev libdav1d-dev
   libssl-dev libgtk-3-dev nasm pkg-config` on the build machine).
-  `siar-ui-slint` headless interaction tests pass (15 + 27 + 8). **Not done:**
-  the window on a real display (no display and too little disk in the sandbox).
+  `siar-ui-slint` headless interaction tests pass (15 + 27 + 8). The window on a
+  real display has since been verified by the owner (see "Live verification on
+  a real display").
 * **Device linking (CLI path, verified live):** `siar link-offer` on the device
   that created the account prints a one-time code (80 bits, 5 min, single use,
   5 wrong tries destroys it) and a ticket; on a fresh device `siar link-join
@@ -749,9 +753,12 @@ window against a display; Windows named pipes.
   normal outbox under a hidden conversation. Approval has a "share my contacts"
   choice (UI button, `siar link-approve --share-contacts`, daemon
   `link-approve <id> share`). `docs/MULTI_DEVICE_CONTACTS.md` has "As built" and
-  the not-built list: **no revocation, no group/attachment fan-out, no mirroring
-  of the first device's own sent messages to the second, no push of contacts
-  added after approval, notices only in the UI.**
+  the not-built list. Since added: **revocation** (`siar link-revoke`, a Remove
+  button in Security → Devices, contacts told and re-told at start-up), **file
+  fan-out**, and **mirroring of your own sent text between linked devices**
+  (fire-and-forget, no catch-up). Verified by the three-core test. **Still not
+  built: group fan-out, history sync/catch-up, pushing contacts added after
+  approval, telling the revoked device, per-device delivery detail.**
 * **Backup covers linking (verified):** `root.key`, `linked_devices.bin`,
   `joined_account.bin` and `account_id.txt` are archived by both the offline
   and the live (daemon) backup; a restore writes them owner-only (tested in
@@ -770,11 +777,10 @@ window against a display; Windows named pipes.
   (`device_linking_renders`). A device that has joined an account now shows a
   global banner on every page ("close Siar completely and open it again to
   finish; until then it still uses its old identity, so don't start new
-  chats"), rendered and reviewed by eye. **Not done:** the window on a real
-  display (still not possible in the sandbox: no display and too little disk to
-  build the daemon next to the UI; the headless render + interaction tests and
-  the two-core command test are the evidence), and an in-app "restart now"
-  button (the window cannot restart the daemon it is attached to).
+  chats"), rendered and reviewed by eye. The window on a real display is
+  **closed** (owner-verified, see "Live verification on a real display").
+  **Still not done:** an in-app "restart now" button (the window cannot restart
+  the daemon it is attached to).
 * **CLI output:** `siar … | head` no longer panics on a closed pipe; any other
   write failure exits 1.
 * **Daemon app surface** gained identity, key-package, groups queries and
@@ -798,3 +804,25 @@ window against a display; Windows named pipes.
   node's role (refused with `require_provisioning`). Relay/DTN/organisation
   roles still run `siar-emergency-node` as a supervised child, deliberately, for
   privilege separation. `storage-node` is still "unavailable".
+
+## Live verification on a real display (closed)
+
+**Item closed.** The owner ran `siar-desktop` against a live `siar-daemon` on a
+real display and reported the results below. These were observed on the owner's
+host, not in the build sandbox (which has no display); this entry records the
+owner's report.
+
+* **Environment:** Linux, Wayland session (Niri).
+* **Live window:** `siar-desktop` attached cleanly to `siar-daemon` over
+  `/run/user/1000/siar/daemon.sock` (`subscribers: 1`), rendered with full
+  navigation, and showed "Online" and "End-to-end encrypted".
+* **Multi-core suite** (the `#[ignore]`d loopback tests), both passed:
+  `a_second_device_links_through_the_same_commands_the_window_sends` (2.58 s) and
+  `a_contacts_second_device_is_the_same_contact_in_both_directions` (0.83 s).
+* **UI test suite:** all 29 interaction tests (2.43 s) and all 10 headless render
+  tests (10.66 s) passed, 0 failures.
+
+Consequently the "not run on a real display" caveat is removed everywhere in
+this file. What this does *not* establish, and stays open: Windows named pipes,
+a real GPU/other compositors (only Wayland/Niri was exercised), and the window's
+behaviour on a physical device battery.

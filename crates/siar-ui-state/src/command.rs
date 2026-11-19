@@ -39,6 +39,10 @@ pub enum AppCommand {
     LinkReject {
         device: DeviceId,
     },
+    /// Remove a linked device from this account.
+    LinkRevoke {
+        device: DeviceId,
+    },
     /// Join an account from this (fresh) device with an offer's ticket + code.
     LinkJoin {
         ticket_text: String,

@@ -69,6 +69,8 @@ pub struct LinkRequest {
     pub device_id: DeviceId,
     pub device_public_key: [u8; 32],
     pub display_name: String,
+    /// The device's own ticket, so contacts can be told how to reach it.
+    pub ticket: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +298,7 @@ mod tests {
             device_id: DeviceId::new(),
             device_public_key: [n; 32],
             display_name: format!("phone {n}"),
+            ticket: format!("ticket-{n}"),
         }
     }
 

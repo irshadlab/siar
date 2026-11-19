@@ -203,7 +203,7 @@ export global AppState {
     callback decline-invite(string);
     callback resolve-event(string);
     callback link-open-offer() -> bool;
-    callback link-approve(string);
+    callback link-approve(string, bool);        // device id, share my contacts
     callback link-reject(string);
     callback link-join(string, string) -> bool;     // ticket, code
     callback dismiss-banner(string);

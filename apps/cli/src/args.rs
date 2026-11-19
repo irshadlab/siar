@@ -65,7 +65,12 @@ pub enum Command {
     /// Devices waiting for you to approve them.
     LinkPending,
     /// Approve a waiting device (check its key fingerprint first).
-    LinkApprove { device_id: String },
+    LinkApprove {
+        device_id: String,
+        /// Also give the new device your contacts.
+        #[arg(long)]
+        share_contacts: bool,
+    },
     /// Decline a waiting device.
     LinkReject { device_id: String },
     /// Join an account from a fresh device, with an offer's ticket and code.

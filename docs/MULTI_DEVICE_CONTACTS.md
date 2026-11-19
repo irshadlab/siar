@@ -3,7 +3,7 @@
 Status: **built with the recommended options, in a simplified form** — see
 "As built" immediately below; the original design follows unchanged.
 
-## As built (verified by a three-core test)
+## As built (verified by a three-core test; the same test was re-run by the owner on a real host and passed, alongside a live `siar-desktop` ↔ `siar-daemon` session on Wayland)
 
 A contact's second device is the same contact: Carol writes once and both of
 Alice's devices receive it; Alice answering from her second device lands in
@@ -33,20 +33,36 @@ Carol's one chat with her.
 * **Notices:** the contact is told "X added a new device"; a root-key change or
   an unverifiable announcement warns.
 
+* **Revocation:** `siar link-revoke <id>` (or "Remove this device" in
+  Security → Devices) on the device that created the account removes a linked
+  device and tells every contact (`DeviceRemoved`); the contact forgets that
+  sibling and stops sending to it. Removals are re-sent at each start-up to
+  contacts that were offline. The account root key stays pinned.
+* **Files:** a file sent to a contact is also sent, as its own encrypted blob,
+  to that contact's recorded extra devices.
+* **Your own sent messages are mirrored between your linked devices**
+  (`SyncSent`): what you send from one device also appears in your chat with
+  that contact on your other device. Text only, fire-and-forget, accepted only
+  from a device recorded as linked to the account.
+
 ### Not built (and why it matters)
 
-* **Revocation** (step 7): removing a device from a contact's record when it is
-  revoked. Until then a sibling stays recorded.
-* **Group messages and attachments are not fanned out** to a contact's extra
-  devices; only 1:1 text is.
-* **Alice's own sent messages are not mirrored to her other device**, so her
-  second device's chat shows what the contact sent and what that device itself
-  sent, not what her first device sent. That is self-sync (device-to-device
-  history), a separate feature, as is history transfer.
+* **Group messages are not fanned out** to a contact's extra devices (group
+  membership is MLS, per device; a linked device would have to be added to each
+  group by an admin).
+* **No catch-up / history sync:** a device that was offline misses mirrored
+  messages, and a newly linked device does not receive past history. Mirroring
+  covers new text sent while both devices are online.
+* **Messages you *receive* are not mirrored** to your other device except
+  through the contact's own fan-out (so a contact who has not been told about
+  your second device sends only to the first).
 * **Contacts added on the first device after linking are not pushed** to the
   second (only the contacts that existed at approval, if shared).
-* **UI:** notices only. No device count on a contact, no per-device delivery
-  detail, no dedicated security event.
+* **Revoked device is not told:** it is removed from the account's records and
+  from contacts, but is not itself notified, and it keeps whatever it already
+  has locally.
+* **UI:** a Remove button and notices; no device count on a contact, no
+  per-device delivery detail, no dedicated security event.
 * Imported contacts are titled by a short key id: a ticket carries no name.
 
 ## Original design

@@ -7,6 +7,7 @@
 
 mod attach;
 pub mod bootstrap;
+pub mod contact_devices;
 pub mod core;
 mod history;
 mod host;

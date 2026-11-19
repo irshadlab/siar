@@ -56,6 +56,9 @@ pub struct LinkedDevice {
 #[derive(Serialize, Deserialize, Default)]
 struct LinkedFile {
     devices: Vec<LinkedDevice>,
+    /// Devices removed from the account; contacts that were offline when it
+    /// happened are told again at the next start-up.
+    revoked: Vec<DeviceId>,
 }
 
 /// What a joined device remembers about the account it joined.
@@ -127,22 +130,29 @@ fn save_imported(dir: &Path, tickets: &[String]) -> std::io::Result<()> {
     std::fs::rename(tmp, dir.join(IMPORTED_FILE))
 }
 
-pub(crate) fn load_linked(dir: &Path) -> Vec<LinkedDevice> {
+fn load_file(dir: &Path) -> LinkedFile {
     std::fs::read(dir.join(LINKED_FILE))
         .ok()
         .and_then(|b| postcard::from_bytes::<LinkedFile>(&b).ok())
-        .map(|f| f.devices)
         .unwrap_or_default()
 }
 
-fn save_linked(dir: &Path, devices: &[LinkedDevice]) -> std::io::Result<()> {
-    let bytes = postcard::to_allocvec(&LinkedFile {
-        devices: devices.to_vec(),
-    })
-    .expect("a list of plain structs always serializes");
+fn save_file(dir: &Path, file: &LinkedFile) -> std::io::Result<()> {
+    let bytes = postcard::to_allocvec(file).expect("a list of plain structs always serializes");
     let tmp = dir.join(format!("{LINKED_FILE}.tmp"));
     write_private(&tmp, &bytes, false)?;
     std::fs::rename(tmp, dir.join(LINKED_FILE))
+}
+
+pub(crate) fn load_linked(dir: &Path) -> Vec<LinkedDevice> {
+    load_file(dir).devices
+}
+
+/// Replace the linked devices, keeping the record of revoked ones.
+fn save_linked(dir: &Path, devices: &[LinkedDevice]) -> std::io::Result<()> {
+    let mut file = load_file(dir);
+    file.devices = devices.to_vec();
+    save_file(dir, &file)
 }
 
 /// This device first, then every linked one (Trusted, flagged as not yet
@@ -360,6 +370,130 @@ impl Core {
         Ok(())
     }
 
+    /// A person removed a linked device from the account. Only the device that
+    /// holds the account root key can do this. Contacts are told (again at
+    /// every start-up, for any that were offline).
+    pub async fn link_revoke(&self, device: DeviceId) -> Result<(), String> {
+        root_key_for_offers(&self.data_dir)?; // same rule as approving
+        let mut file = load_file(&self.data_dir);
+        let before = file.devices.len();
+        file.devices.retain(|l| l.device_id != device);
+        if file.devices.len() == before {
+            return Err("That device is not linked to this account.".into());
+        }
+        if !file.revoked.contains(&device) {
+            file.revoked.push(device);
+        }
+        save_file(&self.data_dir, &file).map_err(|e| format!("couldn’t save the change: {e}"))?;
+        self.refresh_devices();
+        self.announce_removals(&[device]).await;
+        self.hub
+            .notify(NoticeLevel::Info, "Device removed from your account.");
+        Ok(())
+    }
+
+    async fn announce_removals(&self, devices: &[DeviceId]) {
+        let contacts = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .all();
+        for (_, contact) in contacts {
+            for device_id in devices {
+                let msg = LinkMessage::DeviceRemoved {
+                    device_id: *device_id,
+                };
+                if let Err(e) = self
+                    .service
+                    .send_wire(contact.endpoint_addr.clone(), &WireMessage::Link(msg))
+                    .await
+                {
+                    tracing::debug!(error = %e, "couldn’t announce a removed device");
+                }
+            }
+        }
+    }
+
+    /// Tell this account's other devices about a message just sent, so their
+    /// copy of the chat is complete. Fire-and-forget: a device that is offline
+    /// misses it (no catch-up — that is history sync).
+    pub(crate) async fn sync_sent_to_linked(
+        &self,
+        conversation: siar_domain::ConversationId,
+        message_id: siar_domain::MessageId,
+        text: &siar_domain::MessageText,
+    ) {
+        for l in load_linked(&self.data_dir) {
+            let Ok(ticket) = PeerTicket::decode(&l.ticket) else {
+                continue;
+            };
+            let msg = LinkMessage::SyncSent {
+                conversation,
+                message_id,
+                text: text.as_str().to_owned(),
+                sent_at_millis: millis_now(),
+            };
+            if let Err(e) = self
+                .service
+                .send_wire(ticket.endpoint_addr.clone(), &WireMessage::Link(msg))
+                .await
+            {
+                tracing::debug!(error = %e, "couldn’t mirror a sent message to a linked device");
+            }
+        }
+    }
+
+    /// A linked device says it sent `text` in `conversation`. Accepted only
+    /// from a device recorded as linked to this account.
+    fn handle_sync_sent(
+        &self,
+        from: iroh::EndpointId,
+        conversation: siar_domain::ConversationId,
+        message_id: siar_domain::MessageId,
+        text: String,
+        sent_at_millis: u64,
+    ) {
+        let from_linked = load_linked(&self.data_dir)
+            .iter()
+            .any(|l| PeerTicket::decode(&l.ticket).is_ok_and(|t| t.endpoint_addr.id == from));
+        if !from_linked {
+            tracing::warn!(
+                ?from,
+                "ignoring a mirrored message from a device that is not linked"
+            );
+            return;
+        }
+        let Some(peer) = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .ticket(conversation)
+            .cloned()
+        else {
+            return; // this device has no such contact (yet)
+        };
+        let Ok(text) = siar_domain::MessageText::parse(text) else {
+            return;
+        };
+        match self.service.store_synced_outgoing(
+            conversation,
+            &peer,
+            message_id,
+            text.clone(),
+            sent_at_millis,
+        ) {
+            Ok(true) => self.hub.update(|s| {
+                s.record_outgoing(
+                    conversation,
+                    message_id,
+                    siar_domain::MessageContent::Text(text),
+                );
+            }),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(error = %e, "couldn’t store a mirrored message"),
+        }
+    }
+
     fn contact_ticket_texts(&self) -> Vec<String> {
         self.peers
             .lock()
@@ -407,6 +541,10 @@ impl Core {
         let Some(root) = load_root(&self.data_dir) else {
             return;
         };
+        let revoked = load_file(&self.data_dir).revoked;
+        if !revoked.is_empty() {
+            self.announce_removals(&revoked).await;
+        }
         for l in load_linked(&self.data_dir) {
             if l.certificate.is_empty() || l.ticket.is_empty() {
                 continue;
@@ -557,6 +695,13 @@ impl Core {
                     );
                 }
             }
+            LinkMessage::DeviceRemoved { device_id } => self.handle_device_removed(from, device_id),
+            LinkMessage::SyncSent {
+                conversation,
+                message_id,
+                text,
+                sent_at_millis,
+            } => self.handle_sync_sent(from, conversation, message_id, text, sent_at_millis),
             LinkMessage::DeviceAdded {
                 account_id: _,
                 root_public_key,
@@ -727,6 +872,33 @@ impl Core {
                 drop(devices);
                 tracing::warn!(error = %why, "couldn’t record a contact’s device");
             }
+        }
+    }
+
+    /// A paired contact says a device left its account.
+    fn handle_device_removed(&self, from: iroh::EndpointId, device_id: DeviceId) {
+        let Some(contact) = self
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .conversation_of(&from)
+        else {
+            return;
+        };
+        let mut devices = self
+            .contact_devices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if devices.remove(contact, device_id) {
+            if let Err(e) = devices.save(&self.data_dir) {
+                tracing::warn!(error = %e, "couldn’t save the contact’s devices");
+            }
+            drop(devices);
+            let label = self.contact_label(contact);
+            self.hub.notify(
+                NoticeLevel::Info,
+                format!("{label} removed a device. Messages you send them no longer go there."),
+            );
         }
     }
 

@@ -32,6 +32,7 @@ pub enum WireCommand {
     LinkOpenOffer,
     LinkApprove {
         device: DeviceId,
+        share_contacts: bool,
     },
     LinkReject {
         device: DeviceId,
@@ -130,7 +131,13 @@ impl TryFrom<&AppCommand> for WireCommand {
             },
             A::OpenConversation(id) => Self::OpenConversation(*id),
             A::LinkOpenOffer => Self::LinkOpenOffer,
-            A::LinkApprove { device } => Self::LinkApprove { device: *device },
+            A::LinkApprove {
+                device,
+                share_contacts,
+            } => Self::LinkApprove {
+                device: *device,
+                share_contacts: *share_contacts,
+            },
             A::LinkReject { device } => Self::LinkReject { device: *device },
             A::LinkJoin { ticket_text, code } => Self::LinkJoin {
                 ticket_text: ticket_text.clone(),
@@ -317,7 +324,13 @@ impl WireCommand {
                 AppCommand::SendAttachment { conversation, path }
             }
             Self::LinkOpenOffer => AppCommand::LinkOpenOffer,
-            Self::LinkApprove { device } => AppCommand::LinkApprove { device },
+            Self::LinkApprove {
+                device,
+                share_contacts,
+            } => AppCommand::LinkApprove {
+                device,
+                share_contacts,
+            },
             Self::LinkReject { device } => AppCommand::LinkReject { device },
             Self::LinkJoin { ticket_text, code } => AppCommand::LinkJoin { ticket_text, code },
             Self::SendViaRelay {
@@ -426,7 +439,10 @@ mod tests {
             },
             AppCommand::OpenConversation(c),
             AppCommand::LinkOpenOffer,
-            AppCommand::LinkApprove { device: dev },
+            AppCommand::LinkApprove {
+                device: dev,
+                share_contacts: true,
+            },
             AppCommand::LinkReject { device: dev },
             AppCommand::LinkJoin {
                 ticket_text: "t".into(),

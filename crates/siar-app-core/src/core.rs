@@ -499,6 +499,31 @@ impl Core {
     /// Send `text` to each recorded extra device of `conversation`'s contact.
     /// Best effort per device: a failure is logged, never shown as a failed
     /// send, because the message did reach the contact's primary device.
+    /// Send the file to each recorded extra device of the contact, as its own
+    /// encrypted blob (same best-effort rules as [`Core::fan_out_text`]).
+    async fn fan_out_attachment(
+        &self,
+        conversation: ConversationId,
+        bytes: Vec<u8>,
+        media_type: siar_domain::MediaType,
+    ) {
+        let siblings = self
+            .contact_devices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .siblings_of(conversation);
+        for sibling in siblings {
+            let hidden = crate::peers::conversation_for(&sibling);
+            if let Err(e) = self
+                .service
+                .send_attachment_detailed(hidden, &sibling, bytes.clone(), media_type)
+                .await
+            {
+                tracing::debug!(error = %e, "couldn’t queue a file for a contact’s other device");
+            }
+        }
+    }
+
     async fn fan_out_text(&self, conversation: ConversationId, text: &siar_domain::MessageText) {
         let siblings = self
             .contact_devices
@@ -1112,6 +1137,9 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                         // filed under a hidden conversation of its own so it
                         // never shows twice in this chat.
                         core.fan_out_text(conversation, &text).await;
+                        // This account's other devices keep a complete chat too.
+                        core.sync_sent_to_linked(conversation, message_id, &text)
+                            .await;
                         core.hub.update(|s| {
                             s.record_outgoing(conversation, message_id, MessageContent::Text(text));
                         });
@@ -1134,6 +1162,11 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                     .notify(NoticeLevel::Info, "Device approved and linked."),
                 Err(why) => core.hub.notify(NoticeLevel::Warning, why),
             },
+            AppCommand::LinkRevoke { device } => {
+                if let Err(why) = core.link_revoke(device).await {
+                    core.hub.notify(NoticeLevel::Warning, why);
+                }
+            }
             AppCommand::LinkReject { device } => {
                 core.link_reject(device).await;
             }
@@ -1158,10 +1191,12 @@ pub async fn command_loop(core: Arc<Core>, mut commands: mpsc::Receiver<AppComma
                     Err(why) => core.hub.notify(NoticeLevel::Warning, &why),
                     Ok((bytes, media_type)) => match core
                         .service
-                        .send_attachment_detailed(conversation, &peer, bytes, media_type)
+                        .send_attachment_detailed(conversation, &peer, bytes.clone(), media_type)
                         .await
                     {
                         Ok((message_id, reference)) => {
+                            core.fan_out_attachment(conversation, bytes, media_type)
+                                .await;
                             core.hub.update(|s| {
                                 s.record_outgoing(
                                     conversation,

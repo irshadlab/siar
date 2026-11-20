@@ -25,3 +25,4 @@ containers.conf
 deploy/*
 # Local extended architecture specs (51-150)
 sys-arch-local/
+archive/

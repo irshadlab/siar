@@ -4,14 +4,21 @@ Source spec: `sys-arch/07-capability-negotiation-architecture.md` — 164 number
 
 ## Implementation status
 
-**~119/164 (73%) sections** (by section references in source; rounds N+1..N+4 completed).
-138 tests passing (130 unit + 8 property). Clippy `-D warnings` and fmt clean.
+**~122/164 (74%) sections** (by section references in source; rounds N+1..N+5 completed).
+144 tests passing (136 unit + 8 property). Clippy `-D warnings` and fmt clean.
 
 ## Implementing crate(s)
 
-- `siar-capability` — capability advertisements, hierarchical negotiation, lazy negotiation, directional negotiation, trust separation, UI adapter, preference ordering, route filtering, snapshot persistence, dynamic resource limits, and session resume.
+- `siar-capability` — capability advertisements, hierarchical negotiation, lazy negotiation, directional negotiation, trust separation, UI adapter, preference ordering, route filtering, snapshot persistence, dynamic resource limits, file/DTN/routing fallbacks, and session resume.
 
 ## Round-by-round history
+
+### Round N+5 (§115, §116, §117)
+
+Added +3 sections:
+- **§115 File Transfer Fallbacks** (`fallback`): Degraded file transfer plans (`FileStrategy::SingleStreamResumable`, `SingleStreamOneShot`, `ParallelOneShot`, `ParallelResumable`); reports `None` if fixed chunking was not agreed.
+- **§116 DTN Bundle Fallbacks** (`fallback`): Selective bundle forwarding based on class (`Small` vs `BlobChunk`); immediately transmits text/SOS bundles while deferring large blob chunks if relay is unsupported; refuses bundles exceeding negotiated ceiling sizes.
+- **§117 Routing Fallbacks** (`fallback`): Constructs transport fallback chains adhering to caller preference order and determines the next viable transport after failures.
 
 ### Round N+4 (§71, §79, §82-83, §87-88)
 
@@ -41,5 +48,5 @@ Defects fixed in `siar-capability`:
 
 Remaining sections to address:
 - §1-3 overview
-- §77, 80-81 (DTN/files wiring in their crates), 99, 115-117
+- §77, 80-81 (DTN/files wiring in their crates), 99
 - §122-164 (testing matrix, phases, formal definition of done audit)

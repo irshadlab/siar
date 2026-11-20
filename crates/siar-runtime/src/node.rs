@@ -49,6 +49,17 @@ pub enum NodeRole {
 }
 
 impl NodeRole {
+    /// The Part 08 resource profile a node in this role runs under: relays and
+    /// storage nodes are servers; everything else is a desktop-class process.
+    #[must_use]
+    pub const fn resource_profile(self) -> siar_resource_limits::profile::ResourceProfile {
+        use siar_resource_limits::profile::ResourceProfile as P;
+        match self {
+            Self::RelayGateway | Self::StorageNode | Self::OrganizationNode => P::Server,
+            Self::PersonalDevice | Self::DtnNode | Self::TestNode => P::Desktop,
+        }
+    }
+
     pub const ALL: [NodeRole; 6] = [
         Self::PersonalDevice,
         Self::RelayGateway,

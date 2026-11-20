@@ -6,6 +6,24 @@
 //! against the spec's own section numbers rather than a shallow first
 //! pass across all 164 sections.
 //!
+//! ## Round N+4 — §71, 79, 82-83, 87-88
+//!
+//! - [`preference`] — §71: a mode is chosen by *local preference, then remote
+//!   support, then policy*; the peer's list is only a membership test, so its
+//!   order cannot steer the choice (a property test reverses it).
+//! - [`route_filter`] — §79: candidates are `Capable`, `Lacks(id)` (dropped) or
+//!   `NotNegotiated` (kept apart, never assumed capable); the router's own
+//!   ranking survives filtering.
+//! - [`snapshot`] — §82-83: `last_verified_peer_capabilities` persisted as a
+//!   *cache* with session, timestamp and hash; integrity-checked on load,
+//!   restored with its original observation time so it goes stale, and written
+//!   only for meaningful changes (`PersistGate`). A matching hash is not
+//!   authenticity, so it can never back a security decision (§84).
+//! - [`resource_limits`] — §87-88: negotiated limits are ceilings; storage,
+//!   battery and memory pressure can only lower the effective limit (property
+//!   tested), counts slow but never hit zero, and a capacity update is
+//!   advertised only when the class changes.
+//!
 //! ## Round N+3 — §57-60, 75-76, 84-86, 97-98, 104-107
 //!
 //! - [`ui_adapter`] — the spec's five-boolean `UiCapabilities`, derived
@@ -198,11 +216,15 @@ pub mod lazy;
 pub mod media_extension;
 pub mod negotiate;
 pub mod policy;
+pub mod preference;
 pub mod privacy;
 pub mod registry;
+pub mod resource_limits;
 pub mod resume;
+pub mod route_filter;
 pub mod security;
 pub mod set;
+pub mod snapshot;
 pub mod transcript;
 pub mod trust;
 pub mod ui_adapter;

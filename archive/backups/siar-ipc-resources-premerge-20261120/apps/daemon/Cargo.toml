@@ -1,0 +1,42 @@
+[package]
+name = "siar-daemon"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-or-later"
+rust-version = "1.91"
+description = "Siar headless daemon: the application core hosted by siar-runtime, with a local control socket. Links no GUI toolkit."
+
+[[bin]]
+name = "siar-daemon"
+path = "src/main.rs"
+
+[dependencies]
+siar-app-core.workspace = true
+siar-runtime.workspace = true
+siar-ui-model.workspace = true
+siar-ui-sync.workspace = true
+siar-ui-state.workspace = true
+siar-domain.workspace = true
+siar-messaging.workspace = true
+siar-power.workspace = true
+siar-crypto-mls.workspace = true
+siar-backup.workspace = true
+siar-storage.workspace = true
+siar-admin = { path = "../../crates/siar-admin" }
+iroh.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+ron = "0.12.3"
+# Desktop notifications: zbus (pure Rust) on Linux, toasts on Windows/macOS.
+notify-rust = "4.18"
+serde.workspace = true
+clap = { version = "4", features = ["derive"] }
+uuid.workspace = true
+base64.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[target.'cfg(windows)'.dependencies]
+# Service-control dispatcher: answers the SCM (start/stop/shutdown).
+windows-service = "0.8"

@@ -59,6 +59,7 @@
 - [Honest Transparency: Active Development, Known Limits & Where SIAR Fails / Is NOT Suitable](#honest-transparency-active-development-known-limits--where-siar-fails--is-not-suitable)
 - [Implementation Status & Roadmap](#implementation-status--roadmap)
   - [Strategic Phased Roadmap: Technical Hardening (2026) → Nym Mixnet (2027+)](#strategic-phased-roadmap-technical-hardening-2026--nym-mixnet-2027)
+- [Installation & Distribution Packages](#installation--distribution-packages)
 - [Prerequisites & Environment Setup](#prerequisites--environment-setup)
 - [Build & Repository Automation (xtask)](#build--repository-automation-xtask)
 - [Node Configuration & Operational Guide](#node-configuration--operational-guide)
@@ -836,6 +837,68 @@ Phase 2B (Future Long-Term): Unified Single Binary (siar-daemon embeds crates/si
 * **Prerequisites for Phase 2B:**
   - Upstream `nym-sdk` stabilizes its Rust C-ABI/crate APIs and trims extraneous blockchain/Wasm dependencies.
   - In-tree build benchmarks confirm that compiling `crates/siar-anonymity-nym` does not degrade SIAR's CI turnaround times or bloat lightweight embedded targets.
+
+---
+
+## Installation & Distribution Packages
+
+Official release packages with automated desktop menu integration and updates are available for major operating systems:
+
+| Platform / Distro | Package / Repository | Quick Install Command |
+| :--- | :--- | :--- |
+| **Arch Linux** | AUR (`siar-bin`, `siar-git`) | `paru -S siar-bin` *(or `yay -S siar-bin`)* |
+| **Ubuntu / Debian** | Official APT Repository | See [APT Instructions](#debian--ubuntu-apt) below |
+| **Fedora / RHEL** | Official RPM / DNF Repository | See [DNF Instructions](#fedora--red-hat-dnf--rpm) below |
+| **Windows** | Portable x86_64 Zip / MSVC | Download from [GitHub Releases](https://github.com/irshadlab/siar/releases/latest) |
+
+<details>
+<summary><strong>🐧 Debian / Ubuntu (APT) Setup</strong></summary>
+
+```bash
+# 1. Download official repository signing GPG key
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://irshadlab.github.io/siar/KEY.gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/siar.gpg
+sudo chmod a+r /etc/apt/keyrings/siar.gpg
+
+# 2. Add repository source
+echo "deb [signed-by=/etc/apt/keyrings/siar.gpg] https://irshadlab.github.io/siar stable main" | sudo tee /etc/apt/sources.list.d/siar.list
+
+# 3. Update index and install SIAR
+sudo apt update
+sudo apt install siar
+```
+
+Once installed, **SIAR** appears automatically in your application launcher menu with complete desktop icon integration (`siar.desktop`), CLI utilities (`siar`), and the background runtime (`siar-daemon`).
+
+</details>
+
+<details>
+<summary><strong>🎩 Fedora / Red Hat / openSUSE (DNF / RPM) Setup</strong></summary>
+
+```bash
+# 1. Add official repository definition
+sudo curl -fsSL https://irshadlab.github.io/siar/rpm/siar.repo -o /etc/yum.repos.d/siar.repo
+
+# 2. Install SIAR
+sudo dnf install siar
+```
+
+Packages are GPG-signed and verified directly against repository metadata on install and update.
+
+</details>
+
+<details>
+<summary><strong>🏹 Arch Linux (AUR) Setup</strong></summary>
+
+```bash
+# Precompiled release binary (Recommended):
+paru -S siar-bin
+
+# Or build from source against latest git main:
+paru -S siar-git
+```
+
+</details>
 
 ---
 

@@ -1,0 +1,736 @@
+//! §85-§88: runtime configuration.
+//!
+//! * **TOML, strict.** Unknown keys are errors (`deny_unknown_fields`), so a
+//!   typo can't silently run with a default, and a secret pasted into the
+//!   file as a value is rejected rather than ignored.
+//! * **Secrets are referenced, never embedded** (§86). The file may say
+//!   *where* a secret lives (a file, an environment variable); it cannot
+//!   hold one. Secret files must be owner-only on Unix.
+//! * **Validated before use** (§88), with every problem reported at once.
+//! * **Hot reload is classified** (§87): only values that can change safely
+//!   at runtime are applied live; the rest are reported as *restart required*
+//!   instead of being pretended into effect.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct IpcConfig {
+    pub max_connections: usize,
+    pub requests_per_sec: u32,
+    pub write_timeout_ms: u64,
+    pub hello_timeout_ms: u64,
+}
+
+impl Default for IpcConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 32,
+            requests_per_sec: 200,
+            write_timeout_ms: 10_000,
+            hello_timeout_ms: 5_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ShutdownConfig {
+    pub grace_secs: u64,
+}
+
+impl Default for ShutdownConfig {
+    fn default() -> Self {
+        Self { grace_secs: 10 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PowerSection {
+    pub allow_background_bulk: bool,
+    pub allow_metered_bulk: bool,
+    pub multipath_on_battery: bool,
+    pub emergency_override: bool,
+}
+
+impl Default for PowerSection {
+    fn default() -> Self {
+        Self {
+            allow_background_bulk: true,
+            allow_metered_bulk: false,
+            multipath_on_battery: false,
+            emergency_override: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LoggingConfig {
+    pub level: String,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".into(),
+        }
+    }
+}
+
+/// Where a secret lives. **Never the secret itself.**
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SecretRef {
+    File { path: PathBuf },
+    Env { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SecretsConfig {
+    pub identity_key: Option<SecretRef>,
+    /// Passphrase for encrypted backups (`ctl backup`). A headless daemon
+    /// cannot prompt, so it reads this from a 0600 file or an environment
+    /// variable — never from the config text itself.
+    pub backup_passphrase: Option<SecretRef>,
+}
+
+/// §72-§73: whether this node must be enrolled before it does anything, and
+/// who may enrol it. **Local file only**: a provisioning payload may not
+/// carry this section (see `node::Provisioner::apply`), otherwise an admin's
+/// payload could change who the admins are.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct NodeSection {
+    /// Start unprovisioned (bootstrap listener only) until a signed payload
+    /// arrives.
+    pub require_provisioning: bool,
+    /// Ed25519 public keys (64 lowercase hex chars) allowed to provision.
+    /// A FROST group's root key is an ordinary Ed25519 key and works here.
+    pub admin_keys: Vec<String>,
+    /// The role of an **unattended** node that is configured by its local
+    /// file instead of enrolled with a signed payload. Local file only (a
+    /// payload cannot set `[node]`). Refused together with
+    /// `require_provisioning`: a node that must be enrolled takes its role
+    /// from the signed payload, never from a file anyone could edit.
+    pub role: crate::node::NodeRole,
+}
+
+pub const MAX_ADMIN_KEYS: usize = 16;
+
+/// Collect relay-mailbox items on a schedule (local file only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MailboxSection {
+    /// Relay tickets to collect from. Empty (the default) = never poll on a
+    /// schedule; `siar check-mailbox-anon` still works on demand.
+    pub relays: Vec<String>,
+    /// Seconds between collections (60 to 86 400).
+    pub interval_secs: u64,
+}
+
+impl Default for MailboxSection {
+    fn default() -> Self {
+        Self {
+            relays: Vec::new(),
+            interval_secs: 300,
+        }
+    }
+}
+
+pub const MAX_MAILBOX_RELAYS: usize = 8;
+pub const MAX_RELAY_TICKET_CHARS: usize = 4096;
+
+/// Remote administration (`comm-admin/1`, spec 16 §66-§71). **Local file
+/// only**, like `[node]`: a provisioning payload may not set it, otherwise a
+/// payload could appoint its own operators.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AdminSection {
+    /// Run the remote-admin endpoint at all. Off by default.
+    pub enabled: bool,
+    /// Publish the endpoint through Iroh's public discovery (§160: off by
+    /// default — without it only someone holding the id and an address can
+    /// reach the node).
+    pub discovery: bool,
+    /// Fixed address to listen on, e.g. `"0.0.0.0:7447"`, so operators have a
+    /// stable address to connect to. Unset = a random port each start.
+    pub bind: Option<String>,
+    pub operators: Vec<AdminOperatorEntry>,
+}
+
+/// One allowed remote operator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminOperatorEntry {
+    /// The operator's Iroh public key: 64 lowercase hex characters.
+    pub key: String,
+    /// `viewer`, `operator`, `security-admin` or `owner`.
+    pub role: String,
+    /// A short name for logs and the audit trail.
+    pub label: String,
+}
+
+pub const MAX_ADMIN_OPERATORS: usize = 64;
+pub const ADMIN_ROLES: [&str; 4] = ["viewer", "operator", "security-admin", "owner"];
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RuntimeConfig {
+    pub ipc: IpcConfig,
+    pub shutdown: ShutdownConfig,
+    pub power: PowerSection,
+    pub logging: LoggingConfig,
+    pub secrets: SecretsConfig,
+    pub node: NodeSection,
+    pub admin: AdminSection,
+    pub mailbox: MailboxSection,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ConfigError {
+    #[error("config is not valid TOML for this schema: {0}")]
+    Parse(String),
+    #[error("config has {} problem(s): {}", .0.len(), .0.join("; "))]
+    Invalid(Vec<String>),
+}
+
+const LOG_LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
+
+impl RuntimeConfig {
+    /// Parse **and** validate.
+    pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        let c: Self =
+            toml::from_str(text).map_err(|e| ConfigError::Parse(e.message().to_owned()))?;
+        c.validate().map(|()| c)
+    }
+
+    #[must_use]
+    pub fn to_toml(&self) -> String {
+        toml::to_string_pretty(self).unwrap_or_default()
+    }
+
+    /// Report every problem, not just the first.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let mut p = Vec::new();
+        if self.node.require_provisioning && self.node.role != crate::node::NodeRole::PersonalDevice
+        {
+            p.push(
+                "node.role cannot be set together with node.require_provisioning: \
+                 the role comes from the signed provisioning payload"
+                    .to_owned(),
+            );
+        }
+        if self.mailbox.relays.len() > MAX_MAILBOX_RELAYS {
+            p.push(format!(
+                "mailbox.relays has {} entries (max {MAX_MAILBOX_RELAYS})",
+                self.mailbox.relays.len()
+            ));
+        }
+        if self
+            .mailbox
+            .relays
+            .iter()
+            .any(|r| r.is_empty() || r.len() > MAX_RELAY_TICKET_CHARS)
+        {
+            p.push(format!(
+                "mailbox.relays entries must be 1 to {MAX_RELAY_TICKET_CHARS} characters"
+            ));
+        }
+        if !(60..=86_400).contains(&self.mailbox.interval_secs) {
+            p.push("mailbox.interval_secs must be between 60 and 86400".to_owned());
+        }
+        if self.node.admin_keys.len() > MAX_ADMIN_KEYS {
+            p.push(format!(
+                "node.admin_keys has more than {MAX_ADMIN_KEYS} keys"
+            ));
+        }
+        for k in &self.node.admin_keys {
+            let ok = k.len() == 64 && k.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            if !ok {
+                p.push("node.admin_keys entries must be 64 lowercase hex characters".to_owned());
+                break;
+            }
+        }
+        if self.admin.operators.len() > MAX_ADMIN_OPERATORS {
+            p.push(format!(
+                "admin.operators has more than {MAX_ADMIN_OPERATORS} entries"
+            ));
+        }
+        let mut seen_keys = std::collections::HashSet::new();
+        let mut seen_labels = std::collections::HashSet::new();
+        for o in &self.admin.operators {
+            let key_ok = o.key.len() == 64
+                && o.key
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+            let label_ok = !o.label.is_empty()
+                && o.label.len() <= 32
+                && o.label
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'));
+            if !key_ok {
+                p.push("admin.operators[].key must be 64 lowercase hex characters".to_owned());
+            }
+            if !ADMIN_ROLES.contains(&o.role.as_str()) {
+                p.push(format!(
+                    "admin.operators[].role must be one of {ADMIN_ROLES:?}"
+                ));
+            }
+            if !label_ok {
+                p.push(
+                    "admin.operators[].label must be 1-32 characters of a-z, 0-9, '.', '_', '-'"
+                        .to_owned(),
+                );
+            }
+            if !seen_keys.insert(o.key.clone()) {
+                p.push("admin.operators has a duplicate key".to_owned());
+            }
+            if !seen_labels.insert(o.label.clone()) {
+                p.push("admin.operators has a duplicate label".to_owned());
+            }
+        }
+        if let Some(b) = &self.admin.bind {
+            if b.parse::<std::net::SocketAddr>().is_err() {
+                p.push("admin.bind must be an address like \"0.0.0.0:7447\"".to_owned());
+            }
+        }
+        if self.admin.enabled && self.admin.operators.is_empty() {
+            p.push("admin.enabled needs at least one admin.operators entry".to_owned());
+        }
+        if self.node.require_provisioning && self.node.admin_keys.is_empty() {
+            p.push("node.require_provisioning needs at least one node.admin_keys entry".to_owned());
+        }
+        if !(1..=1024).contains(&self.ipc.max_connections) {
+            p.push("ipc.max_connections must be 1..=1024".to_owned());
+        }
+        if !(1..=100_000).contains(&self.ipc.requests_per_sec) {
+            p.push("ipc.requests_per_sec must be 1..=100000".to_owned());
+        }
+        if !(100..=300_000).contains(&self.ipc.write_timeout_ms) {
+            p.push("ipc.write_timeout_ms must be 100..=300000".to_owned());
+        }
+        if !(100..=60_000).contains(&self.ipc.hello_timeout_ms) {
+            p.push("ipc.hello_timeout_ms must be 100..=60000".to_owned());
+        }
+        if !(1..=600).contains(&self.shutdown.grace_secs) {
+            p.push("shutdown.grace_secs must be 1..=600".to_owned());
+        }
+        if !LOG_LEVELS.contains(&self.logging.level.as_str()) {
+            p.push(format!(
+                "logging.level must be one of {}",
+                LOG_LEVELS.join(", ")
+            ));
+        }
+        match &self.secrets.identity_key {
+            Some(SecretRef::Env { name })
+                if name.is_empty() || name.contains('=') || name.contains('\0') =>
+            {
+                p.push("secrets.identity_key env name is not a valid variable name".to_owned());
+            }
+            Some(SecretRef::File { path }) if path.as_os_str().is_empty() => {
+                p.push("secrets.identity_key file path is empty".to_owned());
+            }
+            _ => {}
+        }
+        if p.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigError::Invalid(p))
+        }
+    }
+
+    #[cfg(unix)]
+    #[must_use]
+    pub fn server_config(&self) -> crate::ipc::ServerConfig {
+        crate::ipc::ServerConfig {
+            max_connections: self.ipc.max_connections,
+            requests_per_sec: self.ipc.requests_per_sec,
+            write_timeout: Duration::from_millis(self.ipc.write_timeout_ms),
+            hello_timeout: Duration::from_millis(self.ipc.hello_timeout_ms),
+            ..Default::default()
+        }
+    }
+
+    #[must_use]
+    pub fn shutdown_grace(&self) -> Duration {
+        Duration::from_secs(self.shutdown.grace_secs)
+    }
+
+    /// Overlay the user-editable power section onto the deployment's base.
+    #[must_use]
+    pub fn power_policy(
+        &self,
+        base: siar_power::PowerPolicyConfig,
+    ) -> siar_power::PowerPolicyConfig {
+        siar_power::PowerPolicyConfig {
+            allow_background_bulk: self.power.allow_background_bulk,
+            allow_metered_bulk: self.power.allow_metered_bulk,
+            multipath_on_battery: self.power.multipath_on_battery,
+            emergency_override: self.power.emergency_override,
+            ..base
+        }
+    }
+}
+
+/// §87: what a reload did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReloadPlan {
+    /// Applied immediately.
+    pub applied: Vec<&'static str>,
+    /// Changed in the file but only effective after a restart.
+    pub restart_required: Vec<&'static str>,
+}
+
+/// Compare two *valid* configs.
+#[must_use]
+pub fn plan_reload(old: &RuntimeConfig, new: &RuntimeConfig) -> ReloadPlan {
+    let mut p = ReloadPlan::default();
+    let mut hot = |changed: bool, name| {
+        if changed {
+            p.applied.push(name);
+        }
+    };
+    hot(old.power != new.power, "power");
+    hot(old.logging != new.logging, "logging.level");
+    hot(old.shutdown != new.shutdown, "shutdown.grace_secs");
+    let mut cold = |changed: bool, name| {
+        if changed {
+            p.restart_required.push(name);
+        }
+    };
+    cold(old.ipc != new.ipc, "ipc");
+    cold(old.secrets != new.secrets, "secrets");
+    cold(old.node != new.node, "node");
+    cold(old.admin != new.admin, "admin");
+    cold(old.mailbox != new.mailbox, "mailbox");
+    p
+}
+
+/// A resolved secret. `Debug` never prints the bytes.
+pub struct Secret(Vec<u8>);
+
+impl Secret {
+    #[must_use]
+    pub fn expose(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(<redacted>)")
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SecretError {
+    #[error("secret is not available")]
+    Missing,
+    #[error("secret file is readable by other users; run chmod 600")]
+    TooPermissive,
+}
+
+impl SecretRef {
+    pub fn resolve(&self) -> Result<Secret, SecretError> {
+        match self {
+            Self::Env { name } => std::env::var_os(name)
+                .map(|v| Secret(v.to_string_lossy().into_owned().into_bytes()))
+                .ok_or(SecretError::Missing),
+            Self::File { path } => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = std::fs::metadata(path)
+                        .map_err(|_| SecretError::Missing)?
+                        .permissions()
+                        .mode();
+                    if mode & 0o077 != 0 {
+                        return Err(SecretError::TooPermissive);
+                    }
+                }
+                std::fs::read(path)
+                    .map(Secret)
+                    .map_err(|_| SecretError::Missing)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_config_is_all_defaults_and_round_trips() {
+        let c = RuntimeConfig::parse("").unwrap();
+        assert_eq!(c, RuntimeConfig::default());
+        assert_eq!(RuntimeConfig::parse(&c.to_toml()).unwrap(), c);
+    }
+
+    #[test]
+    fn typos_and_embedded_secrets_are_rejected_not_ignored() {
+        for bad in [
+            "[ipc]\nmax_connection = 5",
+            "password = \"hunter2\"",
+            "[secrets]\nidentity_key = \"abc\"",
+            "[secrets.identity_key]\nkind = \"file\"\npath = \"/x\"\nvalue = \"s3cret\"",
+        ] {
+            assert!(
+                matches!(RuntimeConfig::parse(bad), Err(ConfigError::Parse(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_validation_problem_is_reported_at_once() {
+        let e = RuntimeConfig::parse("[ipc]\nmax_connections = 0\nrequests_per_sec = 0\n[shutdown]\ngrace_secs = 9999\n[logging]\nlevel = \"loud\"").unwrap_err();
+        let ConfigError::Invalid(p) = e else { panic!() };
+        assert_eq!(p.len(), 4, "{p:?}");
+    }
+
+    #[test]
+    fn hot_and_cold_changes_are_classified_honestly() {
+        let old = RuntimeConfig::default();
+        let mut new = old.clone();
+        new.power.allow_metered_bulk = true;
+        new.logging.level = "debug".into();
+        new.ipc.max_connections = 64;
+        let p = plan_reload(&old, &new);
+        assert_eq!(p.applied, vec!["power", "logging.level"]);
+        assert_eq!(p.restart_required, vec!["ipc"]);
+        assert_eq!(plan_reload(&old, &old), ReloadPlan::default());
+    }
+
+    #[test]
+    fn power_section_overlays_but_keeps_the_deployment() {
+        let mut c = RuntimeConfig::default();
+        c.power.allow_metered_bulk = true;
+        let base = siar_power::PowerPolicyConfig {
+            deployment: siar_power::Deployment::AlwaysOn,
+            ..Default::default()
+        };
+        let p = c.power_policy(base);
+        assert!(p.allow_metered_bulk);
+        assert_eq!(p.deployment, siar_power::Deployment::AlwaysOn);
+    }
+
+    #[test]
+    fn secrets_are_resolved_by_reference_and_never_printed() {
+        std::env::set_var("SIAR_TEST_SECRET_X", "hunter2");
+        let s = SecretRef::Env {
+            name: "SIAR_TEST_SECRET_X".into(),
+        }
+        .resolve()
+        .unwrap();
+        assert_eq!(s.expose(), b"hunter2");
+        assert!(!format!("{s:?}").contains("hunter2"));
+        assert_eq!(
+            SecretRef::Env {
+                name: "SIAR_NOPE_NOT_SET".into()
+            }
+            .resolve()
+            .unwrap_err(),
+            SecretError::Missing
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_readable_secret_files_are_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!("siar-secret-{}", std::process::id()));
+        std::fs::write(&p, b"k").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let r = SecretRef::File { path: p.clone() };
+        assert_eq!(r.resolve().unwrap_err(), SecretError::TooPermissive);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(r.resolve().unwrap().expose(), b"k");
+        let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn node_section_is_validated() {
+        let ok = format!(
+            "[node]\nrequire_provisioning = true\nadmin_keys = [\"{}\"]\n",
+            "ab".repeat(32)
+        );
+        assert!(RuntimeConfig::parse(&ok).is_ok());
+        let none = "[node]\nrequire_provisioning = true\n";
+        assert!(RuntimeConfig::parse(none)
+            .unwrap_err()
+            .to_string()
+            .contains("admin_keys"));
+        let bad = "[node]\nadmin_keys = [\"nothex\"]\n";
+        assert!(RuntimeConfig::parse(bad).is_err());
+        let many = format!(
+            "[node]\nadmin_keys = [{}]\n",
+            vec![format!("\"{}\"", "ab".repeat(32)); MAX_ADMIN_KEYS + 1].join(",")
+        );
+        assert!(RuntimeConfig::parse(&many).is_err());
+    }
+
+    #[test]
+    fn admin_section_is_validated_and_changes_need_a_restart() {
+        let key = "ab".repeat(32);
+        let ok = format!(
+            "[admin]\nenabled = true\n[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"laptop\"\n"
+        );
+        let c = RuntimeConfig::parse(&ok).unwrap();
+        assert!(c.admin.enabled && c.admin.operators.len() == 1);
+        // enabled with nobody allowed is a misconfiguration, not "open".
+        assert!(RuntimeConfig::parse("[admin]\nenabled = true\n").is_err());
+        let with_bind =
+            |b: &str| format!("{ok}\n").replace("[admin]\n", &format!("[admin]\nbind = \"{b}\"\n"));
+        assert!(RuntimeConfig::parse(&with_bind("0.0.0.0:7447")).is_ok());
+        assert!(RuntimeConfig::parse(&with_bind("not-an-address")).is_err());
+        for bad in [
+            "[[admin.operators]]\nkey = \"nothex\"\nrole = \"owner\"\nlabel = \"a\"\n".to_string(),
+            format!("[[admin.operators]]\nkey = \"{key}\"\nrole = \"root\"\nlabel = \"a\"\n"),
+            format!("[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"Bad Label\"\n"),
+            format!("[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"a\"\n[[admin.operators]]\nkey = \"{key}\"\nrole = \"viewer\"\nlabel = \"b\"\n"),
+        ] {
+            assert!(RuntimeConfig::parse(&bad).is_err(), "{bad}");
+        }
+        let mut changed = c.clone();
+        changed.admin.discovery = true;
+        changed.node.require_provisioning = false;
+        let plan = plan_reload(&c, &changed);
+        assert_eq!(plan.restart_required, vec!["admin"]);
+        let mut n2 = c.clone();
+        n2.node.admin_keys = vec![key];
+        assert_eq!(plan_reload(&c, &n2).restart_required, vec!["node"]);
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| self.next() as u8).collect()
+        }
+        fn mutate(&mut self, src: &[u8]) -> Vec<u8> {
+            let mut v = src.to_vec();
+            for _ in 0..=self.below(4) {
+                match self.below(4) {
+                    0 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] ^= 1 << self.below(8);
+                    }
+                    1 if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v[i] = self.next() as u8;
+                    }
+                    2 => {
+                        let i = self.below(v.len() + 1);
+                        v.insert(i, self.next() as u8);
+                    }
+                    _ if !v.is_empty() => {
+                        let i = self.below(v.len());
+                        v.remove(i);
+                    }
+                    _ => {}
+                }
+            }
+            v
+        }
+    }
+
+    #[test]
+    fn mutated_and_random_config_text_never_panics_and_accepted_configs_validate() {
+        let key = "ab".repeat(32);
+        let seed = format!(
+            "[node]\nrequire_provisioning = true\nadmin_keys = [\"{key}\"]\n[admin]\nenabled = true\nbind = \"0.0.0.0:7447\"\n[[admin.operators]]\nkey = \"{key}\"\nrole = \"owner\"\nlabel = \"a\"\n[logging]\nlevel = \"debug\"\n"
+        );
+        assert!(RuntimeConfig::parse(&seed).is_ok());
+        let mut rng = Rng(0xC0DE_CAFE);
+        let mut accepted = 0u32;
+        for round in 0..15_000 {
+            let bytes = if round % 5 == 0 {
+                let n = rng.below(400);
+                rng.bytes(n)
+            } else {
+                rng.mutate(seed.as_bytes())
+            };
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let r = std::panic::catch_unwind(|| RuntimeConfig::parse(&text));
+            let r = r.unwrap_or_else(|_| panic!("config parse PANICKED on {text:?}"));
+            if let Ok(c) = r {
+                accepted += 1;
+                // Anything the parser accepts has passed validation: re-validating agrees.
+                assert!(
+                    c.validate().is_ok(),
+                    "accepted a config that does not validate: {text:?}"
+                );
+                // And an accepted admin section is never "enabled with nobody allowed".
+                assert!(!c.admin.enabled || !c.admin.operators.is_empty());
+                assert!(!c.node.require_provisioning || !c.node.admin_keys.is_empty());
+            }
+        }
+        assert!(
+            accepted > 100,
+            "the fuzzer should still reach valid configs: {accepted}"
+        );
+    }
+
+    #[test]
+    fn a_local_node_role_is_parsed_and_defaults_to_a_personal_device() {
+        use crate::node::NodeRole;
+        assert_eq!(
+            RuntimeConfig::parse("").unwrap().node.role,
+            NodeRole::PersonalDevice
+        );
+        for role in NodeRole::ALL {
+            let c = RuntimeConfig::parse(&format!("[node]\nrole = \"{}\"\n", role.name())).unwrap();
+            assert_eq!(c.node.role, role);
+        }
+        assert!(RuntimeConfig::parse("[node]\nrole = \"emperor\"\n").is_err());
+    }
+
+    #[test]
+    fn a_node_that_must_be_enrolled_cannot_name_its_own_role() {
+        let key = "ab".repeat(32);
+        let text = format!(
+            "[node]\nrequire_provisioning = true\nadmin_keys = [\"{key}\"]\nrole = \"relay-gateway\"\n"
+        );
+        let e = RuntimeConfig::parse(&text).unwrap_err().to_string();
+        assert!(e.contains("node.role"), "{e}");
+        // The default role next to require_provisioning is fine.
+        let ok = format!("[node]\nrequire_provisioning = true\nadmin_keys = [\"{key}\"]\n");
+        assert!(RuntimeConfig::parse(&ok).is_ok());
+    }
+
+    #[test]
+    fn mailbox_polling_is_off_by_default_and_bounded() {
+        let d = RuntimeConfig::parse("").unwrap();
+        assert!(d.mailbox.relays.is_empty());
+        assert_eq!(d.mailbox.interval_secs, 300);
+        let ok = RuntimeConfig::parse("[mailbox]\nrelays = [\"abc\"]\ninterval_secs = 120\n");
+        assert_eq!(ok.unwrap().mailbox.relays, vec!["abc".to_owned()]);
+        for bad in [
+            "[mailbox]\ninterval_secs = 59\n",
+            "[mailbox]\ninterval_secs = 86401\n",
+            "[mailbox]\nrelays = [\"\"]\n",
+            "[mailbox]\nrelays = [\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]\n",
+            "[mailbox]\nunknown = 1\n",
+        ] {
+            assert!(RuntimeConfig::parse(bad).is_err(), "{bad}");
+        }
+        let a = RuntimeConfig::parse("").unwrap();
+        let b = RuntimeConfig::parse("[mailbox]\nrelays = [\"abc\"]\n").unwrap();
+        assert_eq!(plan_reload(&a, &b).restart_required, vec!["mailbox"]);
+    }
+}

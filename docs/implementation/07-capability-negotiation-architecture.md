@@ -4,14 +4,22 @@ Source spec: `sys-arch/07-capability-negotiation-architecture.md` — 164 number
 
 ## Implementation status
 
-**~113/164 (69%) sections** (by section references in source; rounds N+1..N+3 completed).
-122 tests passing (114 unit + 8 property). Clippy `-D warnings` and fmt clean.
+**~119/164 (73%) sections** (by section references in source; rounds N+1..N+4 completed).
+138 tests passing (130 unit + 8 property). Clippy `-D warnings` and fmt clean.
 
 ## Implementing crate(s)
 
-- `siar-capability` — capability advertisements, hierarchical negotiation, lazy negotiation, directional negotiation, trust separation, UI adapter, and session resume.
+- `siar-capability` — capability advertisements, hierarchical negotiation, lazy negotiation, directional negotiation, trust separation, UI adapter, preference ordering, route filtering, snapshot persistence, dynamic resource limits, and session resume.
 
 ## Round-by-round history
+
+### Round N+4 (§71, §79, §82-83, §87-88)
+
+Added +6 sections:
+- **§71 Preference Ordering** (`preference`): Mode selection governed by *local preference → remote support → policy*; peer support operates strictly as a membership filter, preserving local authority.
+- **§79 Route Integration** (`route_filter`): Candidate session filtering for routing operations by capability requirements (`Capable`, `Lacks(id)`, `NotNegotiated`).
+- **§82–83 Event Log & Snapshot Persistence** (`snapshot`): Persisting `last_verified_peer_capabilities` as a bounded cache (`MAX_SNAPSHOT_BYTES = 64 KiB`) with integrity hashes and timestamps; gating writes via `PersistGate`.
+- **§87–88 Resource Capabilities & Dynamic Limits** (`resource_limits`): Negotiated limits modeled as ceilings with dynamic reduction under storage, battery, or memory pressure.
 
 ### Rounds N+1 through N+3
 
@@ -33,5 +41,5 @@ Defects fixed in `siar-capability`:
 
 Remaining sections to address:
 - §1-3 overview
-- §71, 77, 79-83, 87-88, 99, 115-117
+- §77, 80-81 (DTN/files wiring in their crates), 99, 115-117
 - §122-164 (testing matrix, phases, formal definition of done audit)

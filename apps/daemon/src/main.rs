@@ -16,6 +16,7 @@ mod app;
 mod backup;
 mod notify;
 mod roles;
+mod run_marker;
 #[cfg(windows)]
 mod winservice;
 
@@ -36,6 +37,7 @@ ctl commands:
   read-only <on|off>      refuse / allow mutations, Admin
   provision-status        provisioning state; the challenge while unprovisioned, Admin
   provision <file> <sig>  enrol this node with a signed payload (see `siar-root payload`), Admin
+  resources               memory/streams/connections/storage usage, pressure and overload mode, Observer
   diagnostics             redacted diagnostic bundle (versions, health, config, metrics, errors), Admin
   backup <abs-dir>        consistent backup into <abs-dir> (quiesces the daemon meanwhile), Admin
   restore <abs-dir>       restore from <abs-dir>; daemon must be in maintenance first, Admin
@@ -365,22 +367,36 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
         .as_deref()
         .and_then(|p| p.parent())
         .map(PathBuf::from);
-    let _upgrade = if replace {
-        let (Some(sock), Some(dir)) = (socket.as_deref(), socket_dir.as_deref()) else {
-            bail!("--replace needs a control socket (don’t combine it with --no-socket)");
-        };
-        let lock = siar_runtime::instance::UpgradeLock::acquire(dir)
-            .map_err(|e| anyhow!("another upgrade is in progress ({e:?})"))?;
-        match siar_runtime::instance::request_handoff(sock, Duration::from_secs(30)).await {
-            Ok(old) => {
-                tracing::info!(old_build = %old.old_build, "previous daemon stopped; taking over")
+    //
+    // Unix only: the handoff (`request_handoff`) is a Unix-socket exchange. A
+    // Windows daemon has no graceful takeover, so `--replace` is refused there
+    // with a clear message instead of silently doing something weaker.
+    let _upgrade: Option<siar_runtime::instance::UpgradeLock> = if replace {
+        #[cfg(unix)]
+        {
+            let (Some(sock), Some(dir)) = (socket.as_deref(), socket_dir.as_deref()) else {
+                bail!("--replace needs a control socket (don’t combine it with --no-socket)");
+            };
+            let lock = siar_runtime::instance::UpgradeLock::acquire(dir)
+                .map_err(|e| anyhow!("another upgrade is in progress ({e:?})"))?;
+            match siar_runtime::instance::request_handoff(sock, Duration::from_secs(30)).await {
+                Ok(old) => {
+                    tracing::info!(old_build = %old.old_build, "previous daemon stopped; taking over")
+                }
+                Err(siar_runtime::instance::HandoffError::NoDaemon) => {
+                    tracing::info!("no daemon running; starting fresh")
+                }
+                Err(e) => bail!("couldn’t take over from the running daemon: {e}"),
             }
-            Err(siar_runtime::instance::HandoffError::NoDaemon) => {
-                tracing::info!("no daemon running; starting fresh")
-            }
-            Err(e) => bail!("couldn’t take over from the running daemon: {e}"),
+            Some(lock)
         }
-        Some(lock)
+        #[cfg(not(unix))]
+        {
+            bail!(
+                "--replace (graceful takeover from a running daemon) is not supported on this \
+                 platform; stop the running daemon first"
+            )
+        }
     } else {
         None
     };
@@ -511,9 +527,17 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     );
     let backup_db_slot = backup_svc.db_slot();
 
+    // Part 08: the resource profile follows the node's effective role — the
+    // provisioned one if a signed payload set it, else the local file's.
+    let effective_role = match provisioner.as_ref().map(|p| p.state()) {
+        Some(siar_runtime::node::Provisioning::Provisioned(done)) => done.role,
+        _ => local_config.node.role,
+    };
+
     let app = app::DaemonApp::default();
     let mut builder = Runtime::builder()
         .app(app.clone())
+        .resource_profile(effective_role.resource_profile())
         .backup(backup_svc)
         .build_id(concat!("siar-daemon ", env!("CARGO_PKG_VERSION")))
         .config(config.clone())
@@ -625,6 +649,32 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     let mailbox_cfg = config.mailbox.clone();
     let hub_tx = cmd_tx.clone();
     let live = app.live.clone();
+    // Part 09 §138-§139: an unclean previous shutdown (marker left behind)
+    // makes this a thorough start. The marker is taken under the lock, once
+    // startup can no longer fail on configuration, and before the database opens.
+    let (run_marker, previous_clean) = match run_marker::RunMarker::begin(&data_dir) {
+        Ok((m, clean)) => (Some(m), clean),
+        Err(e) => {
+            tracing::warn!(error = %e, "couldn’t write the run marker; treating the last shutdown as unclean");
+            (None, false)
+        }
+    };
+    let recovery_mode = run_marker::mode_for(previous_clean);
+    if !previous_clean {
+        tracing::warn!(?recovery_mode, "the previous run did not shut down cleanly");
+    }
+
+    runtime.health.set(
+        "recovery",
+        siar_runtime::health::HealthState::Healthy,
+        if previous_clean {
+            "previous shutdown was clean".to_owned()
+        } else {
+            format!("previous shutdown was unclean; started in {recovery_mode:?} mode")
+        },
+        false,
+    );
+
     let (bus, lifecycle, supervisor) = (
         runtime.bus.clone(),
         runtime.lifecycle.clone(),
@@ -736,6 +786,8 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
         runtime.health.clone(),
     ));
     // §87: SIGHUP re-reads the config; cold changes are reported, not faked.
+    // Unix only: Windows has no SIGHUP (a restart picks up config changes there).
+    #[cfg(unix)]
     {
         let (rt, path) = (runtime.clone(), config_path.clone());
         let reload_prov = provisioner.clone();
@@ -788,6 +840,10 @@ async fn run(socket: Option<PathBuf>, config_path: Option<PathBuf>, replace: boo
     }
     if let Some(dir) = socket_dir.as_deref() {
         siar_runtime::instance::remove_meta(dir);
+    }
+    // Last thing before the lock is released: this stop was graceful.
+    if let Some(m) = run_marker {
+        m.finish();
     }
     if aborted > 0 {
         tracing::warn!(aborted, "forced shutdown aborted stragglers");
@@ -888,6 +944,7 @@ async fn ctl(socket: &std::path::Path, ron: bool, args: &[String]) -> Result<()>
         "health" => Request::Query(Query::Health),
         "power" => Request::Query(Query::Power),
         "metrics" => Request::Query(Query::Metrics),
+        "resources" => Request::Query(Query::Resources),
         "audit" => Request::Query(Query::Audit),
         "diagnostics" => Request::Query(Query::Diagnostics),
         "maintenance" | "read-only" => {

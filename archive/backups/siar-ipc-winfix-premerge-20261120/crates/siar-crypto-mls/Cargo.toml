@@ -1,0 +1,65 @@
+[package]
+name = "siar-crypto-mls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Every version here was read directly from openmls's own workspace
+# Cargo.toml (github.com/openmls/openmls, `main` branch, fetched
+# 2026-08-11) rather than guessed — see this crate's `lib.rs` doc
+# comment for why that distinction matters for a crypto dependency in
+# particular. `0.9.0-rc.1` / `0.6.0-rc.1` are genuinely the current
+# pins upstream, not a typo for a stable `0.9.0` that doesn't exist yet.
+[dependencies]
+siar-domain = { workspace = true }
+thiserror = { workspace = true }
+
+openmls = { version = "0.9.2", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_traits = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+# Reference crypto backend (RFC 9420 primitives via well-established
+# Rust crypto crates, not hand-rolled) — architecture.md §106's rule
+# ("Crypto primitives/protocol implementation must be selected very
+# conservatively and should preferably use audited implementations
+# rather than custom cryptography") applied to the *provider*, not just
+# the protocol: openmls itself implements zero cryptography, it only
+# implements the MLS state machine against whatever `OpenMlsProvider`
+# it's given (this crate's own `lib.rs` doc comment goes into this).
+openmls_rust_crypto = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+# `SignatureKeyPair` — the signing-key half of a credential. Confirmed
+# via openmls's own example code (`book_code.rs`) to be a *separate*
+# crate from the `BasicCredential` type itself, which lives inside
+# `openmls` core and is re-exported through `openmls::prelude`.
+#
+# `clonable` enabled deliberately, not guessed: confirmed from this
+# crate's own Cargo.toml.orig (`clonable = [] # Make the keys clonable`)
+# that `SignatureKeyPair` derives `Clone` only behind this feature — off
+# by default. `MlsGroupSession::create` (group.rs) needs to keep its own
+# copy of `founder_identity.signature_keys` alongside the identity that
+# still owns the original, which is exactly this feature's purpose.
+openmls_basic_credential = { version = "0.6.0", features = ["clonable", "draft-ietf-mls-pq-ciphersuites"] }
+# `MlsMessageOut::to_bytes()`/`MlsMessageIn::tls_deserialize_exact()`
+# used throughout `group.rs` are `tls_codec` trait methods openmls
+# re-exports via its prelude — declared directly here too since this
+# crate's own wire-boundary functions (`encode`/`decode` on
+# `MlsGroupSession`) name the trait explicitly rather than relying
+# entirely on the prelude glob.
+tls_codec = { version = "0.5", features = ["derive", "serde", "mls"] }
+# Durable MLS group state (`persistent.rs`) — pure Rust. `FileStorage` wraps
+# openmls's own in-memory store (`openmls_memory_storage`) and writes a RON
+# snapshot after every mutation; the delegating `StorageProvider` impl is
+# generated from `openmls_traits` by `cargo xtask gen-mls-storage`.
+# (Replaces `openmls_sqlite_storage`, which bundled C SQLite.)
+openmls_memory_storage = "0.6.0"
+ron = "0.10"
+serde = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+# Mirrors of `openmls_traits`' feature gates on `StorageProvider` methods
+# (`persistent_delegate.rs` is generated with the same gates). If anything in
+# the build enables one of these on `openmls_traits` without enabling it here,
+# `FileStorage` fails to compile ("not all trait items implemented") instead of
+# silently missing a method.
+[features]
+extensions-draft = ["openmls_traits/extensions-draft", "openmls_memory_storage/extensions-draft"]
+virtual-clients-draft = ["extensions-draft", "openmls_traits/virtual-clients-draft", "openmls_memory_storage/virtual-clients-draft"]

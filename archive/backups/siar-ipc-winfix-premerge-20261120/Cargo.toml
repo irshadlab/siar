@@ -1,0 +1,214 @@
+[workspace]
+resolver = "2"
+exclude = ["fuzz"]
+members = [
+    "crates/siar-domain",
+    "crates/siar-identity-multidevice",
+    "crates/siar-identity-audit-recorder",
+    "crates/siar-routing-policy",
+    "crates/siar-event-log",
+    "crates/siar-event-notify",
+    "crates/siar-event-registry",
+    "crates/siar-blob-manifest",
+    "crates/siar-file-transfer-service",
+    "crates/siar-files",
+    "crates/siar-dtn-bundle",
+    "crates/siar-dtn-bundle-service",
+    "crates/siar-power",
+    "crates/siar-ui-model",
+    "crates/siar-ui-sync",
+    "crates/siar-abuse",
+    "crates/siar-app-core",
+    "crates/siar-runtime",
+    "crates/siar-resource-limits",
+    "crates/siar-crash-recovery",
+    "crates/siar-capability",
+    "crates/siar-protocol",
+    "crates/siar-protocol-ext",
+    "crates/siar-crypto",
+    "crates/siar-crypto-mls",
+    "crates/siar-crypto-advanced",
+    "crates/siar-storage",
+    "crates/siar-remote-ingestion",
+    "crates/siar-startup-recovery",
+    "crates/siar-transport",
+    "crates/siar-messaging",
+    "crates/siar-ui-state",
+    "crates/siar-ui-slint",
+    "crates/siar-backup",
+    "crates/siar-media-core",
+    # siar-media-av1 and siar-media-audio are desktop-only (real Opus/
+    # dav1d C dependencies with no configured Android cross-compilation
+    # story — see `cargo xtask android-native` (xtask/src/android.rs) for the
+    # real errors this produces if a full-workspace `cargo ndk build`
+    # is ever attempted). Android uses siar-media-android's hardware
+    # codec path instead. Never add these two to
+    # xtask/src/android.rs's CRATES list.
+    "crates/siar-media-av1",
+    "crates/siar-media-audio",
+    "crates/siar-media-android",
+    "crates/siar-media-image",
+    "crates/siar-calls",
+    "crates/siar-transport-wifi-direct",
+    "crates/siar-transport-wifi-aware",
+    "crates/siar-transport-bluetooth-classic",
+    "crates/siar-transport-ble",
+    "crates/siar-transport-ble-android",
+    "crates/siar-emergency",
+    "crates/siar-emergency-service",
+    "crates/siar-testkit",
+    "crates/siar-connectivity",
+    "apps/cli",
+    "apps/desktop",
+    "apps/emergency-node",
+    "apps/daemon",
+    "apps/android/rust-jni-glue",
+    "apps/android/messaging-jni",
+    "workspace-hack",
+    "apps/root-ceremony",
+    "crates/siar-admin",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/irshadlab/siar"
+homepage = "https://siar.irshadlab.org"
+authors = ["Irshad Lab <contact@irshadlab.org>", "SIAR Contributors"]
+
+[workspace.metadata.crane]
+name = "siar-workspace"
+
+[workspace.dependencies]
+siar-domain = { path = "crates/siar-domain" }
+siar-identity-multidevice = { path = "crates/siar-identity-multidevice" }
+siar-identity-audit-recorder = { path = "crates/siar-identity-audit-recorder" }
+siar-routing-policy = { path = "crates/siar-routing-policy" }
+siar-event-log = { path = "crates/siar-event-log" }
+siar-event-notify = { path = "crates/siar-event-notify" }
+siar-event-registry = { path = "crates/siar-event-registry" }
+siar-blob-manifest = { path = "crates/siar-blob-manifest" }
+siar-file-transfer-service = { path = "crates/siar-file-transfer-service" }
+siar-files = { path = "crates/siar-files" }
+siar-dtn-bundle = { path = "crates/siar-dtn-bundle" }
+siar-dtn-bundle-service = { path = "crates/siar-dtn-bundle-service" }
+siar-power = { path = "crates/siar-power" }
+siar-ui-model = { path = "crates/siar-ui-model" }
+siar-ui-sync = { path = "crates/siar-ui-sync" }
+siar-abuse = { path = "crates/siar-abuse" }
+siar-app-core = { path = "crates/siar-app-core" }
+siar-runtime = { path = "crates/siar-runtime" }
+siar-resource-limits = { path = "crates/siar-resource-limits" }
+siar-crash-recovery = { path = "crates/siar-crash-recovery" }
+siar-capability = { path = "crates/siar-capability" }
+siar-protocol = { path = "crates/siar-protocol" }
+siar-protocol-ext = { path = "crates/siar-protocol-ext" }
+siar-crypto = { path = "crates/siar-crypto" }
+siar-crypto-mls = { path = "crates/siar-crypto-mls" }
+siar-crypto-advanced = { path = "crates/siar-crypto-advanced" }
+siar-storage = { path = "crates/siar-storage" }
+siar-remote-ingestion = { path = "crates/siar-remote-ingestion" }
+siar-startup-recovery = { path = "crates/siar-startup-recovery" }
+siar-transport = { path = "crates/siar-transport" }
+siar-messaging = { path = "crates/siar-messaging" }
+siar-ui-state = { path = "crates/siar-ui-state" }
+siar-ui-slint = { path = "crates/siar-ui-slint" }
+siar-backup = { path = "crates/siar-backup" }
+siar-media-core = { path = "crates/siar-media-core" }
+siar-connectivity = { path = "crates/siar-connectivity" }
+siar-transport-ble = { path = "crates/siar-transport-ble" }
+siar-media-image = { path = "crates/siar-media-image" }
+siar-emergency = { path = "crates/siar-emergency" }
+siar-emergency-service = { path = "crates/siar-emergency-service" }
+siar-admin = { path = "crates/siar-admin" }
+
+# --- dev/analysis tooling ---
+# Cargo dependency graph analysis — tracks/queries workspace dependency
+# relationships, identifies transitive deps, and powers cargo-hakari for
+# build optimisation. Dev-only, never compiled into release binaries.
+guppy = "0.17"
+
+# --- Slint (desktop UI) ---
+# Pinned exactly: 1.16.1 is the newest release whose MSRV (1.88) fits the
+# workspace's rustc 1.91. 1.17+ require rustc 1.92 — bump rust-toolchain.toml
+# and every rust-version together before moving these.
+slint = { version = "=1.16.1", default-features = false }
+slint-build = "=1.16.1"
+
+# --- pure-Rust, zero-overhead-first choices ---
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }
+# Lets `siar-testkit::mesh_sim` call `siar_dtn_bundle`'s async
+# `BundleStore` trait synchronously via `block_on` — everything that
+# trait does here resolves immediately (no real disk/network I/O), so
+# this never actually blocks on anything; it's the standalone
+# executor, not the full `futures` facade crate or a `tokio` runtime,
+# matching this crate's own "no I/O at all" stated scope (see
+# `siar-testkit`'s `lib.rs` doc comment).
+futures-executor = "0.3"
+serde = { version = "1", features = ["derive"] }
+ron = "0.10"
+postcard = { version = "1", features = ["alloc"] }
+bytes = { version = "1", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+# §83 "Property Tests" — arbitrary-case generation for the event log's
+# own stated invariants (duplicate-safety, rebuild-equals-live, strictly
+# increasing stream versions, atomic failure, checkpoint never ahead of
+# applied state), replacing single-scenario example tests for those
+# specific checks. Pure Rust, no proc-macro-heavy alternative needed for
+# this crate's own usage (no `proptest-derive`).
+proptest = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = { version = "1", features = ["derive"] }
+
+# crypto: RustCrypto (pure Rust, audited-lineage, no OpenSSL/C)
+blsful = { version = "4.2", default-features = false, features = ["rust"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "serde", "zeroize"] }
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+# Password → key for encrypted backups. Argon2id (memory-hard), pure Rust.
+argon2 = "0.5"
+# Hidden passphrase prompt for the backup commands.
+rpassword = "7"
+rand_core = { version = "0.6", features = ["std"] }
+blake3 = "1"
+
+# storage: pure-Rust embedded SQL (replaces SQLite/rusqlite per explicit instruction)
+stoolap = "0.4.2"
+# stoolap 0.4's `Value`/`ToParam`/`FromValue` have no blob variant yet —
+# `BLOB` columns are parsed but stored as `DataType::Text` internally
+# (confirmed in stoolap's own `executor/ddl.rs`). Ciphertext therefore
+# goes in as base64 text, not raw bytes — see siar-storage's blob_codec.rs.
+base64 = "0.22"
+
+# Cross-platform data/config directory resolution (XDG on Linux, Known
+# Folder API on Windows, Standard Directory on macOS) — added for
+# `apps/desktop`'s persistent identity/database/contact-book work.
+# Pure Rust, tiny, no unsafe beyond what `dirs-sys` itself needs for the
+# underlying OS calls — picked over hand-rolling `$HOME/.local/share`
+# parsing, which would silently ignore `XDG_DATA_HOME` and break outright
+# on Windows, a real correctness gap given this project's stated
+# Linux+Windows+Android target set.
+directories = "5.0"
+
+async-trait = "0.1"
+# 0.95.1 pulled in iroh-base 0.95.1, which pins ed25519-dalek "=3.0.0-pre.1"
+# exactly — a pre-release with a real upstream bug (pkcs8::Error::KeyMalformed
+# used as a fn instead of being constructed, and `?` can't convert KeyError to
+# pkcs8::Error). Fixed from iroh-base 1.0.0 onward, which depends on the
+# stable ed25519-dalek 3.0.0. Bumping the whole iroh line to stable 1.x here.
+iroh = "1.0.3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = true
+
+[patch.crates-io]
+zkryptium = { path = "patches/zkryptium" }

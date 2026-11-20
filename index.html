@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIAR Package Repositories</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --heading: #f0f6fc;
+      --accent: #58a6ff;
+      --code-bg: #090d13;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    h1, h2, h3 { color: var(--heading); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.85em;
+      font-weight: 600;
+      background: #1f6feb33;
+      color: #58a6ff;
+      margin-bottom: 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+      margin-top: 30px;
+    }
+    @media (min-width: 768px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+      overflow-x: auto;
+      font-size: 0.9em;
+      color: #79c0ff;
+    }
+    code { font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <span class="badge">Official Distribution</span>
+  <h1>SIAR Package Repositories</h1>
+  <p>Install and automatically receive updates for <strong>SIAR (Survivable Identity & Autonomous Routing)</strong> across Linux distributions and Windows.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>🐧 Ubuntu &amp; Debian (APT)</h3>
+      <p>Add the official APT repository to receive automated updates:</p>
+      <pre><code># 1. Download official GPG key
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://irshadlab.github.io/siar/KEY.gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/siar.gpg
+sudo chmod a+r /etc/apt/keyrings/siar.gpg
+
+# 2. Add repository source
+echo "deb [signed-by=/etc/apt/keyrings/siar.gpg] https://irshadlab.github.io/siar stable main" | sudo tee /etc/apt/sources.list.d/siar.list
+
+# 3. Update &amp; Install SIAR
+sudo apt update
+sudo apt install siar</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>🎩 Fedora &amp; Red Hat (DNF / RPM)</h3>
+      <p>Add the official RPM repository to receive automated updates:</p>
+      <pre><code># 1. Add repository configuration
+sudo curl -fsSL https://irshadlab.github.io/siar/rpm/siar.repo -o /etc/yum.repos.d/siar.repo
+
+# 2. Install SIAR
+sudo dnf install siar</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>🏹 Arch Linux (AUR)</h3>
+      <p>Install via your preferred AUR helper:</p>
+      <pre><code># Precompiled binary (Recommended)
+paru -S siar-bin
+
+# Or build from source
+paru -S siar-git</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>🪟 Windows (winget / ZIP)</h3>
+      <p>Install via Windows Package Manager or GitHub release:</p>
+      <pre><code># Direct ZIP Download
+Available on GitHub Releases
+
+# Or extract and run:
+.\siar-desktop.exe</code></pre>
+    </div>
+  </div>
+
+  <footer style="margin-top: 50px; text-align: center; border-top: 1px solid var(--border); padding-top: 20px; font-size: 0.9em;">
+    <p>Maintained by <a href="https://github.com/irshadlab">Irshad Lab</a> • <a href="https://github.com/irshadlab/siar">GitHub Source Repository</a></p>
+  </footer>
+</body>
+</html>

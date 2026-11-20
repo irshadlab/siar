@@ -1,0 +1,18 @@
+Origin: SIAR
+Label: SIAR
+Suite: stable
+Codename: stable
+Version: 0.1.0
+Architectures: amd64
+Components: main
+Description: Official APT repository for SIAR (Survivable Identity & Autonomous Routing)
+Date: Fri, 20 Nov 2026 22:55:03 GMT
+MD5Sum:
+ dcdd5631132814ae3d467f1578cd160c 719 main/binary-amd64/Packages
+ f357585dde47502ef5b15e9c1b45516c 495 main/binary-amd64/Packages.gz
+SHA1:
+ 1702bde0175a104ce15c0bb85e61bbcb777e5a94 719 main/binary-amd64/Packages
+ eac08632651b3e0bc71637fc2f1664e3f478b5be 495 main/binary-amd64/Packages.gz
+SHA256:
+ 0a6a60dac71c1d0d2b027505efff470ef50af484f4ec0f7a65e8ee1d507d6ef1 719 main/binary-amd64/Packages
+ 9ef890193882e01d3be46f625fbe060490a3bfa5a3037b69f544793ba54d86d3 495 main/binary-amd64/Packages.gz

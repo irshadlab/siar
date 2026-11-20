@@ -1,0 +1,19 @@
+Package: siar
+Version: 0.1.0~alpha.2
+Architecture: amd64
+Section: net
+Priority: optional
+Maintainer: Irshad Ali <irshadali5@proton.me>
+Installed-Size: 55595
+Depends: libasound2, libgtk-3-0, libssl3 | libssl1.1
+Description: Survivable Identity & Autonomous Routing: decentralized, offline-first
+ messaging
+ Survivable Identity & Autonomous Routing (SIAR):
+ Local-first, zero-infrastructure, multi-transport, offline-first
+ decentralized messaging and delay-tolerant networking platform.
+Filename: pool/main/s/siar/siar_0.1.0-alpha.2_amd64.deb
+Size: 17275440
+MD5sum: f77711035716034ab2d561d9de451b2d
+SHA1: 2c5ed5b9d023ddb0e770b334465ea5e30f0df7b0
+SHA256: 802b7187c197dd12664b79f55b236680e12e7d3c623271b7793ab4cec5accc97
+

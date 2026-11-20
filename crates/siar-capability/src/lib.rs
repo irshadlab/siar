@@ -6,6 +6,16 @@
 //! against the spec's own section numbers rather than a shallow first
 //! pass across all 164 sections.
 //!
+//! ## Round N+5 — §115-117
+//!
+//! - [`fallback`] — degraded plans instead of failures, read straight off the
+//!   negotiated set: files (`parallel` missing + `resume` present →
+//!   single-stream resumable; no fixed chunking → no `files/1` at all), DTN
+//!   (no blob-chunk relay → send text/SOS, *defer* the large file; over the
+//!   negotiated bundle size → refuse), routing (a caller-ordered fallback chain
+//!   that skips unsupported and already-failed transports). A limit the peer
+//!   did not advertise is reported as `None`, never invented.
+//!
 //! ## Round N+4 — §71, 79, 82-83, 87-88
 //!
 //! - [`preference`] — §71: a mode is chosen by *local preference, then remote
@@ -207,6 +217,7 @@ pub mod epoch;
 pub mod error;
 pub mod extension;
 pub mod failure;
+pub mod fallback;
 pub mod files_extension;
 pub mod guard;
 pub mod hash;

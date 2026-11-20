@@ -3,11 +3,61 @@ name = "siar-desktop"
 version.workspace = true
 edition.workspace = true
 license = "AGPL-3.0-or-later"
+description = "Survivable Identity & Autonomous Routing: decentralized, offline-first messaging"
 rust-version = "1.91"   # inherits the iroh/stoolap floor via siar-messaging
 
 [[bin]]
 name = "siar-desktop"
 path = "src/main.rs"
+
+[package.metadata.deb]
+name = "siar"
+maintainer = "Irshad Ali <irshadali5@proton.me>"
+copyright = "2026 Irshad Ali"
+extended-description = """\
+Survivable Identity & Autonomous Routing (SIAR):
+Local-first, zero-infrastructure, multi-transport, offline-first
+decentralized messaging and delay-tolerant networking platform."""
+section = "net"
+priority = "optional"
+depends = "libgtk-3-0, libasound2, libssl3 | libssl1.1"
+assets = [
+    ["../../target/release/siar", "usr/bin/", "755"],
+    ["../../target/release/siar-daemon", "usr/bin/", "755"],
+    ["../../target/release/siar-desktop", "usr/bin/", "755"],
+    ["../../assets/branding/icon.png", "usr/share/pixmaps/siar.png", "644"],
+    ["../../assets/branding/icon-16.png", "usr/share/icons/hicolor/16x16/apps/siar.png", "644"],
+    ["../../assets/branding/icon-32.png", "usr/share/icons/hicolor/32x32/apps/siar.png", "644"],
+    ["../../assets/branding/icon-64.png", "usr/share/icons/hicolor/64x64/apps/siar.png", "644"],
+    ["../../assets/branding/icon-128.png", "usr/share/icons/hicolor/128x128/apps/siar.png", "644"],
+    ["../../assets/branding/icon-256.png", "usr/share/icons/hicolor/256x256/apps/siar.png", "644"],
+    ["../../assets/branding/icon-512.png", "usr/share/icons/hicolor/512x512/apps/siar.png", "644"],
+    ["../../packaging/desktop/siar.desktop", "usr/share/applications/siar.desktop", "644"],
+    ["../../README.md", "usr/share/doc/siar/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "siar"
+summary = "Survivable Identity & Autonomous Routing: decentralized messaging"
+description = """\
+Survivable Identity & Autonomous Routing (SIAR):
+Local-first, zero-infrastructure, multi-transport, offline-first
+decentralized messaging and delay-tolerant networking platform."""
+license = "AGPL-3.0-or-later"
+assets = [
+    { source = "../../target/release/siar", dest = "/usr/bin/siar", mode = "755" },
+    { source = "../../target/release/siar-daemon", dest = "/usr/bin/siar-daemon", mode = "755" },
+    { source = "../../target/release/siar-desktop", dest = "/usr/bin/siar-desktop", mode = "755" },
+    { source = "../../assets/branding/icon.png", dest = "/usr/share/pixmaps/siar.png", mode = "644" },
+    { source = "../../assets/branding/icon-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/siar.png", mode = "644" },
+    { source = "../../assets/branding/icon-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/siar.png", mode = "644" },
+    { source = "../../assets/branding/icon-64.png", dest = "/usr/share/icons/hicolor/64x64/apps/siar.png", mode = "644" },
+    { source = "../../assets/branding/icon-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/siar.png", mode = "644" },
+    { source = "../../assets/branding/icon-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/siar.png", mode = "644" },
+    { source = "../../assets/branding/icon-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/siar.png", mode = "644" },
+    { source = "../../packaging/desktop/siar.desktop", dest = "/usr/share/applications/siar.desktop", mode = "644" },
+    { source = "../../README.md", dest = "/usr/share/doc/siar/README.md", mode = "644" },
+]
 
 [dependencies]
 siar-app-core.workspace = true

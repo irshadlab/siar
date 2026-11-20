@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=SIAR
+GenericName=Decentralized Secure Messenger
+Comment=Sovereign Infrastructure for Autonomous Resilience (P2P / Mesh / E2EE Messenger)
+Exec=siar-desktop
+Icon=siar
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;Chat;P2P;
+StartupWMClass=siar-desktop
+Keywords=chat;messaging;mesh;p2p;encrypted;e2ee;iroh;dtn;

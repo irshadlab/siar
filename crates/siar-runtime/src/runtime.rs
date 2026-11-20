@@ -74,6 +74,7 @@ pub struct RuntimeBuilder {
     config: RuntimeConfig,
     backup: Option<Arc<dyn BackupService>>,
     provisioning: Option<Arc<dyn ProvisioningService>>,
+    resource_profile: siar_resource_limits::profile::ResourceProfile,
 }
 
 impl Default for RuntimeBuilder {
@@ -87,6 +88,7 @@ impl Default for RuntimeBuilder {
             config: RuntimeConfig::default(),
             backup: None,
             provisioning: None,
+            resource_profile: siar_resource_limits::profile::ResourceProfile::Desktop,
         }
     }
 }
@@ -131,6 +133,12 @@ impl RuntimeBuilder {
         self.build_id = id.to_owned();
         self
     }
+    /// Part 08: which resource profile (Embedded … Server) this runtime hosts.
+    #[must_use]
+    pub fn resource_profile(mut self, p: siar_resource_limits::profile::ResourceProfile) -> Self {
+        self.resource_profile = p;
+        self
+    }
     #[must_use]
     pub fn config(mut self, c: RuntimeConfig) -> Self {
         self.config = c;
@@ -144,7 +152,12 @@ impl RuntimeBuilder {
         let instance_id = uuid::Uuid::new_v4().as_u128();
         let metrics = Arc::new(Metrics::default());
         let power = self.config.power_policy(self.power);
+        // A built-in profile is a validated set of limits; failing here is a bug in
+        // the profile tables, caught by `every_profile_builds` below.
+        let resources = siar_resource_limits::runtime::ResourceRuntime::new(self.resource_profile)
+            .expect("built-in resource profiles are valid");
         Runtime {
+            resources,
             supervisor: Supervisor::new(lifecycle.clone(), health.clone())
                 .with_metrics(metrics.clone()),
             metrics,
@@ -179,6 +192,8 @@ pub struct Runtime {
     pub audit: AuditLog,
     /// §95: bounded ring of recent warnings/errors for the diagnostic bundle.
     pub recent_errors: RecentErrors,
+    /// Part 08 (§187-188): budgets, pools, quotas and overload mode for this process.
+    pub resources: siar_resource_limits::runtime::ResourceRuntime,
     /// §112/§113: >0 while something (a backup) needs the runtime to *stay*
     /// quiesced; `set-maintenance off` / `set-read-only off` are refused.
     pub(crate) holds: Arc<AtomicUsize>,
@@ -310,6 +325,15 @@ impl Runtime {
         }
     }
 
+    /// Part 08 developer view: usage lines plus the current overload mode.
+    #[must_use]
+    pub fn resources_text(&self) -> String {
+        let snap = self.resources.snapshot();
+        let mut lines = siar_resource_limits::feedback::developer_lines(&snap, &[]);
+        lines.push(format!("Mode: {:?}", self.resources.mode()));
+        lines.join("\n")
+    }
+
     pub async fn query(&self, q: Query) -> Result<Reply, RuntimeError> {
         if !self.state().accepts_reads() {
             return Err(RuntimeError::NotReady);
@@ -325,6 +349,7 @@ impl Runtime {
                 None => Err(RuntimeError::Unsupported),
             },
             Query::Diagnostics => Ok(Reply::Bytes(self.diagnostics().render_text().into_bytes())),
+            Query::Resources => Ok(Reply::Bytes(self.resources_text().into_bytes())),
             Query::App { name, data } => self.app.query(&name, data).await.map(Reply::Bytes),
         }
     }
@@ -787,6 +812,41 @@ mod tests {
             )
             .await,
             Err(RuntimeError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn every_resource_profile_builds_and_the_runtime_reports_it() {
+        use siar_resource_limits::profile::ResourceProfile as P;
+        for p in [
+            P::Embedded,
+            P::MobileLow,
+            P::MobileNormal,
+            P::Desktop,
+            P::Server,
+        ] {
+            let rt = Runtime::builder().resource_profile(p).build();
+            let text = rt.resources_text();
+            assert!(
+                text.contains("Memory") && text.contains("Mode: Normal"),
+                "{text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_resources_query_returns_text_for_an_observer() {
+        let rt = Runtime::builder().build();
+        rt.start(async { Ok::<_, String>(()) }, async { Ok::<_, String>(()) })
+            .await
+            .unwrap();
+        let Reply::Bytes(b) = rt.query(Query::Resources).await.unwrap() else {
+            panic!("expected text")
+        };
+        assert!(String::from_utf8(b).unwrap().contains("Connections"));
+        assert_eq!(
+            Query::Resources.required_role(),
+            crate::protocol::Role::Observer
         );
     }
 }

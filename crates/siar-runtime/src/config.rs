@@ -345,7 +345,8 @@ impl RuntimeConfig {
         }
     }
 
-    #[cfg(unix)]
+    /// IPC server limits from `[ipc]`. Available on every platform: the Unix
+    /// socket and the Windows named-pipe servers share one [`ServerConfig`].
     #[must_use]
     pub fn server_config(&self) -> crate::ipc::ServerConfig {
         crate::ipc::ServerConfig {

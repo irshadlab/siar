@@ -8,6 +8,8 @@ description = "Daemon & headless runtime (sys-arch Part 16): lifecycle, supervis
 
 [dependencies]
 siar-power = { path = "../siar-power" }
+# Part 08 facade: limits, overload mode and snapshots hosted by the runtime (§187-188).
+siar-resource-limits = { path = "../siar-resource-limits" }
 serde.workspace = true
 postcard.workspace = true
 toml = "1"
@@ -30,6 +32,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 
 [target.'cfg(unix)'.dependencies]
 sd-notify = "0.5"
+# Effective uid for the no-`XDG_RUNTIME_DIR` socket fallback (macOS, minimal
+# containers). `rustix` is the safe wrapper (`geteuid` is not `unsafe` here),
+# which keeps this crate's `#![forbid(unsafe_code)]` intact — raw `libc` would not.
+rustix = { version = "1", default-features = false, features = ["process"] }
 
 [target.'cfg(windows)'.dependencies]
 # U16CStr for the pipe DACL's SDDL string (interprocess's own signature).

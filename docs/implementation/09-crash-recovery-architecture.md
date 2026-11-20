@@ -21,4 +21,4 @@ Definition of Done (§184) is an executable test audit: 16 Done / 4 PartiallyDon
 
 ## Known gaps / integration tasks
 
-- **Workspace Wiring**: No other workspace crate depends on `siar-crash-recovery` yet (`measure_wiring` reports it). Wiring the recovery coordinator into the daemon/node runtime (`siar-runtime`) is the remaining integration step.
+- **Workspace Wiring**: ✅ Completed. `siar-crash-recovery` is wired into `apps/daemon` via `run_marker::RunMarker` (§138–§139), tracking clean/unclean shutdowns, feeding `RecoveryMode` into daemon startup, and registering recovery state with `runtime.health`.

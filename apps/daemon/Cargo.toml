@@ -23,6 +23,7 @@ siar-crypto-mls.workspace = true
 siar-backup.workspace = true
 siar-storage.workspace = true
 siar-admin = { path = "../../crates/siar-admin" }
+siar-crash-recovery = { path = "../../crates/siar-crash-recovery" }
 iroh.workspace = true
 tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true

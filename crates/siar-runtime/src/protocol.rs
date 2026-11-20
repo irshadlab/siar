@@ -101,6 +101,9 @@ pub enum Query {
     /// §73: provisioning state and, while unprovisioned, the challenge for
     /// the QR. Admin. Appended last.
     ProvisionStatus,
+    /// Part 08: resource usage, pressure and overload mode as text lines. Observer.
+    /// Appended last (postcard enums are order-sensitive).
+    Resources,
 }
 
 impl Query {

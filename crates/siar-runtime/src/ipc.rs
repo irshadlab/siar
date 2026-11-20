@@ -132,6 +132,7 @@ fn local_name(path: &Path) -> io::Result<Name<'static>> {
     #[cfg(unix)]
     {
         use interprocess::local_socket::GenericFilePath;
+        check_socket_path_len(path, SUN_PATH_CAPACITY)?;
         path.to_path_buf().to_fs_name::<GenericFilePath>()
     }
     #[cfg(not(unix))]
@@ -601,20 +602,19 @@ impl IpcClient {
 /// Default per-user socket path (§78).
 ///
 /// Unix: `$XDG_RUNTIME_DIR/siar/<name>.sock`, falling back to
-/// `/tmp/siar-<uid>/<name>.sock` which `bind_local` creates `0700`.
+/// `/tmp/siar-<euid>/<name>.sock` which `bind_local` creates `0700`. The
+/// fallback is what macOS uses (it has no `XDG_RUNTIME_DIR`); the uid comes
+/// from `geteuid(2)`, never from Linux-only `/proc`, so it is the real user
+/// and not `0`.
 /// Windows: `%LOCALAPPDATA%\siar\<name>.sock` — the file is never created;
 /// it only identifies the per-user pipe (see [`pipe_name_for`]).
 #[must_use]
 pub fn default_socket_path(name: &str) -> PathBuf {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
         match std::env::var_os("XDG_RUNTIME_DIR") {
             Some(d) if !d.is_empty() => PathBuf::from(d).join("siar").join(format!("{name}.sock")),
-            _ => {
-                let uid = std::fs::metadata("/proc/self").map_or(0, |m| m.uid());
-                PathBuf::from(format!("/tmp/siar-{uid}")).join(format!("{name}.sock"))
-            }
+            _ => fallback_socket_path(rustix::process::geteuid().as_raw(), name),
         }
     }
     #[cfg(not(unix))]
@@ -624,6 +624,50 @@ pub fn default_socket_path(name: &str) -> PathBuf {
             .unwrap_or_else(std::env::temp_dir);
         base.join("siar").join(format!("{name}.sock"))
     }
+}
+
+/// The per-uid fallback location, short on purpose: it must fit `sun_path`
+/// (104 bytes on Darwin/BSD, 108 on Linux) with room for a long `name`.
+#[cfg(unix)]
+fn fallback_socket_path(uid: u32, name: &str) -> PathBuf {
+    PathBuf::from(format!("/tmp/siar-{uid}")).join(format!("{name}.sock"))
+}
+
+/// `sizeof(sockaddr_un.sun_path)`: Darwin and the BSDs are stricter (104)
+/// than Linux (108).
+#[cfg(unix)]
+const SUN_PATH_CAPACITY: usize = if cfg!(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)) {
+    104
+} else {
+    108
+};
+
+/// A Unix socket path must fit `sun_path` **including its NUL**. Checked up
+/// front so an over-long path (typical on macOS, where `$TMPDIR` is already
+/// ~50 bytes) fails with an actionable message instead of an opaque
+/// `InvalidInput` from `bind(2)`/`connect(2)`.
+#[cfg(unix)]
+fn check_socket_path_len(path: &Path, capacity: usize) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let len = path.as_os_str().as_bytes().len();
+    if len < capacity {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "socket path is {len} bytes but this platform allows at most {} \
+             ({}): use a shorter --socket path or a shorter XDG_RUNTIME_DIR",
+            capacity - 1,
+            path.display()
+        ),
+    ))
 }
 
 const _: () = assert!(MAX_FRAME >= 64 * 1024);
@@ -1061,5 +1105,42 @@ mod tests {
         let m = String::from_utf8(m).unwrap();
         assert!(m.contains("siar_ipc_unauthorized_total 2"), "{m}");
         rt.shutdown(Duration::from_secs(1)).await;
+    }
+    #[cfg(unix)]
+    #[test]
+    fn fallback_socket_path_is_per_user_and_fits_darwin_sun_path() {
+        let p = fallback_socket_path(501, "daemon");
+        assert_eq!(p, PathBuf::from("/tmp/siar-501/daemon.sock"));
+        // Even a 6-digit uid and a long-ish name stay under Darwin's 104-byte limit.
+        let long = fallback_socket_path(999_999, &"n".repeat(40));
+        assert!(check_socket_path_len(&long, 104).is_ok(), "{long:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn effective_uid_matches_what_the_kernel_reports_not_zero() {
+        use std::os::unix::fs::MetadataExt;
+        // The old code read /proc/self (Linux-only); geteuid must agree with it
+        // where /proc exists, and is the only source where it does not.
+        let proc_uid = std::fs::metadata("/proc/self").unwrap().uid();
+        assert_eq!(rustix::process::geteuid().as_raw(), proc_uid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn over_long_socket_paths_are_refused_with_an_actionable_error() {
+        let ok = PathBuf::from(format!("/{}", "a".repeat(102))); // 103 bytes
+        assert!(check_socket_path_len(&ok, 104).is_ok());
+        let too_long = PathBuf::from(format!("/{}", "a".repeat(103))); // 104 bytes: no room for the NUL
+        let e = check_socket_path_len(&too_long, 104).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        let msg = e.to_string();
+        assert!(
+            msg.contains("104 bytes") && msg.contains("at most 103"),
+            "{msg}"
+        );
+        // The real entry point applies the platform's own capacity.
+        let huge = PathBuf::from(format!("/{}", "a".repeat(300)));
+        assert!(local_name(&huge).is_err());
     }
 }

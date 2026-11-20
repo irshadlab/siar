@@ -39,5 +39,5 @@ Source spec: `sys-arch/08-resource-limits-backpressure-architecture.md` — 193 
 
 ## Known gaps / remaining items
 
-- Wiring the public facade (`ResourceRuntime`) into the node runtime coordinator once the top-level daemon lifecycle settles.
+- **Public Facade Wiring**: ✅ Completed. `ResourceRuntime` is wired into `siar-runtime` (`Runtime` and `RuntimeBuilder`) and initialized with the node's effective resource profile in `apps/daemon`. Exposed via `Query::Resources` and `siar-daemon ctl resources`.
 - Prose-only sections: §1-2, 186, 190, 192-193.

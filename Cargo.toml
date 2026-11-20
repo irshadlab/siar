@@ -176,7 +176,8 @@ argon2 = "0.5"
 # Hidden passphrase prompt for the backup commands.
 rpassword = "7"
 rand_core = { version = "0.6", features = ["std"] }
-blake3 = "1"
+# `pure`: no C/asm in build.rs (SSE2/SSE4.1/AVX2 use Rust intrinsics; AVX-512 and the aarch64 NEON C path are skipped). Needed for clang-cl/xwin builds and the pure-Rust policy (xtask/audit-pure.ron).
+blake3 = { version = "1", features = ["pure"] }
 
 # storage: pure-Rust embedded SQL (replaces SQLite/rusqlite per explicit instruction)
 stoolap = "0.4.2"

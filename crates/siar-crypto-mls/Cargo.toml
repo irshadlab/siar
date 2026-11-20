@@ -62,4 +62,14 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # silently missing a method.
 [features]
 extensions-draft = ["openmls_traits/extensions-draft", "openmls_memory_storage/extensions-draft"]
-virtual-clients-draft = ["extensions-draft", "openmls_traits/virtual-clients-draft", "openmls_memory_storage/virtual-clients-draft"]
+# `openmls_rust_crypto` must be forwarded too: with this feature on,
+# `openmls_traits::OpenMlsCrypto` gains `ff1_aes128_encrypt`/`_decrypt`, and the
+# reference provider only implements them behind its *own* feature of the same
+# name. Without the last entry, anything that unifies this feature (cargo-hakari's
+# all-features simulation, `--all-features`) fails with E0046 in openmls_rust_crypto.
+virtual-clients-draft = [
+    "extensions-draft",
+    "openmls_traits/virtual-clients-draft",
+    "openmls_memory_storage/virtual-clients-draft",
+    "openmls_rust_crypto/virtual-clients-draft",
+]
